@@ -8,4 +8,5 @@ All user-approved decisions, newest first.
 | 2026-07-16 | History depth | ~5 years (2020→present), extendable later |
 | 2026-07-16 | Tick acquisition | QuantDataManager **Linux** CLI at /home/jack/QDM/qdmcli, license REDACTED (user installed) |
 | 2026-07-16 | Project location | WSL-native ext4 (/home/jack/hybrid_project), not OneDrive |
+| 2026-07-16 | GitHub remote | JacksonSchreiber/Hybrid_MT5_Strategies (user-provided PAT, stored outside repo) |
 | 2026-07-16 | Overall plan approved | 4 phases; user gates every phase transition |

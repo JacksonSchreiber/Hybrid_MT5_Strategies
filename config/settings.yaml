@@ -1,0 +1,21 @@
+# Project-wide settings
+account:
+  broker: FTMO
+  type: swing
+  capital_usd: 25000
+  risk_per_trade: 0.01
+
+data:
+  history_start: "2020-01-01"
+  qdm_cli: /home/jack/QDM/qdmcli
+  qdm_dir: /home/jack/QDM
+  csv_out: /home/jack/hybrid_project/data/qdm_csv
+  mt5_ready: /home/jack/hybrid_project/data/mt5_ready
+
+mt5:
+  data_folder_win: 'C:\Users\jacks\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552AE0B5EAEFB04866EB'
+  data_folder_wsl: /mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/EE0304F13905552AE0B5EAEFB04866EB
+  custom_symbol_suffix: ".dk"
+  timezone_policy: UTC
+
+timeframes: [D1, H4]

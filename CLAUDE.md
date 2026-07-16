@@ -29,6 +29,11 @@
   OneDrive — sync churn).
 - QDM Linux CLI: `/home/jack/QDM/qdmcli` (license REDACTED). Flag syntax is
   build-specific — consult `docs/qdm-cli.md`, don't guess.
+- MT5 data folder (Windows):
+  `C:\Users\jacks\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552AE0B5EAEFB04866EB`
+  (WSL: `/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/EE0304F13905552AE0B5EAEFB04866EB`)
+- GitHub remote: `JacksonSchreiber/Hybrid_MT5_Strategies` (credentials in
+  `~/.git-credentials`, outside the repo — never commit tokens).
 - MT5 is on the Windows host. Custom-symbol suffixes must be ≤4 chars
   (e.g. `EURUSD.dk`). Dukascopy timestamps are UTC — policy: keep UTC.
 - Tester interactivity uses `user32.dll MessageBoxW` (blocks the visual
