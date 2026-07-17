@@ -83,7 +83,12 @@ FAILURES_FILE = os.path.join(REPO_DIR, "pipeline/fleet_failures.txt")
 MT5_READY_DIR = os.path.join(REPO_DIR, "data/mt5_ready")
 FLEET_LOG_DIR = os.path.join(REPO_DIR, "logs/fleet")
 
-DATEFROM = "2020.01.01"
+DATEFROM = "2003.01.01"  # full available history: we download it all regardless,
+                         # so export the whole range (qdmcli emits only what exists
+                         # per symbol; exotics/indices/crypto simply start later).
+                         # The 27 symbols finished before 2026-07-17 were exported at
+                         # 2020+ and their stores deleted; only symbols downloaded
+                         # from here on get full history.
 DATETO = "2026.07.16"
 MIN_LAST_DATE = datetime.date(2026, 7, 1)  # last line's date must be >= this
 MIN_FILE_BYTES = 100_000  # "non-trivially sized" floor (real files are GB-scale)
@@ -261,6 +266,21 @@ def load_done():
                     continue
                 done.add(line.split(",")[0])
     return done
+
+
+def load_failed():
+    """Symbols already recorded as failed. On a restart we skip these so we
+    don't re-attempt the slow/flaky exotics (USDCZK/USDCNH) or the dotted
+    names every run - they are retried deliberately at the end (task #15)."""
+    failed = set()
+    if os.path.exists(FAILURES_FILE):
+        with open(FAILURES_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                failed.add(line.split(",")[0])
+    return failed
 
 
 def append_state(name, rows, size_bytes, ts):
@@ -464,8 +484,10 @@ def main():
 
     symbols = load_symbols()
     done = load_done()
+    failed_prev = load_failed()
     log(f"Fleet download starting. {len(symbols)} symbols in config, "
-        f"{len(done)} already marked done in {STATE_FILE}.")
+        f"{len(done)} already marked done in {STATE_FILE}, "
+        f"{len(failed_prev)} previously failed (skipped this run).")
 
     startup_cleanup(done, symbols)
 
@@ -477,6 +499,9 @@ def main():
     for ftmo_name, duk in symbols:
         if ftmo_name in done:
             log(f"{ftmo_name}: already in state file, skipping")
+            continue
+        if ftmo_name in failed_prev:
+            log(f"{ftmo_name}: previously failed, skipping this run (retried separately at the end)")
             continue
 
         if not wait_for_disk_or_stop():

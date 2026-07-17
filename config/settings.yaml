@@ -6,7 +6,7 @@ account:
   risk_per_trade: 0.01
 
 data:
-  history_start: "2020-01-01"
+  history_start: "2003-01-01"  # full available history for symbols downloaded from 2026-07-17 on; the 27 finished earlier are 2020+
   qdm_cli: /home/jack/QDM/qdmcli
   qdm_dir: /home/jack/QDM
   csv_out: /home/jack/hybrid_project/data/qdm_csv
