@@ -27,8 +27,12 @@ MT5_DATA_WIN='C:\Users\jacks\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552
 METAEDITOR="/mnt/c/Program Files/OANDA MetaTrader 5/MetaEditor64.exe"
 
 SRC_DIR="$REPO/mql5/scripts"
+EXP_SRC_DIR="$REPO/mql5/experts"
+INC_SRC_DIR="$REPO/mql5/include"
 IMPORT_DIR="$MT5_DATA/MQL5/Files/import"
 SCRIPTS_DIR="$MT5_DATA/MQL5/Scripts"
+EXPERTS_DIR="$MT5_DATA/MQL5/Experts"
+INCLUDE_DIR="$MT5_DATA/MQL5/Include"
 MT5_READY="$REPO/data/mt5_ready"
 
 log()  { printf '%s\n' "$*" >&2; }
@@ -39,7 +43,7 @@ usage() {
   exit "${1:-0}"
 }
 
-# --- sync .mq5 sources into the MT5 Scripts folder ---------------------------
+# --- sync .mq5/.mqh sources into the MT5 tree (Scripts, Experts, Include) -----
 sync_scripts() {
   [[ -d "$SRC_DIR" ]] || die "source dir not found: $SRC_DIR"
   mkdir -p "$SCRIPTS_DIR"
@@ -49,21 +53,39 @@ sync_scripts() {
     cp -f "$f" "$SCRIPTS_DIR/"
     log "synced $(basename "$f") -> MQL5\\Scripts\\"
   done
+  # experts (optional)
+  if [[ -d "$EXP_SRC_DIR" ]] && compgen -G "$EXP_SRC_DIR/*.mq5" >/dev/null; then
+    mkdir -p "$EXPERTS_DIR"
+    for f in "$EXP_SRC_DIR"/*.mq5; do
+      cp -f "$f" "$EXPERTS_DIR/"
+      log "synced $(basename "$f") -> MQL5\\Experts\\"
+    done
+  fi
+  # include tree (optional, preserve subdirs e.g. Hybrid\)
+  if [[ -d "$INC_SRC_DIR" ]]; then
+    mkdir -p "$INCLUDE_DIR"
+    ( cd "$INC_SRC_DIR" && find . -name '*.mqh' -print0 | while IFS= read -r -d '' rel; do
+        mkdir -p "$INCLUDE_DIR/$(dirname "$rel")"
+        cp -f "$rel" "$INCLUDE_DIR/$rel"
+        log "synced include $rel -> MQL5\\Include\\"
+      done )
+  fi
 }
 
 # --- compile one .mq5 via MetaEditor CLI, print the UTF-16 log ---------------
+# args: <MQL5-subdir> <name.mq5>   e.g. compile_one Experts HybridForwardTest.mq5
 compile_one() {
-  local name="$1"                    # e.g. ImportTicks.mq5
-  local win_path="$MT5_DATA_WIN\\MQL5\\Scripts\\$name"
-  log "compiling $name ..."
+  local subdir="$1" name="$2"
+  local host_dir="$MT5_DATA/MQL5/$subdir"
+  local win_path="$MT5_DATA_WIN\\MQL5\\$subdir\\$name"
+  log "compiling $subdir\\$name ..."
   # MetaEditor /compile returns the error count as its exit code; tolerate it.
   "$METAEDITOR" /compile:"$win_path" /log || true
-  local logf="$SCRIPTS_DIR/${name%.mq5}.log"
+  local logf="$host_dir/${name%.mq5}.log"
   if [[ -f "$logf" ]]; then
     log "----- $name compile log -----"
     iconv -f UTF-16LE -t UTF-8 "$logf" 2>/dev/null | sed '/^$/d' >&2 || cat "$logf" >&2
     log "-----------------------------"
-    # surface pass/fail from the log's result line
     if iconv -f UTF-16LE -t UTF-8 "$logf" 2>/dev/null | grep -qiE '0 error'; then
       log "==> $name: 0 errors"
     else
@@ -77,8 +99,9 @@ compile_one() {
 compile_all() {
   [[ -x "$METAEDITOR" ]] || die "MetaEditor not found/executable: $METAEDITOR"
   sync_scripts
-  compile_one "ImportTicks.mq5"
-  compile_one "VerifyImport.mq5"
+  compile_one Scripts "ImportTicks.mq5"
+  compile_one Scripts "VerifyImport.mq5"
+  [[ -f "$EXPERTS_DIR/HybridForwardTest.mq5" ]] && compile_one Experts "HybridForwardTest.mq5"
 }
 
 # --- disk-space guard on C: --------------------------------------------------
