@@ -101,20 +101,35 @@ void OnTimer()
    int okc=0, failc=0;
    for(int i=0;i<nb;i++)
      {
-      Print("--- job ",i+1,"/",nb,": ",bases[i]," ---");
+      string job=bases[i];
+      //--- "SESSIONS <base>" -> re-patch trading sessions on an existing .dk
+      //--- symbol WITHOUT re-importing ticks (sessions are symbol properties).
+      if(StringSubstr(job,0,9)=="SESSIONS ")
+        {
+         string base=job; StringTrimLeft(base); // "SESSIONS <base>"
+         base=StringSubstr(job,9); StringTrimLeft(base); StringTrimRight(base);
+         Print("--- job ",i+1,"/",nb,": SESSIONS ",base," ---");
+         bool ok=TI_SessionsOnly(base);
+         string line=StringFormat("%s,%s,0,,,sessions\n",base,(ok?"OK":"FAIL"));
+         if(ok) okc++; else failc++;
+         if(sh!=INVALID_HANDLE) { FileWriteString(sh,line); FileFlush(sh); }
+         continue;
+        }
+
+      Print("--- job ",i+1,"/",nb,": ",job," ---");
       TickImportResult r;
-      bool ok=RunTickImport(bases[i],r);   // shared engine, all defaults (.dk, Dukascopy)
+      bool ok=RunTickImport(job,r);        // shared engine, all defaults (.dk, Dukascopy)
 
       string line;
       if(ok)
         {
          okc++;
-         line=StringFormat("%s,OK,%I64d,%s,%s,%.1f\n",bases[i],r.ticks,r.first,r.last,r.seconds);
+         line=StringFormat("%s,OK,%I64d,%s,%s,%.1f\n",job,r.ticks,r.first,r.last,r.seconds);
         }
       else
         {
          failc++;
-         line=StringFormat("%s,FAIL,0,,,%s\n",bases[i],r.err);
+         line=StringFormat("%s,FAIL,0,,,%s\n",job,r.err);
         }
       if(sh!=INVALID_HANDLE) { FileWriteString(sh,line); FileFlush(sh); }
      }

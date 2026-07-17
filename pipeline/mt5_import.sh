@@ -40,9 +40,11 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- parse args ------------------------------------------------------------
 SYMS=()
+SESSIONS_ONLY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean)        CLEAN=1; shift ;;
+    --sessions)     SESSIONS_ONLY=1; shift ;;   # re-patch sessions on existing .dk (no re-import)
     --host-symbol)  HOST_SYMBOL="$2"; shift 2 ;;
     --timeout)      TIMEOUT="$2"; shift 2 ;;
     -h|--help)      sed -n '3,22p' "$0"; exit 0 ;;
@@ -63,14 +65,21 @@ log "no terminal64 running - safe to launch."
 
 # --- 2. stage CSVs + build the job list ------------------------------------
 mkdir -p "$IMPORT_DIR"
-for s in "${SYMS[@]}"; do
-  [[ -f "$REPO/data/mt5_ready/$s.csv" ]] || die "missing CSV: data/mt5_ready/$s.csv"
-  log "staging $s ..."
-  "$STAGE" "$s" >/dev/null || die "staging failed for $s"
-done
-printf '%s\n' "${SYMS[@]}" > "$JOBS"
+if [[ $SESSIONS_ONLY -eq 1 ]]; then
+  # sessions-only: no CSV staging, no re-import - just re-patch symbol sessions
+  : > "$JOBS"
+  for s in "${SYMS[@]}"; do echo "SESSIONS $s" >> "$JOBS"; done
+  log "jobs.txt -> SESSIONS: ${SYMS[*]}"
+else
+  for s in "${SYMS[@]}"; do
+    [[ -f "$REPO/data/mt5_ready/$s.csv" ]] || die "missing CSV: data/mt5_ready/$s.csv"
+    log "staging $s ..."
+    "$STAGE" "$s" >/dev/null || die "staging failed for $s"
+  done
+  printf '%s\n' "${SYMS[@]}" > "$JOBS"
+  log "jobs.txt -> ${SYMS[*]}"
+fi
 rm -f "$STATUS" "$IMPORT_DIR/jobs.done"
-log "jobs.txt -> ${SYMS[*]}"
 
 # --- 3. startup config ini (auto-attach AutoImport; NON-portable data dir) --
 {

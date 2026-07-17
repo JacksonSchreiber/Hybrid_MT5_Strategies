@@ -143,6 +143,64 @@ bool TI_SetInferredSpecs(const string csvpath)
   }
 
 //+------------------------------------------------------------------+
+//| Define trading/quote sessions so tester orders FILL (custom       |
+//| symbols imported with no origin have NO sessions -> every order    |
+//| fails with 10018 "market closed"). Dukascopy FX/metals/indices/oil |
+//| trade ~24x5 (Sunday ~22:00 UTC open through Friday ~22:00 UTC);    |
+//| crypto trades 7 days. We set one generous session per trading day  |
+//| (UTC, project policy): Sun 22:00-24:00, Mon-Fri 00:00-24:00 (no    |
+//| ticks exist past Fri 22:00 so the open tail is harmless), Sat none;|
+//| crypto gets all 7 days full. Also forces FULL trade mode + market  |
+//| execution + FOK/IOC filling so CTrade can execute.                |
+//+------------------------------------------------------------------+
+void TI_ApplySessions(const string sym,const string base)
+  {
+   bool crypto=(StringFind(base,"BTC")>=0 || StringFind(base,"ETH")>=0);
+
+   CustomSymbolSetInteger(sym,SYMBOL_TRADE_MODE,SYMBOL_TRADE_MODE_FULL);
+   CustomSymbolSetInteger(sym,SYMBOL_TRADE_EXEMODE,SYMBOL_TRADE_EXECUTION_MARKET);
+   CustomSymbolSetInteger(sym,SYMBOL_FILLING_MODE,SYMBOL_FILLING_FOK+SYMBOL_FILLING_IOC);
+   CustomSymbolSetInteger(sym,SYMBOL_EXPIRATION_MODE,SYMBOL_EXPIRATION_GTC+SYMBOL_EXPIRATION_DAY);
+
+   datetime full_from=0, full_to=86400;         // 00:00 -> 24:00 (seconds from midnight)
+   datetime sun_from =20*3600, sun_to=86400;    // 20:00 -> 24:00 (Dukascopy has early-
+                                                // Sunday ticks ~21:00 UTC; open at 20:00
+                                                // to fill them; no ticks before => harmless)
+   int nset=0;
+   for(int d=0; d<=6; d++)
+     {
+      ENUM_DAY_OF_WEEK dow=(ENUM_DAY_OF_WEEK)d;
+      datetime f=full_from, t=full_to; bool has=true;
+      if(!crypto)
+        {
+         if(d==SATURDAY) has=false;
+         else if(d==SUNDAY) { f=sun_from; t=sun_to; }
+        }
+      if(!has) continue;
+      bool q=CustomSymbolSetSessionQuote(sym,dow,0,f,t);
+      bool r=CustomSymbolSetSessionTrade(sym,dow,0,f,t);
+      if(q && r) nset++;
+     }
+   Print("  [",base,"] sessions set for ",nset," day(s) (",(crypto?"crypto 7d":"FX 24x5"),
+         ") + FULL trade mode.");
+  }
+
+//+------------------------------------------------------------------+
+//| Re-patch sessions on an ALREADY-imported custom symbol (no ticks  |
+//| touched). Returns false if the symbol does not exist.             |
+//+------------------------------------------------------------------+
+bool TI_SessionsOnly(const string base,const string customSuffix=".dk")
+  {
+   string sym=base+customSuffix;
+   bool is_custom=false;
+   if(!SymbolExist(sym,is_custom))
+     { Print("  [",base,"] SESSIONS: custom symbol '",sym,"' not found."); return false; }
+   SymbolSelect(sym,true);
+   TI_ApplySessions(sym,base);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
 bool TI_SetupSymbol(const string csvpath)
   {
    string origin=g_ti_base+g_ti_originSuffix;
@@ -183,6 +241,7 @@ bool TI_SetupSymbol(const string csvpath)
 
    if(!SymbolSelect(g_ti_sym,true))
      { Print("  [",g_ti_base,"] FATAL: SymbolSelect failed err=",GetLastError()); return false; }
+   TI_ApplySessions(g_ti_sym,g_ti_base);   // 24x5 FX (7d crypto) so tester orders fill
    return true;
   }
 

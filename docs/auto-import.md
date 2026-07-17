@@ -67,9 +67,21 @@ symbol works, including a broker symbol like `EURUSD`).
 ./pipeline/mt5_import.sh --clean AUDUSD            # delete the staged CSV after success (reclaim C:)
 ./pipeline/mt5_import.sh --host-symbol EURUSD AUDUSD
 ./pipeline/mt5_import.sh --timeout 1800 AUDUSD     # max wait seconds (default 2400)
+./pipeline/mt5_import.sh --sessions EURUSD AUDUSD  # re-patch trading sessions ONLY (no re-import)
 ```
 
-Each `<SYMBOL>` must have `data/mt5_ready/<SYMBOL>.csv`.
+Each `<SYMBOL>` (import mode) must have `data/mt5_ready/<SYMBOL>.csv`.
+
+### Trading sessions
+
+New imports now define **24x5 FX trading/quote sessions** (7 days for crypto)
+so tester orders fill — a custom symbol with no sessions rejects every order
+with `10018 market closed`. Sessions (UTC): Sun 20:00-24:00, Mon-Fri
+00:00-24:00, Sat none. To re-patch **already-imported** symbols without touching
+their ticks, use `--sessions <BASE>...` (writes `SESSIONS <base>` job lines that
+AutoImport applies via `TI_SessionsOnly`). Verified: after re-patching
+`EURUSD.dk`, an identical 2021-2024 tester run went from many `10018` failures
+to **0**, 99% fill rate.
 
 ## File contracts (for the pipeline engineer)
 

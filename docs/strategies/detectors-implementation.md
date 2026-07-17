@@ -106,11 +106,12 @@ sizing) or the emit contract. They can be tightened in tuning.
 
 ## Caveats needing the user's eye / a follow-up
 
-- **Market-closed order failures.** Several approved signals fail with
-  `10018 market closed` at H4/day boundaries because the `.dk` symbol's
-  *inferred* specs set no trading sessions. This affects the live visual demo
-  and likely wants a **session-spec fix in the importer** (`Hybrid\TickImport`),
-  not here. Signals still fire and journal; only the fill is refused.
+- **Market-closed order failures — FIXED (task #16).** Approved signals used to
+  fail with `10018 market closed` at H4/day boundaries because the `.dk`
+  symbol's *inferred* specs set no trading sessions. The importer
+  (`Hybrid\TickImport.mqh`) now defines 24x5 FX sessions (7d crypto); after
+  re-patching, the identical 2021-2024 run has **0 market-closed failures** and
+  a **99% fill rate** (the sole miss is the unrelated oversized-lot case below).
 - **Read the R column, not PnL/lots.** Blended R is price-based (`moved/risk_px`)
   and trustworthy. PnL and lot sizes depend on the inferred `tick_value`
   (≈correct for EURUSD) and scale inversely with SL distance, so tight-SL
