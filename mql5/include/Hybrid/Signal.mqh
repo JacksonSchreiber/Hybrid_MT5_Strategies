@@ -28,6 +28,25 @@ struct SignalCandidate
    datetime zone_to;      // setup-zone right edge (bar time)
    double   zone_hi;      // setup-zone top price
    double   zone_lo;      // setup-zone bottom price
+
+   //--- Phase-2 extension (all optional/back-compat; default 0/false/"" ⇒
+   //--- harness behaves exactly as before). A freshly declared struct is
+   //--- auto-zeroed by MQL5, so detectors need only SET what they use.
+   //--- scale-out plan: bank partial_fraction at tp1, run remainder to tp2.
+   double   tp1;              // first / partial target price (0 = unused)
+   double   tp2;              // runner target price          (0 = unused)
+   double   partial_fraction;// fraction to bank at tp1 (0 = single target)
+   //--- context flag (PM decision 1: FLAG, never a hard filter)
+   bool     d1_context;      // true = D1 aligned / confluent (shown, not gated)
+   //--- human-readable one-liner for modal + label
+   string   comment;
+   //--- extra overlay geometry (rendered by the extended DrawOverlays)
+   int      aux_count;       // number of aux levels used (<= 8)
+   double   aux_price[8];    // horizontal levels
+   string   aux_label[8];    // label per aux level
+   double   zone2_hi, zone2_lo;  // optional 2nd rectangle (FVG/band); 0 = unused
+   datetime leg_t0, leg_t1;      // impulse-leg / structure trendline endpoints; 0 = unused
+   double   leg_p0, leg_p1;
   };
 
 //+------------------------------------------------------------------+

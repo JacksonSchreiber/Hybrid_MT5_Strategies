@@ -1,10 +1,24 @@
 # Phase 2 Interactive Tester Harness
 
 `mql5/experts/HybridForwardTest.mq5` lets the account owner live through the
-**approve / deny decision workflow** in the MT5 visual Strategy Tester before
-any real strategy is wired in. It runs a *dummy* signal, but every other part
-(modal, overlays, 1%-risk sizing, order execution, journal) is the real
-Phase-2 machinery.
+**approve / deny decision workflow** in the MT5 visual Strategy Tester.
+
+> **Update (task #14):** the harness now drives the **three real detectors**
+> (SMC sweep+MSS, Deep-Fib, EMA20 mean-reversion) with priority arbitration and
+> real two-target scale-out — not the Monday dummy. See
+> [strategies/detectors-implementation.md](strategies/detectors-implementation.md).
+> New EA inputs:
+> - `InpUseSMC` / `InpUseFib` / `InpUseEMA` — enable each strategy (all true).
+>   Priority when several fire on one bar: **SMC > Fib > EMA**.
+> - Per-strategy params: `InpSmcMinRR`, `InpSmcTpR`, `InpFibImpulseATR`,
+>   `InpFibMinRR`, `InpEmaStretch`, `InpEmaAdxCeil`, `InpEmaMinRR`.
+> - `InpAutoApprove` (**tester-only**): `NONE` = interactive modal (default);
+>   `ALL` / `SKIP` = headless auto-approve/skip for automated verification via
+>   `pipeline/mt5_verify.sh` (no modal, no DLL).
+> - Removed: `InpLookback`, `InpRR` (dummy-only).
+>
+> The sections below describe the interactive visual-tester workflow, which is
+> unchanged; just replace "dummy Monday signal" with "a detector's setup".
 
 ## What it does
 
@@ -174,14 +188,16 @@ representative until the harness runs on the real FTMO terminal.
 
 The harness talks only to the `ISignalDetector` interface and the
 `SignalCandidate` struct (`mql5/include/Hybrid/Signal.mqh`). The three real
-strategies plug in later by implementing `ISignalDetector` and swapping the
-`new CDummyDetector(...)` line in `OnInit` — the overlays, modal, sizing,
-execution and journal need no changes.
+strategies are wired in (task #14) by implementing `ISignalDetector`; the
+harness builds them in `OnInit` per the `InpUse*` flags — the overlays, modal,
+sizing, execution and journal are strategy-agnostic.
 
 ```
 ISignalDetector (interface)
-   └── CDummyDetector      (this phase: Monday-H4 alternating dummy)
-   └── CStrategyA / B / C  (Phase 2: real detectors, drop-in)
+   ├── CLiquiditySweepMSS   (priority 1)  detectors/SmcDetector.mqh
+   ├── CDeepFibRetrace      (priority 2)  detectors/FibDetector.mqh
+   ├── CEma20MeanRev        (priority 3)  detectors/EmaDetector.mqh
+   └── CDummyDetector       (reference; not used by default) Signal.mqh
 ```
 
 ## Verified from documentation vs needs the live demo
