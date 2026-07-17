@@ -23,18 +23,16 @@ Goal: 49/49 downloaded AND 49/49 imported.
 ## Checks each run (gather evidence with timestamps)
 1. **Workers alive?** `pgrep -f fleet_download.py`, `pgrep -f rolling_import.sh`.
    If either is DEAD while its side is < 49/49 → ESCALATE (unexpected exit).
-2. **Progress advancing?** Judge a download by its LAST PROGRESS LINE content
-   (`Writing <date>, N%` / `Downloading year:YYYY, N%`) and by the qdmcli process
-   elapsed time (`ps -o etimes= -p <pid>`) — do NOT trust the log's mtime: Dukascopy
-   `NoHttpResponseException` retry spam keeps the file "fresh" while real progress is
-   frozen (this fooled an earlier check; USDCNH sat at 1% for ~2h while its log kept
-   ticking). A normal symbol finishes in ~20–45 min. A **stall-watchdog**
-   (`pipeline/stall_watchdog.sh`, see logs/stall_watchdog.log) now auto-kills any
-   download stuck >20 min with no progress-line change, or running >70 min, and the
-   fleet then fails-and-continues — so you should rarely see a long stall. ESCALATE only
-   if: a download has been running > 75 min AND is still alive (→ the watchdog may be
-   dead — check `pgrep -f stall_watchdog.sh`), OR fleet_state.txt hasn't grown in > 60 min
-   while a worker claims to be running.
+2. **Progress advancing?** Download stalls are handled in REAL TIME by a dedicated
+   2-minute stall-detector (a Monitor) that flags the PM the moment a download goes
+   >2 min with no progress-line change; the PM then decides remediate-or-skip. So you do
+   NOT own stall detection and should NOT escalate a normal slow/gap situation. Only
+   escalate here if the pipeline is genuinely WEDGED: `fleet_download.py` is alive and
+   < 49 downloaded but there is NO active qdmcli `action=update` process at all for
+   > 5 min (nothing downloading and nothing advancing) → the orchestrator itself may be
+   hung. Do not use log mtime to judge progress (Dukascopy retry spam keeps it "fresh");
+   if you report progress at all, cite the last progress-line content + qdmcli elapsed
+   (`ps -o etimes=`). A single symbol normally finishes in ~20–45 min.
 3. **Disk (real Windows host):** `df -BG --output=avail /mnt/c`. WARN if < 70 GB, ESCALATE
    if < 55 GB (the pipeline's own guard trips ~50–60 GB).
 4. **New failures?** A symbol is a REAL failure only if it is in a failures file AND NOT in
