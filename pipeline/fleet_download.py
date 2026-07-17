@@ -24,9 +24,31 @@ the next run). Any failure at any step is logged to the failures file and
 the fleet moves on to the next symbol - it never aborts the whole run for a
 single symbol's failure.
 
-The one thing that DOES abort the whole run is free disk space dropping
-below FREE_DISK_MIN_GB, checked before every symbol (downloads and exports
-both consume disk, so this is checked continuously, not just at startup).
+DISK SAFETY (2026-07-17 revision): the host is WSL2 - its ext4 filesystem
+lives inside a .vhdx virtual disk file on the Windows C: drive. That vhdx
+grows but NEVER shrinks: deleting files inside WSL frees space *within* the
+vhdx for future writes, but does NOT return space to the real Windows C:
+drive. `df /` inside WSL therefore reports space against the vhdx's current
+allocation, which is fiction relative to the real constraint - the actual
+guard checks `df` on `/mnt/c` (the real Windows host free space) instead.
+
+To keep the real disk (both the vhdx's growth and, indirectly, the true
+C: constraint) under control, once a symbol's exported CSV is validated,
+its QDM internal full-history store (/home/jack/QDM/user/data/History/<name>)
+is deleted - we only ever export once (2020+), so that internal store is
+dead weight afterward. CSVs in data/mt5_ready are NEVER deleted by this
+script - a separate MT5-side auto-importer consumes and deletes them.
+
+The internal-store deletion gate is full `validate_export`, not just
+"does the file exist": a truncated/partial CSV (e.g. from a crash
+mid-export) must never trigger deletion of the only remaining good copy
+of the data, since regenerating it means a full multi-hour re-download.
+
+If real Windows C: free space drops below DISK_GUARD_MIN_GB, the fleet
+pauses (not aborts) and polls periodically, giving the parallel CSV
+auto-importer time to drain data/mt5_ready and free real disk space, up to
+DISK_GUARD_MAX_WAIT_SEC before giving up and exiting cleanly for the run
+to be resumed later.
 
 Usage:
     cd /home/jack/QDM && nohup python3 /home/jack/hybrid_project/pipeline/fleet_download.py \
@@ -67,7 +89,14 @@ MIN_LAST_DATE = datetime.date(2026, 7, 1)  # last line's date must be >= this
 MIN_FILE_BYTES = 100_000  # "non-trivially sized" floor (real files are GB-scale)
 MIN_ROWS = 500  # sanity floor on row count
 
-FREE_DISK_MIN_GB = 50
+HISTORY_DIR = os.path.join(QDM_DIR, "user", "data", "History")
+
+# Real Windows host free space, NOT WSL's own `df /` (see module docstring -
+# the vhdx never shrinks, so WSL's own filesystem free-space number is
+# fiction relative to the actual constraint).
+DISK_GUARD_MIN_GB = 60
+DISK_GUARD_POLL_SEC = 10 * 60  # recheck every 10 min while paused
+DISK_GUARD_MAX_WAIT_SEC = 6 * 3600  # give up after 6h of waiting and exit cleanly
 
 ADD_TIMEOUT_SEC = 120  # symbol add/list is a metadata op, should be fast
 STEP_TIMEOUT_SEC = 6 * 3600  # generous ceiling for update/export (EURUSD's
@@ -80,8 +109,131 @@ def log(msg):
     print(f"[{ts}] {msg}", flush=True)
 
 
-def free_gb(path):
-    return shutil.disk_usage(path).free / (1024**3)
+def free_gb_windows_host():
+    """Real free space on the Windows host's C: drive, via its WSL mount.
+    This is the actual constraint (see module docstring) - WSL's own
+    `df /` / shutil.disk_usage() reports space inside the vhdx's current
+    allocation, which does NOT reflect real remaining disk on the host."""
+    result = subprocess.run(
+        ["df", "-BG", "--output=avail", "/mnt/c"],
+        capture_output=True, text=True,
+    )
+    lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+    # Expected output: ["Avail", "255G"] - take the last non-empty line,
+    # strip the trailing "G" unit.
+    val = lines[-1].rstrip("G")
+    return float(val)
+
+
+def wait_for_disk_or_stop():
+    """Real Windows-host disk guard. Returns True if it's safe to proceed.
+    If free space is below threshold, pauses (does not immediately abort)
+    and polls periodically so the parallel MT5 auto-importer has a chance
+    to drain data/mt5_ready and free real disk space - only gives up (and
+    signals the caller to stop the run cleanly) after DISK_GUARD_MAX_WAIT_SEC
+    of no improvement."""
+    free = free_gb_windows_host()
+    if free >= DISK_GUARD_MIN_GB:
+        return True
+
+    log(f"Windows host C: free space is {free:.1f} GB, below the "
+        f"{DISK_GUARD_MIN_GB} GB guard threshold. Pausing (not aborting) "
+        f"for up to {DISK_GUARD_MAX_WAIT_SEC // 3600}h to give the CSV "
+        f"auto-importer a chance to drain data/mt5_ready and free real "
+        f"disk space...")
+    waited = 0
+    while waited < DISK_GUARD_MAX_WAIT_SEC:
+        time.sleep(DISK_GUARD_POLL_SEC)
+        waited += DISK_GUARD_POLL_SEC
+        free = free_gb_windows_host()
+        log(f"  ... rechecked after {waited // 60} min paused: "
+            f"C: free = {free:.1f} GB")
+        if free >= DISK_GUARD_MIN_GB:
+            log(f"C: free space recovered to {free:.1f} GB - resuming fleet.")
+            return True
+
+    log(f"C: free space still below {DISK_GUARD_MIN_GB} GB after "
+        f"{DISK_GUARD_MAX_WAIT_SEC // 3600}h of waiting - stopping this "
+        f"run cleanly. Symbols not yet in {STATE_FILE} will resume on the "
+        f"next run.")
+    return False
+
+
+def internal_store_dir(duk):
+    return os.path.join(HISTORY_DIR, duk)
+
+
+def dir_size_bytes(path):
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for fn in filenames:
+            fp = os.path.join(dirpath, fn)
+            try:
+                total += os.path.getsize(fp)
+            except OSError:
+                pass
+    return total
+
+
+def cleanup_internal_store(ftmo_name, duk, csv_path=None):
+    """Delete the QDM internal full-history store for `duk`, but ONLY if
+    the symbol's exported CSV in mt5_ready passes FULL validation (exists,
+    non-trivial size, last line >= MIN_LAST_DATE, row-count floor) - not
+    just an existence check. A truncated/partial CSV (e.g. a crash mid-
+    export) must never cause deletion of the only remaining good copy of
+    the data: regenerating it means a full multi-hour re-download.
+
+    This also correctly (and intentionally) refuses to delete a store
+    whose CSV is simply missing altogether - e.g. because it was already
+    consumed by the parallel MT5 auto-importer, or lost some other way -
+    since we can't re-verify it was ever complete once it's gone. Returns
+    bytes freed (0 if skipped)."""
+    if csv_path is None:
+        csv_path = os.path.join(MT5_READY_DIR, f"{ftmo_name}.csv")
+
+    ok, result = validate_export(ftmo_name, csv_path)
+    if not ok:
+        log(f"{ftmo_name}: SKIPPING internal-store cleanup - CSV did not "
+            f"pass validation ({result}). Internal store preserved at "
+            f"{internal_store_dir(duk)}.")
+        return 0
+
+    store_dir = internal_store_dir(duk)
+    if not os.path.isdir(store_dir):
+        log(f"{ftmo_name}: internal store {store_dir} already absent, nothing to clean.")
+        return 0
+
+    size = dir_size_bytes(store_dir)
+    shutil.rmtree(store_dir)
+    log(f"{ftmo_name}: deleted internal store {store_dir} "
+        f"({size / 1e9:.2f} GB freed *inside the vhdx* - this creates "
+        f"write headroom for future CSV exports, it does NOT free real "
+        f"Windows C: disk space).")
+    return size
+
+
+def startup_cleanup(done, symbols):
+    """One-time pass at startup: for every symbol already marked done in
+    the state file, delete its internal store if (and only if) its CSV in
+    mt5_ready still passes full validation. See cleanup_internal_store for
+    why a missing/invalid CSV must NOT trigger deletion."""
+    total_freed = 0
+    n_deleted = 0
+    n_skipped = 0
+    for ftmo_name, duk in symbols:
+        if ftmo_name not in done:
+            continue
+        freed = cleanup_internal_store(ftmo_name, duk)
+        if freed:
+            n_deleted += 1
+            total_freed += freed
+        else:
+            n_skipped += 1
+    log(f"Startup internal-store cleanup complete: {n_deleted} store(s) "
+        f"deleted, {n_skipped} skipped (already absent or CSV not valid), "
+        f"{total_freed / 1e9:.2f} GB freed inside the vhdx (does NOT "
+        f"change Windows C: free space - only future write headroom).")
+    return total_freed
 
 
 def load_symbols():
@@ -297,6 +449,12 @@ def process_symbol(ftmo_name, duk, existing_symbols):
     ts = datetime.datetime.now().isoformat()
     append_state(ftmo_name, rows, size, ts)
     log(f"{ftmo_name}: SUCCESS - {rows} rows, {size} bytes -> {out_csv}")
+
+    # 5. reclaim disk: the internal full-history store is dead weight now
+    #    that we've exported the scoped CSV we actually need (we never
+    #    re-download). Runs only after export+validation succeeded, and
+    #    only between symbols (never mid-qdmcli), since this is sequential.
+    cleanup_internal_store(ftmo_name, duk, out_csv)
     return True
 
 
@@ -309,6 +467,8 @@ def main():
     log(f"Fleet download starting. {len(symbols)} symbols in config, "
         f"{len(done)} already marked done in {STATE_FILE}.")
 
+    startup_cleanup(done, symbols)
+
     existing_symbols = get_existing_symbols()
     log(f"QDM currently has {len(existing_symbols)} symbol(s) registered: "
         f"{sorted(existing_symbols)}")
@@ -319,11 +479,7 @@ def main():
             log(f"{ftmo_name}: already in state file, skipping")
             continue
 
-        free = free_gb(REPO_DIR)
-        if free < FREE_DISK_MIN_GB:
-            log(f"ABORTING FLEET RUN: free disk {free:.1f} GB < "
-                f"{FREE_DISK_MIN_GB} GB threshold. Symbols not yet in "
-                f"{STATE_FILE} will be picked up on the next run.")
+        if not wait_for_disk_or_stop():
             sys.exit(0)
 
         processed += 1
