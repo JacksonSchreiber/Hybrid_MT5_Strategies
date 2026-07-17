@@ -8,23 +8,41 @@
 //|                                                                  |
 //|  On each signal (dummy: first H4 bar of every Monday, alternating |
 //|  buy/sell) it: draws entry/SL/TP lines + a setup-zone rectangle + |
-//|  a label, then shows a SYSTEM-MODAL Yes/No box via user32.dll     |
-//|  MessageBoxW (native MQL5 MessageBox does NOT work in the tester).|
-//|  Yes -> size at 1% risk and place the order; No -> journal a skip.|
+//|  a label, then shows a SYSTEM-MODAL Yes/No dialog. Two back-ends:  |
+//|    * TradeDialog.dll ShowTradeDialog() - custom dialog whose SL/   |
+//|      entry/TP text is COLOUR-MATCHED to the chart overlays.        |
+//|    * user32.dll MessageBoxW()          - plain monochrome fallback |
+//|      (native MQL5 MessageBox does NOT work in the tester).         |
+//|  InpUseColoredDialog selects which at runtime.                    |
+//|  Yes -> size at 1% risk and place the order; No -> journal a skip. |
 //|  Every signal + outcome is appended to a crash-safe CSV journal.  |
 //|                                                                  |
-//|  HARD RULE: the DLL is called ONLY when running in the visual     |
-//|  tester (MQL_TESTER && MQL_VISUAL_MODE). Anywhere else the EA      |
-//|  prints an error and stays inert - it never touches user32.dll.   |
+//|  HARD RULE: the modal DLLs are called ONLY in the visual tester   |
+//|  (MQL_TESTER && MQL_VISUAL_MODE). Anywhere else the EA prints an   |
+//|  error and stays inert - it never invokes a dialog DLL.           |
 //+------------------------------------------------------------------+
 #property copyright "FTMO Hybrid Trading System"
-#property version   "1.00"
+#property version   "1.10"
 #property description "Phase 2 visual-tester approve/deny harness (dummy signal) for EURUSD.dk."
 
 #include <Trade\Trade.mqh>
 #include <Hybrid\Signal.mqh>
 
-//--- user32.dll: the ONLY way to get a blocking modal inside the tester
+//--- Two blocking-modal back-ends, both imported (MT5 EARLY-BINDS #import DLLs
+//--- at EA load, so BOTH files must be present in MQL5\Libraries\ / on the
+//--- system for the EA to load). The InpUseColoredDialog input selects which
+//--- one runs at runtime:
+//---   TradeDialog.dll -> ShowTradeDialog(): custom dialog with SL/entry/TP
+//---                      text COLOUR-MATCHED to the chart overlays.
+//---   user32.dll      -> MessageBoxW(): plain fallback (no coloured text).
+//--- Because of early binding a genuinely-missing TradeDialog.dll makes the EA
+//--- fail to LOAD (clear journal error) - the toggle cannot override that; it
+//--- is a graceful-degradation switch, not a missing-DLL rescue. See docs.
+#import "TradeDialog.dll"
+int ShowTradeDialog(string title,string symbol,string strategy,string direction,
+                    string entry,string sl,string tp,string lots,string rr);
+#import
+
 #import "user32.dll"
 int MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType);
 #import
@@ -44,6 +62,7 @@ input long   InpMagic       = 990217;   // magic number
 input int    InpDeviation   = 50;       // max slippage (points)
 input bool   InpCleanupOnDeinit = false;// delete overlay objects when the EA is removed
 input string InpObjPrefix   = "HFT_";   // chart-object name prefix
+input bool   InpUseColoredDialog = true;// true: coloured TradeDialog.dll; false: plain MessageBoxW
 
 //--- globals
 CTrade         g_trade;
@@ -185,31 +204,10 @@ void HandleSignal(SignalCandidate &cand)
    DrawOverlays(id,cand);
    ChartRedraw(0);
 
-   //--- build the decision context string
+   //--- ask the human via the selected modal back-end (both block the tester)
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
-   string body=StringFormat(
-      "Symbol:      %s\n"
-      "Strategy:    %s\n"
-      "Direction:   %s\n"
-      "Time:        %s\n\n"
-      "Entry:       %s\n"
-      "Stop Loss:   %s\n"
-      "Take Profit: %s\n"
-      "R:R:         1 : %s\n\n"
-      "Lot size:    %s   (%.1f%% equity risk)\n\n"
-      "Place this trade?",
-      _Symbol,cand.strategy,DirStr(cand.direction),
-      TimeToString(cand.zone_to,TIME_DATE|TIME_MINUTES),
-      DoubleToString(cand.entry,_Digits),
-      DoubleToString(cand.sl,_Digits),
-      DoubleToString(cand.tp,_Digits),
-      DoubleToString(cand.rr,2),
-      DoubleToString(lots,2),InpRiskPct*100.0);
-
-   //--- SYSTEM-MODAL blocking box (tester thread is frozen until answered)
-   uint t0=GetTickCount();
-   int res=MessageBoxW(0,body,caption,MB_YESNO|MB_ICONQUESTION|MB_SYSTEMMODAL);
-   long decision_ms=(long)(GetTickCount()-t0);
+   long   decision_ms=0;
+   bool   approved=AskApproval(id,cand,lots,caption,decision_ms);
 
    //--- record the row
    int n=ArraySize(g_rows);
@@ -231,7 +229,7 @@ void HandleSignal(SignalCandidate &cand)
    g_rows[n].pnl        =0.0;
    g_rows[n].r_multiple =0.0;
 
-   if(res==IDYES)
+   if(approved)
      {
       g_rows[n].decision="approved";
       if(lots<=0.0)
@@ -265,6 +263,61 @@ void HandleSignal(SignalCandidate &cand)
      }
 
    WriteJournal(g_journal_part);   // flushed inside
+  }
+
+//+------------------------------------------------------------------+
+//| Show the blocking modal (coloured DLL or plain MessageBoxW).      |
+//| Returns true on approve. Fills decision_ms with the human's       |
+//| wall-clock decision time. Both back-ends freeze the tester.       |
+//+------------------------------------------------------------------+
+bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &decision_ms)
+  {
+   uint t0=GetTickCount();
+   bool yes=false;
+
+   if(InpUseColoredDialog)
+     {
+      //--- coloured dialog: one field per argument, coloured in the DLL to
+      //--- match the chart overlays (entry green / SL red / TP blue).
+      int r=ShowTradeDialog(
+               caption,
+               _Symbol,
+               cand.strategy,
+               DirStr(cand.direction),
+               DoubleToString(cand.entry,_Digits),
+               DoubleToString(cand.sl,_Digits),
+               DoubleToString(cand.tp,_Digits),
+               StringFormat("%s  (%.1f%% equity risk)",DoubleToString(lots,2),InpRiskPct*100.0),
+               StringFormat("1 : %s",DoubleToString(cand.rr,2)));
+      yes=(r==1);
+     }
+   else
+     {
+      //--- plain fallback: monochrome MessageBoxW
+      string body=StringFormat(
+         "Symbol:      %s\n"
+         "Strategy:    %s\n"
+         "Direction:   %s\n"
+         "Time:        %s\n\n"
+         "Entry:       %s\n"
+         "Stop Loss:   %s\n"
+         "Take Profit: %s\n"
+         "R:R:         1 : %s\n\n"
+         "Lot size:    %s   (%.1f%% equity risk)\n\n"
+         "Place this trade?",
+         _Symbol,cand.strategy,DirStr(cand.direction),
+         TimeToString(cand.zone_to,TIME_DATE|TIME_MINUTES),
+         DoubleToString(cand.entry,_Digits),
+         DoubleToString(cand.sl,_Digits),
+         DoubleToString(cand.tp,_Digits),
+         DoubleToString(cand.rr,2),
+         DoubleToString(lots,2),InpRiskPct*100.0);
+      int res=MessageBoxW(0,body,caption,MB_YESNO|MB_ICONQUESTION|MB_SYSTEMMODAL);
+      yes=(res==IDYES);
+     }
+
+   decision_ms=(long)(GetTickCount()-t0);
+   return(yes);
   }
 
 //+------------------------------------------------------------------+
@@ -329,9 +382,10 @@ void DrawOverlays(int id,SignalCandidate &c)
      }
 
    //--- entry / SL / TP horizontal lines
-   DrawHLine(p+"entry",c.entry,clrLime);
-   DrawHLine(p+"sl",   c.sl,   clrRed);
-   DrawHLine(p+"tp",   c.tp,   clrDodgerBlue);
+   //--- palette pixel-matched to TradeDialog.dll (entry green / SL red / TP blue)
+   DrawHLine(p+"entry",c.entry,C'0,160,0');    // == dialog COL_ENTRY RGB(0,160,0)
+   DrawHLine(p+"sl",   c.sl,   C'204,0,0');    // == dialog COL_SL    RGB(204,0,0)
+   DrawHLine(p+"tp",   c.tp,   C'0,0,204');    // == dialog COL_TP    RGB(0,0,204)
 
    //--- text label at the zone's right edge
    string tx=p+"label";
