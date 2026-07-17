@@ -15,29 +15,83 @@ buy/sell**) it:
    (blue) lines, a setup-zone rectangle (last 5 H4 bars' range) and a text
    label with strategy name + timestamp. Objects are named `HFT_<id>_*` and
    **persist** after the decision.
-2. Pops a **system-modal Yes/No box** (`user32.dll MessageBoxW`, flags
-   `MB_YESNO|MB_ICONQUESTION|MB_SYSTEMMODAL`) showing symbol, strategy,
-   direction, entry/SL/TP, R:R and the risk-sized lot count.
+2. Pops a **system-modal Yes/No dialog** showing symbol, strategy, direction,
+   entry/SL/TP, R:R and the risk-sized lot count — with the **entry/SL/TP text
+   colour-matched to the chart lines** (see below).
 3. **Yes** → sizes the position at 1% of equity from the SL distance and
    places the order. **No** → journals a skip.
 4. Appends the signal (and, on close, the outcome) to a CSV journal.
 
 ### Hard safety rule
 
-The DLL is called **only** when `MQL_TESTER && MQL_VISUAL_MODE` are both true
-*and* DLL imports are allowed. Run anywhere else (live chart, non-visual
-optimisation) and the EA prints an explanation and stays **inert** — it never
-touches `user32.dll` and places no trades. (Native MQL5 `MessageBox()` does
-nothing in the tester, which is why the DLL is used at all.)
+The dialog DLL is called **only** when `MQL_TESTER && MQL_VISUAL_MODE` are both
+true *and* DLL imports are allowed. Run anywhere else (live chart, non-visual
+optimisation) and the EA prints an explanation and stays **inert** — it invokes
+no dialog DLL and places no trades. (Native MQL5 `MessageBox()` does nothing in
+the tester, which is why a DLL is used at all.)
+
+## The coloured dialog (TradeDialog.dll)
+
+`MessageBoxW` cannot colour text, so the coloured dialog is served by a tiny
+Win32 helper DLL, **`mql5/dll/TradeDialog.c`** → **`TradeDialog.dll`**. It
+creates a centred, top-most, system-modal window that **blocks the tester
+thread until answered** (exactly like `MessageBoxW`) and colours each field:
+
+| Field | Dialog colour | Matches chart line |
+|---|---|---|
+| Entry | green `RGB(0,160,0)` | entry H-line |
+| Stop Loss | red `RGB(204,0,0)` | SL H-line |
+| Take Profit | blue `RGB(0,0,204)` | TP H-line |
+| Direction | BUY green / SELL red | — |
+| Symbol / Strategy / Lots / R:R | neutral grey-black | — |
+
+The chart overlay colours in the EA were set to the **same** RGB values, so the
+dialog and the chart lines are pixel-matched. Buttons: **Yes (approve)** and
+**No (skip)**; **No is the default** (a reflexive Enter skips rather than
+trades). Keyboard: **Y** = approve, **N**/**Esc** = skip, **Enter** = the
+focused button. Returns `1` (approve) / `0` (skip). A re-entrancy guard makes a
+second concurrent call return "skip" immediately.
+
+Exported symbol (undecorated, x64 — matches the MQL5 `#import`): **`ShowTradeDialog`**.
+
+### Build & deploy the DLL
+
+```sh
+./mql5/dll/build.sh            # zig cross-compile + verify exports + deploy
+./mql5/dll/build.sh --no-deploy # build + verify only
+```
+
+The DLL **must live in the terminal's `MQL5\Libraries\`** folder (where MT5
+loads `#import` DLLs from — *not* `MQL5\Files\`); `build.sh` copies it there.
+The built `.dll` is **deployed, not committed** (git-ignored); rebuild from the
+`.c` any time.
+
+### Fallback toggle & the early-binding caveat
+
+`input InpUseColoredDialog` (default **true**) picks the back-end at runtime:
+`true` = coloured `TradeDialog.dll`, `false` = plain `MessageBoxW`. **Important:**
+MT5 *early-binds* `#import` DLLs at EA load, so **both** `TradeDialog.dll` and
+`user32.dll` must be resolvable for the EA to load at all — the toggle is a
+graceful-degradation switch (flip to `false` if the coloured dialog ever
+misbehaves and you want the known-good monochrome box), **not** a rescue for a
+missing DLL. If `TradeDialog.dll` is absent from `MQL5\Libraries\`, the EA fails
+to load with a clear journal error; fix it by running `build.sh` (re-deploy),
+not by toggling the input.
 
 ## Prerequisites
 
 - `EURUSD.dk` custom symbol already imported (see `docs/mt5-import.md`).
+- **`TradeDialog.dll` built and deployed** to `MQL5\Libraries\` via
+  `./mql5/dll/build.sh` (required for the EA to load with the default
+  `InpUseColoredDialog=true`).
 - The EA compiled (0 errors) — it appears in Navigator → Expert Advisors as
   **HybridForwardTest**. Rebuild any time with
   `./pipeline/stage_csv_for_import.sh --compile`.
 
 ## Enabling the DLL modal (required — two separate switches)
+
+Applies to both `TradeDialog.dll` and `user32.dll` — "Allow DLL imports" gates
+all `#import` DLLs.
 
 1. **Terminal:** Tools → Options → Expert Advisors → tick **"Allow DLL
    imports"**. Click OK.
