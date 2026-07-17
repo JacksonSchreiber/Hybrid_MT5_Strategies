@@ -6,5 +6,8 @@ __pycache__/
 *.log
 pipeline/fleet_state.txt
 pipeline/fleet_failures.txt
-# built Windows DLLs are deployed, not committed (rebuild with mql5/dll/build.sh)
+# built Windows DLLs + build byproducts are deployed, not committed (rebuild with mql5/dll/build.sh)
 mql5/dll/*.dll
+mql5/dll/*.lib
+mql5/dll/*.pdb
+mql5/dll/*.exp

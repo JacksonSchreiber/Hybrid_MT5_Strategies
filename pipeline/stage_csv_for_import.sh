@@ -102,6 +102,7 @@ compile_all() {
   compile_one Scripts "ImportTicks.mq5"
   compile_one Scripts "VerifyImport.mq5"
   [[ -f "$EXPERTS_DIR/HybridForwardTest.mq5" ]] && compile_one Experts "HybridForwardTest.mq5"
+  [[ -f "$EXPERTS_DIR/AutoImport.mq5" ]] && compile_one Experts "AutoImport.mq5"
 }
 
 # --- disk-space guard on C: --------------------------------------------------
