@@ -1,0 +1,2 @@
+-data action=export symbols=EURUSD timeframe=M1 datefrom=2020.01.01 dateto=2026.07.16 outputdir=/home/jack/hybrid_project/data/qdm_csv format="Generic bar format (comma delimited)"
+-data action=exportToMT5 symbol=EURUSD timeframe=TICK outputdir=/home/jack/hybrid_project/data/mt5_ready

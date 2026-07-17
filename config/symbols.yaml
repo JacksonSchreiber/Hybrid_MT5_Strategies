@@ -1,0 +1,192 @@
+# FTMO -> Dukascopy symbol mapping
+#
+# Generated 2026-07-16 by the Data Pipeline Engineer agent, from:
+#   - /mnt/c/Users/jacks/OneDrive/Trading/ftmo_symbols.txt (49 FTMO symbols, .sim suffix stripped)
+#   - `./qdmcli -instrument action=list` run from /home/jack/QDM, filtered to the
+#     "*_dukascopy" rows (logs/instrument_list_dukascopy_only.log) — this is QDM's
+#     definitive list of what Dukascopy actually offers, so every mapping below was
+#     verified against real output, not guessed.
+#
+# Naming convention: the `dukascopy_name` below is the QDM *symbol* name (what you
+# pass to `-symbol action=add symbols=<name> datasource=dukascopy`). QDM internally
+# stores the paired *instrument* as `<dukascopy_name>_dukascopy` (see
+# `-instrument action=list` output) — do not include the `_dukascopy` suffix when
+# calling `-symbol action=add`.
+#
+# Summary:
+#   Total FTMO symbols:      49
+#   Mapped to Dukascopy:      49
+#   No Dukascopy match:        0
+#
+# Asset class breakdown:
+#   forex:      42
+#   index:       3  (US100, US500, US30)
+#   metal:       2  (XAGUSD, XAUUSD)
+#   commodity:   1  (USOIL)
+#   crypto:      1  (BTCUSD)
+#
+# Notable non-1:1 remaps (verified against instrument list, not assumed):
+#   US100  -> USATECH.IDX   (Dukascopy's USA tech-100 index; category "USA_Indexes")
+#   US500  -> USA500.IDX    (category "USA_Indexes")
+#   US30   -> USA30.IDX     (category "USA_Indexes")
+#   USOIL  -> LIGHT.CMD     (WTI/"light" crude; Dukascopy also separately offers
+#                            BRENT.CMD which corresponds to broker "UKOIL", so
+#                            LIGHT.CMD was chosen deliberately, not by default)
+#   All FX majors/minors/exotics (incl. USDCNH, USDHUF, USDCZK, EURNOK, USDZAR,
+#   USDSGD, USDPLN, USDNOK, USDMXN, EURCZK, EURHUF, EURPLN, EURSEK) mapped 1:1 —
+#   Dukascopy carries every FTMO FX pair with no substitution needed.
+#   XAUUSD/XAGUSD -> direct match (Dukascopy category "FX_Commodities").
+#   BTCUSD -> direct match (Dukascopy category "FX_Crypto Currency").
+
+symbols:
+  - ftmo_name: EURUSD
+    dukascopy_name: EURUSD
+    asset_class: forex
+  - ftmo_name: AUDUSD
+    dukascopy_name: AUDUSD
+    asset_class: forex
+  - ftmo_name: USDCAD
+    dukascopy_name: USDCAD
+    asset_class: forex
+  - ftmo_name: USDCHF
+    dukascopy_name: USDCHF
+    asset_class: forex
+  - ftmo_name: NZDUSD
+    dukascopy_name: NZDUSD
+    asset_class: forex
+  - ftmo_name: AUDCAD
+    dukascopy_name: AUDCAD
+    asset_class: forex
+  - ftmo_name: USDSEK
+    dukascopy_name: USDSEK
+    asset_class: forex
+  - ftmo_name: AUDCHF
+    dukascopy_name: AUDCHF
+    asset_class: forex
+  - ftmo_name: CADCHF
+    dukascopy_name: CADCHF
+    asset_class: forex
+  - ftmo_name: EURAUD
+    dukascopy_name: EURAUD
+    asset_class: forex
+  - ftmo_name: AUDJPY
+    dukascopy_name: AUDJPY
+    asset_class: forex
+  - ftmo_name: GBPAUD
+    dukascopy_name: GBPAUD
+    asset_class: forex
+  - ftmo_name: GBPJPY
+    dukascopy_name: GBPJPY
+    asset_class: forex
+  - ftmo_name: NZDJPY
+    dukascopy_name: NZDJPY
+    asset_class: forex
+  - ftmo_name: US100
+    dukascopy_name: USATECH.IDX
+    asset_class: index
+    note: "Dukascopy USA tech-100 index (category USA_Indexes); verified via instrument list, not a direct name match."
+  - ftmo_name: US500
+    dukascopy_name: USA500.IDX
+    asset_class: index
+    note: "Dukascopy US 500 index (category USA_Indexes)."
+  - ftmo_name: XAGUSD
+    dukascopy_name: XAGUSD
+    asset_class: metal
+  - ftmo_name: XAUUSD
+    dukascopy_name: XAUUSD
+    asset_class: metal
+  - ftmo_name: EURNOK
+    dukascopy_name: EURNOK
+    asset_class: forex
+  - ftmo_name: USDJPY
+    dukascopy_name: USDJPY
+    asset_class: forex
+  - ftmo_name: GBPUSD
+    dukascopy_name: GBPUSD
+    asset_class: forex
+  - ftmo_name: EURJPY
+    dukascopy_name: EURJPY
+    asset_class: forex
+  - ftmo_name: EURGBP
+    dukascopy_name: EURGBP
+    asset_class: forex
+  - ftmo_name: USDZAR
+    dukascopy_name: USDZAR
+    asset_class: forex
+  - ftmo_name: USDSGD
+    dukascopy_name: USDSGD
+    asset_class: forex
+  - ftmo_name: USDPLN
+    dukascopy_name: USDPLN
+    asset_class: forex
+  - ftmo_name: USDNOK
+    dukascopy_name: USDNOK
+    asset_class: forex
+  - ftmo_name: USDMXN
+    dukascopy_name: USDMXN
+    asset_class: forex
+  - ftmo_name: USDHUF
+    dukascopy_name: USDHUF
+    asset_class: forex
+  - ftmo_name: USDCZK
+    dukascopy_name: USDCZK
+    asset_class: forex
+  - ftmo_name: USDCNH
+    dukascopy_name: USDCNH
+    asset_class: forex
+  - ftmo_name: AUDNZD
+    dukascopy_name: AUDNZD
+    asset_class: forex
+  - ftmo_name: CADJPY
+    dukascopy_name: CADJPY
+    asset_class: forex
+  - ftmo_name: CHFJPY
+    dukascopy_name: CHFJPY
+    asset_class: forex
+  - ftmo_name: EURCAD
+    dukascopy_name: EURCAD
+    asset_class: forex
+  - ftmo_name: EURCHF
+    dukascopy_name: EURCHF
+    asset_class: forex
+  - ftmo_name: EURCZK
+    dukascopy_name: EURCZK
+    asset_class: forex
+  - ftmo_name: EURHUF
+    dukascopy_name: EURHUF
+    asset_class: forex
+  - ftmo_name: EURNZD
+    dukascopy_name: EURNZD
+    asset_class: forex
+  - ftmo_name: EURPLN
+    dukascopy_name: EURPLN
+    asset_class: forex
+  - ftmo_name: EURSEK
+    dukascopy_name: EURSEK
+    asset_class: forex
+  - ftmo_name: GBPCAD
+    dukascopy_name: GBPCAD
+    asset_class: forex
+  - ftmo_name: GBPCHF
+    dukascopy_name: GBPCHF
+    asset_class: forex
+  - ftmo_name: GBPNZD
+    dukascopy_name: GBPNZD
+    asset_class: forex
+  - ftmo_name: NZDCAD
+    dukascopy_name: NZDCAD
+    asset_class: forex
+  - ftmo_name: NZDCHF
+    dukascopy_name: NZDCHF
+    asset_class: forex
+  - ftmo_name: US30
+    dukascopy_name: USA30.IDX
+    asset_class: index
+    note: "Dukascopy US 30 (Dow) index (category USA_Indexes)."
+  - ftmo_name: USOIL
+    dukascopy_name: LIGHT.CMD
+    asset_class: commodity
+    note: "WTI light crude. Dukascopy also carries BRENT.CMD (maps to broker UKOIL); LIGHT.CMD was chosen deliberately as the WTI/USOIL equivalent."
+  - ftmo_name: BTCUSD
+    dukascopy_name: BTCUSD
+    asset_class: crypto

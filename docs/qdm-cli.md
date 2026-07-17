@@ -48,7 +48,10 @@ Args: `pointvalue`, `ticksize`, `tickstep`, `defaultspread`, `commissions`, `swa
   format="Generic tick format (comma delimited)"
 
 # NATIVE MT5 EXPORT (huge - may replace our own import script):
-./qdmcli -data action=exportToMT5 symbol=EURUSD timeframe=Tick
+# NOTE: timeframe is case-sensitive — must be TICK or M1 (uppercase). "Tick" errors:
+#   Error: 'Timeframe' must be one of ['TICK,M1'].
+./qdmcli -data action=exportToMT5 symbol=EURUSD timeframe=TICK \
+  datefrom=2020.01.01 dateto=2026.07.16 outputdir=/path filename=EURUSD
 ./qdmcli -data action=exportToMT5 symbol=EURUSD timeframe=M1 \
   spreadType=points spreadValue=2 datefrom=2020.01.01 dateto=2026.07.16 \
   outputdir=/path filename=EURUSD
@@ -69,10 +72,54 @@ Export formats include: `Generic tick format (comma delimited)`,
 
 One command per line; ideal for the 49-symbol pipeline (single JVM start).
 
-## Open questions (answer during EURUSD pilot)
+**Caveat found during the EURUSD pilot:** queuing two `-data action=export`
+commands back-to-back in the same batch file is unreliable — in testing,
+only the first one produced output; the second (`timeframe=M1` right after
+a `timeframe=TICK` export) silently produced no file and no error/progress
+output. Re-running the same M1 export as its own standalone command (or as
+the first line of a fresh batch) worked fine. Until this is root-caused,
+verify every expected output file actually exists after a batch that
+chains multiple exports — don't trust `Exit app - ok` alone.
 
-- Symbol naming after add: is the stored name `EURUSD_TICK` / `EURUSD`? (`-symbol action=list` after add)
-- What exactly does `exportToMT5 timeframe=Tick` emit (file format, destination)?
-  If it produces an MT5-ready tick file, our MQL5 import script may only need
-  to create the custom symbol and load it.
-- `datefrom` support on `action=update` (limit download range to 2020+).
+## Open questions — ANSWERED during EURUSD pilot (2026-07-16)
+
+- **Stored symbol name after `-symbol action=add`**: the stored name is the
+  plain symbol, e.g. `EURUSD` — **not** `EURUSD_TICK`. Confirmed via
+  `-symbol action=list` immediately after add:
+  `EURUSD,EURUSD,TICK,,,,0,0,Dukascopy,Forex`. The `Instrument` column is also
+  the bare name `EURUSD` (QDM appends `_dukascopy` only internally in the
+  `-instrument action=list` inventory, e.g. `EURUSD_dukascopy` — you never
+  pass that suffixed form to `-symbol`/`-data` commands).
+- **`datefrom`/`dateto` on `action=update` are NOT honored.** Tested with
+  `./qdmcli -data action=update symbols=EURUSD datefrom=2026.07.14
+  dateto=2026.07.15` — the log showed it starting from `Downloading
+  year:2005` regardless, i.e. `action=update` always pulls full available
+  history from the source; there is no way to cap the download range at
+  update time. `datefrom`/`dateto` only take effect on `action=export` /
+  `action=exportToMT5` (confirmed working there — see `docs/pilot-eurusd.md`).
+  Plan pipeline storage/disk budgeting around full-history downloads for
+  every symbol.
+- **`exportToMT5` output — format, naming, and date scoping (confirmed):**
+  - `timeframe=` is case-sensitive: must be `TICK` or `M1` (uppercase).
+    `timeframe=Tick` fails with `Error: 'Timeframe' must be one of
+    ['TICK,M1'].`
+  - File is written to `outputdir` as `<filename>.csv` (defaults to
+    `<symbol>.csv` if `filename=` is omitted) — plain CSV, not a binary
+    MT4/MT5 history format. It is **not** directly loadable by MT5 as-is;
+    our MQL5/Python import step still needs to read this CSV and populate
+    the custom symbol (e.g. via `CustomTicksAdd`).
+  - Tick format is 3 columns, **no header row**:
+    `datetime,bid,ask` — e.g. `2020.01.01 22:01:12.821,1.12132,1.12133`.
+    This differs from `action=export`'s "Generic tick format" (4 columns
+    *with* header: `DateTime,Bid,Ask,Volume`, and a different datetime
+    format — `20200101 22:01:12.821` vs `2020.01.01 22:01:12.821`).
+  - **`datefrom`/`dateto` ARE honored on `exportToMT5`** (unlike
+    `action=update`, which ignores them — see above). Verified directly:
+    omitting them exported the full available history (2003.05.05 →
+    2026.07.15, 512,807,256 rows, 20.5 GB for EURUSD tick); passing
+    `datefrom=2020.01.01 dateto=2026.07.16` produced exactly the same
+    row count as the equivalently-scoped `action=export` CSV
+    (169,181,128 rows, 6.77 GB) minus the header row. **Always pass
+    `datefrom`/`dateto` explicitly on `exportToMT5`** — the unscoped
+    default is enormous and mostly outside our 2020+ analysis window.
+  - Full details, sample lines, and timings: `docs/pilot-eurusd.md`.
