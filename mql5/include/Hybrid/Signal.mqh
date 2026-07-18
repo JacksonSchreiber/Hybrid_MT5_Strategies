@@ -47,6 +47,15 @@ struct SignalCandidate
    double   zone2_hi, zone2_lo;  // optional 2nd rectangle (FVG/band); 0 = unused
    datetime leg_t0, leg_t1;      // impulse-leg / structure trendline endpoints; 0 = unused
    double   leg_p0, leg_p1;
+   //--- confirmed fractal swings for display: the harness marks each with an
+   //--- arrow + a literal "swing high"/"swing low" text label. Newest-first,
+   //--- capped; a detector fills these via DC_FillSwings (see DetectorCommon).
+   int      n_swing_hi;          // count of swing highs to mark (<= 10)
+   datetime swing_hi_t[10];      // swing-high bar times
+   double   swing_hi_p[10];      // swing-high prices
+   int      n_swing_lo;          // count of swing lows to mark (<= 10)
+   datetime swing_lo_t[10];      // swing-low bar times
+   double   swing_lo_p[10];      // swing-low prices
   };
 
 //+------------------------------------------------------------------+

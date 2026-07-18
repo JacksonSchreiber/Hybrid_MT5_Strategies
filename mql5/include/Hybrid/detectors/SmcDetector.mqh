@@ -110,7 +110,10 @@ public:
          double prox=(m_dir>0? m_ob_hi : m_ob_lo);
          bool pulled=(m_dir>0 ? r[1].low<=prox : r[1].high>=prox);
          if(!pulled) return false;
-         return EmitSmc(symbol,tf,hip,nh,lop,nl,out);
+         bool ok=EmitSmc(symbol,tf,hip,nh,lop,nl,out);
+         //--- confirmed swings for the "swing high"/"swing low" overlay markers
+         if(ok) DC_FillSwings(out,r,hip,hii,nh,lop,loi,nl,6);
+         return ok;
         }
 
       //================= FORMING: wait for MSS =================

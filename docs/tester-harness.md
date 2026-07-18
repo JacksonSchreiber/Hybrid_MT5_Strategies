@@ -28,7 +28,32 @@ buy/sell**) it:
 1. Draws the decision context on the chart — entry (green), SL (red) and TP
    (blue) lines, a setup-zone rectangle (last 5 H4 bars' range) and a text
    label with strategy name + timestamp. Objects are named `HFT_<id>_*` and
-   **persist** after the decision.
+   **persist** after the decision. All overlay objects are created
+   **non-selectable** so they can't be dragged by accident. Two context layers
+   are added on top of the base overlay:
+   - **Native Fibonacci grid (Deep-Fib setups).** A real `OBJ_FIBO` is anchored
+     to the detector's impulse leg — anchor 0 = leg origin (`leg_p0`), anchor 1 =
+     impulse extreme (`leg_p1`) — with custom levels **0.0 / 0.5 / 0.618 / 0.705
+     (OTE) / 0.786 / 0.886 (SL) / 1.0**, golden-pocket levels (0.618–0.786)
+     emphasised. The grid's level prices are made to **coincide exactly** with
+     the detector's `Level(v) = leg_p1 + v·(leg_p0−leg_p1)` — i.e. the 0.618 line
+     sits on the golden-pocket zone box's upper edge and the 0.886 line on the
+     SL fib. The harness does **not** assume MT5's level-value convention: it
+     creates the object, reads back where each level actually lands with
+     `ObjectGetValueByTime`, and if the 0.618 line doesn't match it remaps every
+     level value to `1−v` so the labels stay correct for both long and short
+     setups. A `FIBCHK …` line is printed to the Experts log with the per-level
+     `fib vs det` prices for verification. Because the native grid now carries
+     the 0.5/0.618/0.786/0.886 levels with labels, the old individual Fib aux
+     H-lines for those were dropped (EMA50 and the 1.618 TP2 extension aux
+     remain).
+   - **Swing-high / swing-low markers.** The confirmed fractal swings the
+     detectors already find (SMC and Fib) are marked with an arrow
+     (`OBJ_ARROW_DOWN` above each swing high, `OBJ_ARROW_UP` below each swing
+     low) plus an `OBJ_TEXT` reading literally **"swing high"** / **"swing
+     low"**, capped at the ~6 most recent of each to stay readable. These are
+     additive context on top of the setup-specific labels (swept high/low, MSS
+     level, etc.).
 2. Pops a **system-modal Yes/No dialog** showing symbol, strategy, direction,
    entry/SL/TP, R:R and the risk-sized lot count — with the **entry/SL/TP text
    colour-matched to the chart lines** (see below).

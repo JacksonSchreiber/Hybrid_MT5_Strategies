@@ -171,12 +171,12 @@ public:
       double b618=Level(FIB_LO), b786=Level(FIB_HI);
       out.zone_hi=MathMax(b618,b786); out.zone_lo=MathMin(b618,b786);
       out.leg_t0=m_t0; out.leg_p0=m_L0; out.leg_t1=m_t100; out.leg_p1=m_L100;
-      DC_AddAux(out,Level(0.5),"0.5");
-      DC_AddAux(out,Level(0.618),"0.618");
-      DC_AddAux(out,Level(0.786),"0.786");
-      DC_AddAux(out,Level(0.886),"0.886 (SL)");
+      //--- 0.5/0.618/0.786/0.886 are now drawn by the native OBJ_FIBO grid
+      //--- (anchored on this leg, labelled); keep the non-fib aux levels.
       DC_AddAux(out,ema[1],"EMA50");
       DC_AddAux(out,tp2,"TP2 ext 1.618");
+      //--- confirmed swings for the "swing high"/"swing low" overlay markers
+      DC_FillSwings(out,r,hip,hii,nh,lop,loi,nl,6);
       m_dbg_emit++;
       ResetCtx();
       return true;

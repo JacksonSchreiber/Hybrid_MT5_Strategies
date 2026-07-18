@@ -451,8 +451,15 @@ void DrawOverlays(int id,SignalCandidate &c)
          ObjectSetInteger(0,lg,OBJPROP_COLOR,clrGoldenrod);
          ObjectSetInteger(0,lg,OBJPROP_WIDTH,2);
          ObjectSetInteger(0,lg,OBJPROP_RAY_RIGHT,false);
+         ObjectSetInteger(0,lg,OBJPROP_SELECTABLE,false);
         }
      }
+   //--- native Fibonacci retracement grid on the Deep-Fib impulse leg. Only for
+   //--- the Fib strategy (the only detector that sets a retracement leg).
+   if(c.strategy=="DeepFib" && c.leg_t0>0 && c.leg_t1>0)
+      DrawFibo(p,c);
+   //--- generic confirmed-swing markers, labelled "swing high" / "swing low"
+   DrawSwings(p,c);
    //--- corner label
    string tx=p+"label";
    double anchor=(c.direction>0 ? c.zone_hi : c.zone_lo);
@@ -476,6 +483,134 @@ void DrawHLine(string name,double price,color clr)
       ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
       ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_SOLID);
       ObjectSetInteger(0,name,OBJPROP_BACK,false);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Native OBJ_FIBO on the Deep-Fib impulse leg. Anchor 0 = leg       |
+//| origin (leg_p0), anchor 1 = impulse extreme (leg_p1). The detector |
+//| defines its retracement as Level(v) = leg_p1 + v*(leg_p0-leg_p1)   |
+//| (0.0 at the extreme, 1.0 at the origin). We do NOT trust a          |
+//| remembered MT5 level-value convention: we create the object, then  |
+//| read where each level ACTUALLY lands via ObjectGetValueByTime and   |
+//| compare to Level(v). If the 0.618 line does not coincide (MT5 maps  |
+//| level values from the other anchor), we remap every level value to  |
+//| 1-v so the labelled 0.618 line sits exactly on Level(0.618) for      |
+//| both long and short setups. A FIBCHK line prints the numbers.       |
+//+------------------------------------------------------------------+
+void DrawFibo(string p,SignalCandidate &c)
+  {
+   double lv[7]={0.0,0.5,0.618,0.705,0.786,0.886,1.0};
+   string lt[7]={"0.0","50.0","61.8","70.5 OTE","78.6","88.6 SL","100.0"};
+   //--- detector price for each fib value: Level(v)=leg_p1+v*(leg_p0-leg_p1)
+   double det[7];
+   for(int i=0;i<7;i++) det[i]=c.leg_p1+lv[i]*(c.leg_p0-c.leg_p1);
+
+   string fb=p+"fibo";
+   ObjectDelete(0,fb);
+   if(!ObjectCreate(0,fb,OBJ_FIBO,0,c.leg_t0,c.leg_p0,c.leg_t1,c.leg_p1))
+     { Print("FIBCHK: OBJ_FIBO create failed err=",GetLastError()); return; }
+   ObjectSetInteger(0,fb,OBJPROP_COLOR,clrGoldenrod);
+   ObjectSetInteger(0,fb,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,fb,OBJPROP_BACK,true);
+   ObjectSetInteger(0,fb,OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,fb,OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,fb,OBJPROP_RAY_RIGHT,true);
+   ObjectSetString (0,fb,OBJPROP_TEXT,"Deep-Fib impulse grid");
+   ObjectSetInteger(0,fb,OBJPROP_LEVELS,7);
+
+   //--- apply level VALUES straight (v), then probe the actual convention
+   FiboApplyLevels(fb,lv,lt,false);
+   datetime tprobe=(c.leg_t1>c.leg_t0? c.leg_t1 : c.leg_t0);
+   double tol=10.0*_Point;                        // ~1 pip on a 5-digit fx symbol
+   double a618=ObjectGetValueByTime(0,fb,tprobe,2); // index 2 == labelled 0.618
+   bool   readable=(a618>0.0);
+   bool   flip=false;
+   if(readable && MathAbs(a618-det[2])>tol)
+     { flip=true; FiboApplyLevels(fb,lv,lt,true); } // remap v -> 1-v
+
+   //--- verify + print per-level: MT5 actual vs detector Level(v)
+   double maxerr=0.0;
+   string dump="";
+   for(int i=0;i<7;i++)
+     {
+      double act=ObjectGetValueByTime(0,fb,tprobe,i);
+      double d=(act>0.0? act-det[i] : 0.0);
+      if(act>0.0 && MathAbs(d)>maxerr) maxerr=MathAbs(d);
+      dump+=StringFormat(" %s[fib=%.5f det=%.5f d=%.6f]",lt[i],act,det[i],d);
+     }
+   double zh=MathMax(c.zone_hi,c.zone_lo), zl=MathMin(c.zone_hi,c.zone_lo);
+   PrintFormat("FIBCHK %s %s leg(p0=%.5f p1=%.5f) flip=%s readable=%s maxerr=%.6f "
+               "| goldenpocket zoneHi=%.5f=Level0.618 zoneLo=%.5f=Level0.786 |%s",
+               p,DirStr(c.direction),c.leg_p0,c.leg_p1,(flip?"YES":"no"),
+               (readable?"yes":"NO(fallback:no-flip)"),maxerr,zh,zl,dump);
+  }
+
+//--- set OBJ_FIBO level values (v, or 1-v when remap) + label texts + styling
+void FiboApplyLevels(string fb,double &lv[],string &lt[],bool remap)
+  {
+   for(int i=0;i<7;i++)
+     {
+      double v=(remap? 1.0-lv[i] : lv[i]);
+      ObjectSetDouble (0,fb,OBJPROP_LEVELVALUE,i,v);
+      ObjectSetString (0,fb,OBJPROP_LEVELTEXT ,i,lt[i]);
+      bool gp=(lv[i]>=0.618 && lv[i]<=0.786);       // golden-pocket emphasis
+      ObjectSetInteger(0,fb,OBJPROP_LEVELCOLOR,i,(gp?clrOrange:clrGoldenrod));
+      ObjectSetInteger(0,fb,OBJPROP_LEVELSTYLE,i,(gp?STYLE_SOLID:STYLE_DOT));
+      ObjectSetInteger(0,fb,OBJPROP_LEVELWIDTH,i,1);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Mark confirmed fractal swings with an arrow + a literal            |
+//| "swing high" / "swing low" text label. Non-selectable so the user  |
+//| can't drag them; names are per-signal prefixed (p) for cleanup.    |
+//+------------------------------------------------------------------+
+void DrawSwings(string p,SignalCandidate &c)
+  {
+   for(int i=0;i<c.n_swing_hi;i++)
+     {
+      string an=StringFormat("%sswH_a%d",p,i);
+      if(ObjectCreate(0,an,OBJ_ARROW_DOWN,0,c.swing_hi_t[i],c.swing_hi_p[i]))
+        {
+         ObjectSetInteger(0,an,OBJPROP_COLOR,clrOrangeRed);
+         ObjectSetInteger(0,an,OBJPROP_WIDTH,1);
+         ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_BOTTOM);   // arrow above the high
+         ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false);
+         ObjectSetInteger(0,an,OBJPROP_SELECTED,false);
+        }
+      string tn=StringFormat("%sswH_t%d",p,i);
+      if(ObjectCreate(0,tn,OBJ_TEXT,0,c.swing_hi_t[i],c.swing_hi_p[i]))
+        {
+         ObjectSetString (0,tn,OBJPROP_TEXT,"swing high");
+         ObjectSetInteger(0,tn,OBJPROP_COLOR,clrOrangeRed);
+         ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,7);
+         ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_LOWER);    // text above the high
+         ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false);
+         ObjectSetInteger(0,tn,OBJPROP_SELECTED,false);
+        }
+     }
+   for(int i=0;i<c.n_swing_lo;i++)
+     {
+      string an=StringFormat("%sswL_a%d",p,i);
+      if(ObjectCreate(0,an,OBJ_ARROW_UP,0,c.swing_lo_t[i],c.swing_lo_p[i]))
+        {
+         ObjectSetInteger(0,an,OBJPROP_COLOR,clrDodgerBlue);
+         ObjectSetInteger(0,an,OBJPROP_WIDTH,1);
+         ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_TOP);      // arrow below the low
+         ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false);
+         ObjectSetInteger(0,an,OBJPROP_SELECTED,false);
+        }
+      string tn=StringFormat("%sswL_t%d",p,i);
+      if(ObjectCreate(0,tn,OBJ_TEXT,0,c.swing_lo_t[i],c.swing_lo_p[i]))
+        {
+         ObjectSetString (0,tn,OBJPROP_TEXT,"swing low");
+         ObjectSetInteger(0,tn,OBJPROP_COLOR,clrDodgerBlue);
+         ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,7);
+         ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_UPPER);    // text below the low
+         ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false);
+         ObjectSetInteger(0,tn,OBJPROP_SELECTED,false);
+        }
      }
   }
 

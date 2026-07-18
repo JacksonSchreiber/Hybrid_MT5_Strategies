@@ -114,6 +114,31 @@ void ResetCandidate(SignalCandidate &c)
    c.aux_count=0;
    for(int i=0;i<8;i++) { c.aux_price[i]=0.0; c.aux_label[i]=""; }
    c.zone2_hi=0; c.zone2_lo=0; c.leg_t0=0; c.leg_t1=0; c.leg_p0=0; c.leg_p1=0;
+   c.n_swing_hi=0; c.n_swing_lo=0;
+   for(int i=0;i<10;i++)
+     { c.swing_hi_t[i]=0; c.swing_hi_p[i]=0.0; c.swing_lo_t[i]=0; c.swing_lo_p[i]=0.0; }
+  }
+
+//--- copy up to 'cap' most-recent confirmed swings onto the candidate so the
+//--- harness can mark + label them. Inputs are the newest-first swing arrays
+//--- from DC_CollectSwings: prices in *_px, r[]-indices in *_idx. Times come
+//--- from r[idx].time (r is as-series). cap is clamped to the struct capacity.
+void DC_FillSwings(SignalCandidate &c,const MqlRates &r[],
+                   const double &hi_px[],const int &hi_idx[],int n_hi,
+                   const double &lo_px[],const int &lo_idx[],int n_lo,int cap)
+  {
+   if(cap>10) cap=10;
+   int sz=ArraySize(r);
+   int nh=0;
+   for(int i=0;i<n_hi && nh<cap;i++)
+     { int ix=hi_idx[i]; if(ix<0 || ix>=sz) continue;
+       c.swing_hi_p[nh]=hi_px[i]; c.swing_hi_t[nh]=r[ix].time; nh++; }
+   c.n_swing_hi=nh;
+   int nl=0;
+   for(int i=0;i<n_lo && nl<cap;i++)
+     { int ix=lo_idx[i]; if(ix<0 || ix>=sz) continue;
+       c.swing_lo_p[nl]=lo_px[i]; c.swing_lo_t[nl]=r[ix].time; nl++; }
+   c.n_swing_lo=nl;
   }
 
 //--- append an aux overlay level (bounded to 8)
