@@ -30,6 +30,8 @@ Goal: 49/49 downloaded AND 49/49 imported.
 - The rolling importer self-heals a one-off import failure by retrying on its next
   pass (CSV left in place). A single import failure that is already retrying is NORMAL —
   only escalate if the SAME symbol fails import ≥2 times or a terminal64 is stuck >15 min.
+  Also: a symbol in `import_failures.txt` that is ALSO in `import_state.txt` has RECOVERED
+  (e.g. EURSEK) — do not escalate it, same rule as the download side.
 
 ## Checks each run (gather evidence with timestamps)
 1. **Workers alive?** `pgrep -f fleet_download.py`, `pgrep -f rolling_import.sh`.
