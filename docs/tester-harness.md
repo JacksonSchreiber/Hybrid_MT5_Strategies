@@ -160,6 +160,13 @@ During the run it is `..._<start>.part.csv`; at the end it is rewritten to the
 rewritten and `FileFlush`-ed on every signal and every trade close, so a tester
 crash never loses more than the in-flight write.
 
+> **Schema note:** the table below predates the two-target scale-out feature
+> (task #14) and is missing the `tp1`/`tp2`/`partial_frac`/`tp1_done` columns
+> the journal now actually writes, in a different column order. For the
+> current, verified-against-source 20-column schema, see
+> [api-reference.md § Journal CSV schema](api-reference.md#journal-csv-schema).
+> The summary below is still directionally accurate for the base columns.
+
 Columns (one row per signal):
 
 | Column | Meaning |
@@ -173,7 +180,9 @@ Columns (one row per signal):
 | `posid` | position id (0 if denied/failed) |
 | `exit_time`, `exit_price`, `pnl`, `r_multiple` | filled when the position closes |
 
-`r_multiple` = realised move ÷ initial risk (entry→SL) distance.
+`r_multiple` = realised move ÷ initial risk (entry→SL) distance; as of the
+two-target scale-out, this is a blended, volume-weighted figure across up to
+two closing deals — see the api-reference link above.
 
 ## Risk sizing
 

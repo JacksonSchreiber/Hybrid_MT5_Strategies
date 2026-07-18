@@ -68,6 +68,16 @@ not design against the spec's idealised lifecycle without reading this first.
    then `cand.tp` is the single live target and must be chosen as the **nearest
    target that clears `min_rr`** so the gate can pass (see each doc's TP rule).
 
+   > **Status update (this is now built):** the PM item below was confirmed
+   > and the dev extended the harness. `HybridForwardTest.mq5 ::
+   > ManageOpenPositions()` now does exactly this — banks `partial_fraction`
+   > at `tp1` via `PositionClosePartial`, moves SL to breakeven, and lets the
+   > remainder run to `tp2` (the order's actual TP for a two-target signal).
+   > See [api-reference.md](../api-reference.md#signalcandidate-struct) and
+   > [detectors-implementation.md](detectors-implementation.md). This
+   > paragraph and PM item 2 below are left as the original build sheet for
+   > history; treat them as superseded by the code.
+
 ---
 
 ## 1. Shared indicator-handle lifecycle (lazy, symbol-keyed)

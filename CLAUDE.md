@@ -1,5 +1,10 @@
 # CLAUDE.md — FTMO Hybrid Trading System
 
+**Technical entry point:** [docs/README.md](docs/README.md) — the wiki home
+(architecture, API reference, tools guide, strategy specs). Read it before
+touching pipeline or MQL5 code; this file stays short and covers only
+process rules and environment facts that don't belong in the wiki.
+
 ## Project rules
 
 - **The user (Jackson) is the gatekeeper.** Never advance to the next phase
@@ -22,16 +27,13 @@
 | VPS / Telegram Infra (Phase 3) | Sonnet 5 (`model: "sonnet"`) |
 | Docs / Changelog | Haiku 4.5 (`model: "haiku"`) |
 
-## Environment facts
+## Environment facts (rules, not a reference — full table in docs/README.md)
 
 - This repo lives on WSL-native ext4 (`/home/jack/hybrid_project`). Do NOT put
   bulk data under `/mnt/c` or `/home/jack/trading` (the latter is a symlink to
   OneDrive — sync churn).
 - QDM Linux CLI: `/home/jack/QDM/qdmcli` (license REDACTED). Flag syntax is
   build-specific — consult `docs/qdm-cli.md`, don't guess.
-- MT5 data folder (Windows):
-  `C:\Users\jacks\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552AE0B5EAEFB04866EB`
-  (WSL: `/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/EE0304F13905552AE0B5EAEFB04866EB`)
 - GitHub remote: `JacksonSchreiber/Hybrid_MT5_Strategies` (credentials in
   `~/.git-credentials`, outside the repo — never commit tokens).
 - MT5 is on the Windows host. Custom-symbol suffixes must be ≤4 chars
@@ -40,6 +42,8 @@
   tester); MQL5-native MessageBox does NOT work in the tester. WebRequest does
   not work in the tester and DLLs don't run on cloud hosts — tester (Ph. 2)
   and production (Ph. 3) are separate mechanisms by design.
+- Paths (MT5 data folder, exact repo locations, disk model) and every API
+  contract: [docs/README.md](docs/README.md) → architecture.md / api-reference.md.
 
 ## Conventions
 

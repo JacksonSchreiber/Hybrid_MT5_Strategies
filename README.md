@@ -4,6 +4,11 @@ Human-in-the-loop trading system for a $25k FTMO Swing account traded via MT5.
 Algorithms detect setups on 1D/4H charts across ~49 FTMO symbols; **every trade
 is manually approved** before execution.
 
+**Technical documentation lives in the wiki: [docs/README.md](docs/README.md)**
+— architecture, API reference (exact MQL5/Python signatures and contracts),
+and an operational tools guide for every script. This file stays a short
+project overview.
+
 ## Strategies (each targeting ~40–50% win rate, 1% risk per trade)
 
 1. **Liquidity Sweep & Market Structure Shift** (SMC model)
@@ -14,10 +19,12 @@ is manually approved** before execution.
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| 0 | Dev environment, agent team, QDM CLI working | in progress |
-| 1 | 5 years of Dukascopy tick data (2020→) for all symbols, imported to MT5 custom symbols | pending |
-| 2 | Interactive forward test: MT5 visual tester pauses on each alert for a manual yes/no via modal | pending |
-| 3 | Production: cloud EA → VPS → Telegram approval loop | pending |
+| 0 | Dev environment, agent team, QDM CLI working | Done |
+| 1 | Dukascopy tick data for all 49 symbols, imported to MT5 custom symbols | Pipeline built and running (see [docs/README.md](docs/README.md) for the live count) |
+| 2 | Interactive forward test: MT5 visual tester pauses on each alert for a manual yes/no via modal | Built (3 detectors + arbitration + two-target scale-out) |
+| 3 | Production: cloud EA → VPS → Telegram approval loop | Planned, not built |
+
+Details, current counts, and every contract: [docs/README.md](docs/README.md).
 
 ## Layout
 
