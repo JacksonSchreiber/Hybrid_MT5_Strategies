@@ -20,6 +20,17 @@ Two detached workers under /home/jack/hybrid_project:
   `pipeline/import_failures.txt`; logs to `logs/rolling_import.log`.
 Goal: 49/49 downloaded AND 49/49 imported.
 
+## KNOWN / benign — do NOT escalate these
+- The master `logs/fleet_download.log` may be "dark" (no new lines) because the
+  orchestrator's stdout was redirected to /dev/null on a restart. This is known and
+  cosmetic — all monitoring uses the per-symbol `logs/fleet/*_update.log` and the
+  state files, which update normally. Judge health from those, NOT the master log.
+- The fleet process (`fleet_download.py`) was restarted once (~17:02) for the
+  full-history change; a fresh PID is expected.
+- The rolling importer self-heals a one-off import failure by retrying on its next
+  pass (CSV left in place). A single import failure that is already retrying is NORMAL —
+  only escalate if the SAME symbol fails import ≥2 times or a terminal64 is stuck >15 min.
+
 ## Checks each run (gather evidence with timestamps)
 1. **Workers alive?** `pgrep -f fleet_download.py`, `pgrep -f rolling_import.sh`.
    If either is DEAD while its side is < 49/49 → ESCALATE (unexpected exit).
