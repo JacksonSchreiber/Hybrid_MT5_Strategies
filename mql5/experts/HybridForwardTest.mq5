@@ -65,6 +65,12 @@ input double InpFibMinRR    = 2.0;
 input double InpEmaStretch  = 2.0;
 input double InpEmaAdxCeil  = 30.0;
 input double InpEmaMinRR    = 1.3;
+//--- imbalance highlights (display-only; NEVER affect trade/entry logic)
+input bool   InpShowImbal   = true;           // draw FVG / price-gap / tick-volume imbalances
+input color  InpImbColor    = clrMediumPurple;// one shared colour for all three imbalance types
+input int    InpImbLookback = 120;            // bars scanned for imbalances
+input double InpImbVolMult  = 2.0;            // tick-volume spike threshold vs 20-bar average
+input int    InpImbMaxDraw  = 15;             // cap drawn zones (most recent) to avoid clutter
 
 //--- globals
 CTrade         g_trade;
@@ -460,6 +466,8 @@ void DrawOverlays(int id,SignalCandidate &c)
       DrawFibo(p,c);
    //--- generic confirmed-swing markers, labelled "swing high" / "swing low"
    DrawSwings(p,c);
+   //--- FVG / price-gap / tick-volume imbalance highlights (display-only context)
+   if(InpShowImbal) DrawImbalances(p,c);
    //--- corner label
    string tx=p+"label";
    double anchor=(c.direction>0 ? c.zone_hi : c.zone_lo);
@@ -483,6 +491,100 @@ void DrawHLine(string name,double price,color clr)
       ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
       ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_SOLID);
       ObjectSetInteger(0,name,OBJPROP_BACK,false);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Display-only imbalance highlights: 3-candle FVGs, bar price-gaps, |
+//| and tick-volume spikes - all ONE colour, each with a 50% midline. |
+//| Only UNMITIGATED zones are drawn: a zone tapped-and-rejected is    |
+//| dropped; a zone price CLOSES through inverts (flips polarity) and  |
+//| stays until re-tapped, then drops. Tick-volume is a PROXY          |
+//| (Dukascopy volume = tick count, not real exchange volume). This    |
+//| never touches trade/entry logic - pure chart context.             |
+//+------------------------------------------------------------------+
+void AddImb(double &lo[],double &hi[],int &dir[],int &t[],int &n,
+            double l,double h,int d,int idx)
+  {
+   if(h<=l) return;
+   for(int q=0;q<n;q++)
+      if(MathAbs(lo[q]-l)<_Point && MathAbs(hi[q]-h)<_Point) return;   // dedupe
+   ArrayResize(lo,n+1); ArrayResize(hi,n+1); ArrayResize(dir,n+1); ArrayResize(t,n+1);
+   lo[n]=l; hi[n]=h; dir[n]=d; t[n]=idx; n++;
+  }
+//--- 0=active, 1=inverted (still valid), 2=used up (do not draw)
+int ImbState(const MqlRates &r[],int cnt,int iformed,double lo,double hi,int dir)
+  {
+   bool inverted=false;
+   for(int j=iformed+1;j<cnt;j++)
+     {
+      bool enters=(r[j].high>=lo && r[j].low<=hi);
+      if(!inverted)
+        {
+         bool through=(dir>0 ? r[j].close<lo : r[j].close>hi);
+         if(through){ inverted=true; continue; }   // flip polarity; own bar isn't a re-tap
+         if(enters) return 2;                       // tapped & rejected -> used up
+        }
+      else if(enters) return 2;                     // inverted zone re-tapped -> used up
+     }
+   return inverted ? 1 : 0;
+  }
+void DrawImbalances(string p,SignalCandidate &c)
+  {
+   MqlRates r[];
+   ArraySetAsSeries(r,false);                       // r[0]=oldest .. r[cnt-1]=last closed (signal bar)
+   int need=InpImbLookback+30;
+   int cnt=CopyRates(_Symbol,g_tf,1,need,r);
+   if(cnt<25) return;
+   int cur=cnt-1;
+
+   double zlo[],zhi[]; int zdir[],zt[]; int nz=0;
+   int startscan=MathMax(2,cnt-InpImbLookback);
+   for(int i=startscan;i<=cur;i++)
+     {
+      //--- 3-candle fair value gap
+      if(r[i-2].high < r[i].low)  AddImb(zlo,zhi,zdir,zt,nz,r[i-2].high,r[i].low,+1,i);
+      if(r[i-2].low  > r[i].high) AddImb(zlo,zhi,zdir,zt,nz,r[i].high,r[i-2].low,-1,i);
+      //--- bar-to-bar price gap
+      if(r[i].low  > r[i-1].high) AddImb(zlo,zhi,zdir,zt,nz,r[i-1].high,r[i].low,+1,i);
+      if(r[i].high < r[i-1].low)  AddImb(zlo,zhi,zdir,zt,nz,r[i].high,r[i-1].low,-1,i);
+      //--- tick-volume spike (proxy for activity)
+      if(i>=21)
+        {
+         double sum=0; for(int k=i-20;k<i;k++) sum+=(double)r[k].tick_volume;
+         double avg=sum/20.0;
+         if(avg>0 && (double)r[i].tick_volume > InpImbVolMult*avg)
+            AddImb(zlo,zhi,zdir,zt,nz,r[i].low,r[i].high,(r[i].close>=r[i].open?+1:-1),i);
+        }
+     }
+
+   int drawn=0;
+   for(int idx=nz-1; idx>=0 && drawn<InpImbMaxDraw; idx--)
+     {
+      int st=ImbState(r,cnt,zt[idx],zlo[idx],zhi[idx],zdir[idx]);
+      if(st==2) continue;                            // used up -> skip
+      datetime t0=r[zt[idx]].time, t1=r[cur].time;
+      string nm=StringFormat("%simb%d",p,idx);
+      if(ObjectCreate(0,nm,OBJ_RECTANGLE,0,t0,zhi[idx],t1,zlo[idx]))
+        {
+         ObjectSetInteger(0,nm,OBJPROP_COLOR,InpImbColor);
+         ObjectSetInteger(0,nm,OBJPROP_BACK,true);
+         ObjectSetInteger(0,nm,OBJPROP_FILL,true);
+         ObjectSetInteger(0,nm,OBJPROP_SELECTABLE,false);
+         ObjectSetInteger(0,nm,OBJPROP_STYLE,(st==1?STYLE_DASH:STYLE_SOLID)); // inverted = dashed edge
+        }
+      double mid=(zhi[idx]+zlo[idx])/2.0;            // 50% consequent-encroachment midline
+      string mn=StringFormat("%simbM%d",p,idx);
+      if(ObjectCreate(0,mn,OBJ_TREND,0,t0,mid,t1,mid))
+        {
+         ObjectSetInteger(0,mn,OBJPROP_COLOR,InpImbColor);
+         ObjectSetInteger(0,mn,OBJPROP_STYLE,STYLE_DOT);
+         ObjectSetInteger(0,mn,OBJPROP_WIDTH,1);
+         ObjectSetInteger(0,mn,OBJPROP_RAY_RIGHT,false);
+         ObjectSetInteger(0,mn,OBJPROP_BACK,true);
+         ObjectSetInteger(0,mn,OBJPROP_SELECTABLE,false);
+        }
+      drawn++;
      }
   }
 
