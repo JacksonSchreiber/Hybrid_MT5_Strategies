@@ -126,7 +126,15 @@ stage() {
   mkdir -p "$IMPORT_DIR"
   local dst="$IMPORT_DIR/$base.csv"
   log "staging $base.csv ($(numfmt --to=iec "$size" 2>/dev/null || echo "$size")) -> MQL5\\Files\\import\\ ..."
-  cp -f "$src" "$dst"
+  # Low-RAM WSL (~7 GB) copying a large CSV onto the 9p /mnt/c mount: a plain bulk
+  # `cp` accumulates dirty write-back pages faster than 9p can flush them and dies
+  # with ENOMEM ("Cannot allocate memory") on files >~10 GB (USDCNH, 12.7 GB, hit
+  # this; USDCZK, 8.5 GB, barely didn't). dd with oflag=sync commits each block
+  # before issuing the next, bounding dirty memory to one block. Slower, but safe.
+  rm -f "$dst"
+  if ! dd if="$src" of="$dst" bs=32M oflag=sync status=none; then
+    die "dd copy failed for $base (memory-safe staging to sandbox)"
+  fi
   local dsize
   dsize=$(stat -c%s "$dst")
   (( dsize == size )) || die "copy size mismatch ($dsize != $size) - copy may be incomplete"

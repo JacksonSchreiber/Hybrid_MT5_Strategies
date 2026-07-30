@@ -26,17 +26,40 @@
 #   crypto:      1  (BTCUSD)
 #
 # Notable non-1:1 remaps (verified against instrument list, not assumed):
-#   US100  -> USATECH.IDX   (Dukascopy's USA tech-100 index; category "USA_Indexes")
-#   US500  -> USA500.IDX    (category "USA_Indexes")
-#   US30   -> USA30.IDX     (category "USA_Indexes")
-#   USOIL  -> LIGHT.CMD     (WTI/"light" crude; Dukascopy also separately offers
-#                            BRENT.CMD which corresponds to broker "UKOIL", so
-#                            LIGHT.CMD was chosen deliberately, not by default)
+#   US100  -> USATECHIDXUSD  (Dukascopy's USA tech-100 index)
+#   US500  -> USA500IDXUSD
+#   US30   -> USA30IDXUSD
+#   USOIL  -> LIGHTCMDUSD    (WTI/"light" crude; Dukascopy also separately offers
+#                             BRENT.CMD/BRENTCMDUSD, which corresponds to broker
+#                             "UKOIL", so this was chosen deliberately, not by default)
 #   All FX majors/minors/exotics (incl. USDCNH, USDHUF, USDCZK, EURNOK, USDZAR,
 #   USDSGD, USDPLN, USDNOK, USDMXN, EURCZK, EURHUF, EURPLN, EURSEK) mapped 1:1 —
 #   Dukascopy carries every FTMO FX pair with no substitution needed.
 #   XAUUSD/XAGUSD -> direct match (Dukascopy category "FX_Commodities").
 #   BTCUSD -> direct match (Dukascopy category "FX_Crypto Currency").
+#
+# GOTCHA (2026-07-18, discovered the hard way — read this before touching the
+# 4 index/commodity mappings above): QDM's `-instrument action=list` DISPLAYS
+# these 4 instruments with a dotted name (USATECH.IDX, USA500.IDX, USA30.IDX,
+# LIGHT.CMD) — that dotted form is QDM's own internal/normalized display name,
+# NOT Dukascopy's actual raw datafeed symbol code. `-symbol action=add`
+# silently no-ops for any symbol name containing a literal "." on qdmcli
+# build 125.2692: it prints "Add symbols." / "Exit app - ok" (looks like
+# success) but the symbol never actually appears in a subsequent
+# `-symbol action=list` and any later `exportToMT5` fails with "Symbol ...
+# doesn't exist." Four different workarounds were tried (explicit
+# `instrument=` arg, pre-creating the instrument via `-instrument
+# action=add`, backslash-escaping the dot, quoting) — all failed identically.
+# The FIX: Dukascopy's real raw-feed codes for these 4 are dot-free and
+# currency-suffixed - USATECHIDXUSD, USA500IDXUSD, USA30IDXUSD, LIGHTCMDUSD
+# (this matches the very first Part-A task brief's hint, which turned out to
+# be Dukascopy's actual code, not QDM's display name). These dot-free codes
+# WORK in `-symbol action=add` and were independently verified by fetching
+# real ticks directly from datafeed.dukascopy.com (bypassing QDM entirely)
+# before ever touching qdmcli with them — sane, correctly-scaled prices for
+# 2026 (US100 ~29241, US500 ~7567, US30 ~52808, USOIL ~$79.56). If a future
+# session needs to touch Group B again: use the dot-free code below, never
+# the dotted display name from `-instrument action=list`.
 
 symbols:
   - ftmo_name: EURUSD
@@ -82,13 +105,13 @@ symbols:
     dukascopy_name: NZDJPY
     asset_class: forex
   - ftmo_name: US100
-    dukascopy_name: USATECH.IDX
+    dukascopy_name: USATECHIDXUSD
     asset_class: index
-    note: "Dukascopy USA tech-100 index (category USA_Indexes); verified via instrument list, not a direct name match."
+    note: "Dukascopy USA tech-100 index. Dot-free raw feed code — see GOTCHA comment above; QDM's instrument list displays this as USATECH.IDX, which does NOT work with -symbol action=add."
   - ftmo_name: US500
-    dukascopy_name: USA500.IDX
+    dukascopy_name: USA500IDXUSD
     asset_class: index
-    note: "Dukascopy US 500 index (category USA_Indexes)."
+    note: "Dukascopy US 500 index. Dot-free raw feed code — see GOTCHA comment above; QDM's instrument list displays this as USA500.IDX, which does NOT work with -symbol action=add."
   - ftmo_name: XAGUSD
     dukascopy_name: XAGUSD
     asset_class: metal
@@ -180,13 +203,13 @@ symbols:
     dukascopy_name: NZDCHF
     asset_class: forex
   - ftmo_name: US30
-    dukascopy_name: USA30.IDX
+    dukascopy_name: USA30IDXUSD
     asset_class: index
-    note: "Dukascopy US 30 (Dow) index (category USA_Indexes)."
+    note: "Dukascopy US 30 (Dow) index. Dot-free raw feed code — see GOTCHA comment above; QDM's instrument list displays this as USA30.IDX, which does NOT work with -symbol action=add."
   - ftmo_name: USOIL
-    dukascopy_name: LIGHT.CMD
+    dukascopy_name: LIGHTCMDUSD
     asset_class: commodity
-    note: "WTI light crude. Dukascopy also carries BRENT.CMD (maps to broker UKOIL); LIGHT.CMD was chosen deliberately as the WTI/USOIL equivalent."
+    note: "WTI light crude. Dukascopy also carries BRENTCMDUSD (maps to broker UKOIL); LIGHTCMDUSD was chosen deliberately as the WTI/USOIL equivalent. Dot-free raw feed code — see GOTCHA comment above; QDM's instrument list displays this as LIGHT.CMD, which does NOT work with -symbol action=add."
   - ftmo_name: BTCUSD
     dukascopy_name: BTCUSD
     asset_class: crypto
