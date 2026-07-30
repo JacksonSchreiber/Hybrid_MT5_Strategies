@@ -71,12 +71,19 @@ input color  InpImbColor    = clrMediumPurple;// one shared colour for all three
 input int    InpImbLookback = 120;            // bars scanned for imbalances
 input double InpImbVolMult  = 2.0;            // tick-volume spike threshold vs 20-bar average
 input int    InpImbMaxDraw  = 15;             // cap drawn zones (most recent) to avoid clutter
+//--- economic-event lines (display-only; high-impact, from Common\Files\econ_events.csv)
+input bool   InpShowEvents  = true;           // draw high-impact economic-event lines
+input color  InpEvtBull     = clrLimeGreen;   // event that came out BULLISH for this ticker
+input color  InpEvtBear     = clrOrangeRed;   // event that came out BEARISH for this ticker
+input color  InpEvtNeutral  = clrGray;        // as-expected / no actual (neutral)
+input int    InpEvtMaxDraw  = 600;            // safety cap on event lines drawn
 
 //--- globals
 CTrade         g_trade;
 ISignalDetector *g_detectors[3];           // priority order: [0]=SMC,[1]=Fib,[2]=EMA
 int            g_ndet       = 0;
 ENUM_TIMEFRAMES g_tf        = PERIOD_H4;
+bool            g_events_drawn = false;      // econ-event lines drawn once (first tick)
 bool           g_active     = false;
 bool           g_started    = false;
 datetime       g_last_bar   = 0;
@@ -168,6 +175,9 @@ int OnInit()
 void OnTick()
   {
    if(!g_active) return;
+
+   //--- draw the high-impact economic-event lines once, on the first tick
+   if(InpShowEvents && !g_events_drawn) { DrawEconEvents(); g_events_drawn=true; }
 
    if(!g_started)
      {
@@ -586,6 +596,92 @@ void DrawImbalances(string p,SignalCandidate &c)
         }
       drawn++;
      }
+  }
+
+//--- split _Symbol into base/quote (6-letter fx pairs split 3/3 after a .dk
+//--- suffix; indices/oil/etc are treated as USD-quoted so USD events invert).
+void SymbolCcy(string &base,string &quote)
+  {
+   string s=_Symbol; int dot=StringFind(s,".");
+   if(dot>=0) s=StringSubstr(s,0,dot);
+   if(StringLen(s)==6){ base=StringSubstr(s,0,3); quote=StringSubstr(s,3,3); }
+   else { base=s; quote="USD"; }
+  }
+//+------------------------------------------------------------------+
+//| Display-only high-impact economic-event lines from              |
+//| Common\Files\econ_events.csv (datetime_utc,ccy,event,actual,     |
+//| forecast,ccy_bias). A dashed vertical line + rotated label at    |
+//| each high-impact event in the loaded range involving this        |
+//| symbol's base/quote ccy. Colour = bull/bear bias for THIS ticker |
+//| (ccy_bias flipped when the event ccy is the quote). Bias is the  |
+//| actual-vs-forecast surprise (a post-release review aid). Never    |
+//| affects trade logic.                                             |
+//+------------------------------------------------------------------+
+void DrawEconEvents()
+  {
+   int h=FileOpen("econ_events.csv",FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON,',');
+   if(h==INVALID_HANDLE)
+     { Print("econ_events.csv not in Common\\Files - no event lines (err ",GetLastError(),")"); return; }
+
+   string base,quote; SymbolCcy(base,quote);
+   int bars=Bars(_Symbol,g_tf);
+   if(bars<2){ FileClose(h); return; }
+   datetime tmin=iTime(_Symbol,g_tf,bars-1);
+   datetime tmax=iTime(_Symbol,g_tf,0)+PeriodSeconds(g_tf);
+
+   for(int k=0;k<6 && !FileIsEnding(h);k++) FileReadString(h);   // skip header
+
+   int n=0,drawn=0;
+   while(!FileIsEnding(h) && drawn<InpEvtMaxDraw)
+     {
+      string sdt=FileReadString(h);
+      if(sdt==""){ if(FileIsEnding(h)) break; else continue; }
+      string ccy=FileReadString(h);
+      string ev =FileReadString(h);
+      string act=FileReadString(h);
+      string fc =FileReadString(h);
+      int    cb =(int)StringToInteger(FileReadString(h));
+      n++;
+
+      datetime t=StringToTime(sdt);
+      if(t<=0 || t<tmin || t>tmax) continue;
+      int rel=0;
+      if(ccy==base) rel=1; else if(ccy==quote) rel=-1; else continue;
+      int tb=cb*rel;
+      color clr=(tb>0?InpEvtBull:(tb<0?InpEvtBear:InpEvtNeutral));
+      string tag=(tb>0?" [BULL]":(tb<0?" [BEAR]":""));
+
+      string vn=StringFormat("%sEVT_%d",InpObjPrefix,n);
+      if(ObjectCreate(0,vn,OBJ_VLINE,0,t,0))
+        {
+         ObjectSetInteger(0,vn,OBJPROP_COLOR,clr);
+         ObjectSetInteger(0,vn,OBJPROP_STYLE,STYLE_DASH);
+         ObjectSetInteger(0,vn,OBJPROP_WIDTH,1);
+         ObjectSetInteger(0,vn,OBJPROP_BACK,true);
+         ObjectSetInteger(0,vn,OBJPROP_SELECTABLE,false);
+        }
+      int sh=iBarShift(_Symbol,g_tf,t,false);
+      double py=(sh>=0? iClose(_Symbol,g_tf,sh) : 0.0);
+      if(py>0.0)
+        {
+         string tn=StringFormat("%sEVTL_%d",InpObjPrefix,n);
+         string txt=StringFormat(" %s %s%s",ccy,ev,tag);
+         if(act!="") txt+=StringFormat("  (a:%s f:%s)",act,fc);
+         if(ObjectCreate(0,tn,OBJ_TEXT,0,t,py))
+           {
+            ObjectSetString (0,tn,OBJPROP_TEXT,txt);
+            ObjectSetInteger(0,tn,OBJPROP_COLOR,clr);
+            ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,7);
+            ObjectSetDouble (0,tn,OBJPROP_ANGLE,90.0);
+            ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_LEFT);
+            ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false);
+           }
+        }
+      drawn++;
+     }
+   FileClose(h);
+   PrintFormat("econ events: drew %d high-impact lines for %s (base=%s quote=%s), scanned %d rows",
+               drawn,_Symbol,base,quote,n);
   }
 
 //+------------------------------------------------------------------+
