@@ -77,6 +77,15 @@ input color  InpEvtBull     = clrLimeGreen;   // event that came out BULLISH for
 input color  InpEvtBear     = clrOrangeRed;   // event that came out BEARISH for this ticker
 input color  InpEvtNeutral  = clrGray;        // as-expected / no actual (neutral)
 input int    InpEvtMaxDraw  = 600;            // safety cap on event lines drawn
+//--- readability / decluttering
+input int    InpMaxVisibleSignals = 1;        // recent setups whose overlays stay on chart (older auto-clear)
+input bool   InpEventTopTierOnly  = true;     // events: only top-tier movers (rate/CPI/NFP/GDP/PMI)
+input bool   InpShowSwings  = true;           // draw swing high/low markers
+input bool   InpShowAux     = true;           // draw aux level lines + labels
+input bool   InpShowFib     = true;           // draw the native Fib grid
+input bool   InpFibRay      = true;           // extend fib levels right across the chart
+input int    InpFontSize    = 10;             // overlay label font size (bigger = more readable)
+input int    InpLineWidth   = 2;              // overlay line width (thicker = more readable)
 
 //--- globals
 CTrade         g_trade;
@@ -84,6 +93,7 @@ ISignalDetector *g_detectors[3];           // priority order: [0]=SMC,[1]=Fib,[2
 int            g_ndet       = 0;
 ENUM_TIMEFRAMES g_tf        = PERIOD_H4;
 bool            g_events_drawn = false;      // econ-event lines drawn once (first tick)
+int             g_sig_ids[];                 // ids of setups with overlays on chart (for pruning)
 bool           g_active     = false;
 bool           g_started    = false;
 datetime       g_last_bar   = 0;
@@ -240,6 +250,7 @@ void HandleSignal(SignalCandidate &cand)
    double lots=SizeByRisk(cand.entry,cand.sl);
 
    DrawOverlays(id,cand);
+   PruneOverlays(id);
    ChartRedraw(0);
 
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
@@ -429,13 +440,13 @@ void DrawOverlays(int id,SignalCandidate &c)
    DrawHLine(p+"sl",   c.sl,   C'204,0,0');
    DrawHLine(p+"tp",   c.tp,   C'0,0,204');
 
-   //--- aux levels (dashed grey) + labels
-   for(int k=0;k<c.aux_count && k<8;k++)
+   //--- aux levels (dashed, brightened for contrast) + labels
+   for(int k=0;InpShowAux && k<c.aux_count && k<8;k++)
      {
       string an=StringFormat("%saux%d",p,k);
       if(ObjectCreate(0,an,OBJ_HLINE,0,0,c.aux_price[k]))
         {
-         ObjectSetInteger(0,an,OBJPROP_COLOR,clrDimGray);
+         ObjectSetInteger(0,an,OBJPROP_COLOR,clrSilver);
          ObjectSetInteger(0,an,OBJPROP_STYLE,STYLE_DOT);
          ObjectSetInteger(0,an,OBJPROP_BACK,true);
         }
@@ -443,8 +454,8 @@ void DrawOverlays(int id,SignalCandidate &c)
       if(ObjectCreate(0,al,OBJ_TEXT,0,c.zone_to,c.aux_price[k]))
         {
          ObjectSetString (0,al,OBJPROP_TEXT,c.aux_label[k]);
-         ObjectSetInteger(0,al,OBJPROP_COLOR,clrDimGray);
-         ObjectSetInteger(0,al,OBJPROP_FONTSIZE,7);
+         ObjectSetInteger(0,al,OBJPROP_COLOR,clrSilver);
+         ObjectSetInteger(0,al,OBJPROP_FONTSIZE,InpFontSize);
         }
      }
    //--- second zone (FVG overlap / band)
@@ -465,17 +476,17 @@ void DrawOverlays(int id,SignalCandidate &c)
       if(ObjectCreate(0,lg,OBJ_TREND,0,c.leg_t0,c.leg_p0,c.leg_t1,c.leg_p1))
         {
          ObjectSetInteger(0,lg,OBJPROP_COLOR,clrGoldenrod);
-         ObjectSetInteger(0,lg,OBJPROP_WIDTH,2);
+         ObjectSetInteger(0,lg,OBJPROP_WIDTH,InpLineWidth);
          ObjectSetInteger(0,lg,OBJPROP_RAY_RIGHT,false);
          ObjectSetInteger(0,lg,OBJPROP_SELECTABLE,false);
         }
      }
    //--- native Fibonacci retracement grid on the Deep-Fib impulse leg. Only for
    //--- the Fib strategy (the only detector that sets a retracement leg).
-   if(c.strategy=="DeepFib" && c.leg_t0>0 && c.leg_t1>0)
+   if(InpShowFib && c.strategy=="DeepFib" && c.leg_t0>0 && c.leg_t1>0)
       DrawFibo(p,c);
    //--- generic confirmed-swing markers, labelled "swing high" / "swing low"
-   DrawSwings(p,c);
+   if(InpShowSwings) DrawSwings(p,c);
    //--- FVG / price-gap / tick-volume imbalance highlights (display-only context)
    if(InpShowImbal) DrawImbalances(p,c);
    //--- corner label
@@ -488,8 +499,25 @@ void DrawOverlays(int id,SignalCandidate &c)
       if(c.comment!="") txt+="  ("+c.comment+")";
       ObjectSetString (0,tx,OBJPROP_TEXT,txt);
       ObjectSetInteger(0,tx,OBJPROP_COLOR,clrWhite);
-      ObjectSetInteger(0,tx,OBJPROP_FONTSIZE,9);
+      ObjectSetInteger(0,tx,OBJPROP_FONTSIZE,InpFontSize+1);
       ObjectSetInteger(0,tx,OBJPROP_ANCHOR,(c.direction>0?ANCHOR_LEFT_LOWER:ANCHOR_LEFT_UPPER));
+     }
+  }
+
+//--- keep only the newest InpMaxVisibleSignals setups' overlays on the chart;
+//--- delete older setups by their per-signal object prefix. Econ-event objects
+//--- use a different prefix (HFT_EVT*/HFT_EVTL*) and are unaffected.
+void PruneOverlays(int id)
+  {
+   int n=ArraySize(g_sig_ids);
+   ArrayResize(g_sig_ids,n+1); g_sig_ids[n]=id;
+   int keep=(InpMaxVisibleSignals<1?1:InpMaxVisibleSignals);
+   while(ArraySize(g_sig_ids)>keep)
+     {
+      ObjectsDeleteAll(0,StringFormat("%s%d_",InpObjPrefix,g_sig_ids[0]));
+      int m=ArraySize(g_sig_ids);
+      for(int i=1;i<m;i++) g_sig_ids[i-1]=g_sig_ids[i];
+      ArrayResize(g_sig_ids,m-1);
      }
   }
 
@@ -498,7 +526,7 @@ void DrawHLine(string name,double price,color clr)
    if(ObjectCreate(0,name,OBJ_HLINE,0,0,price))
      {
       ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
-      ObjectSetInteger(0,name,OBJPROP_WIDTH,1);
+      ObjectSetInteger(0,name,OBJPROP_WIDTH,InpLineWidth);
       ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_SOLID);
       ObjectSetInteger(0,name,OBJPROP_BACK,false);
      }
@@ -607,6 +635,21 @@ void SymbolCcy(string &base,string &quote)
    if(StringLen(s)==6){ base=StringSubstr(s,0,3); quote=StringSubstr(s,3,3); }
    else { base=s; quote="USD"; }
   }
+//--- top-tier movers only: rate decisions, CPI, NFP, GDP, PMI, unemployment -
+//--- but drop member-country sub-releases (German/French/Spanish/Italian CPI,
+//--- PMI, GDP...) so only the headline US / Eurozone / UK prints remain.
+bool IsTopTierEvent(string ev)
+  {
+   string e=ev; StringToLower(e);
+   string skip[]={"german","french","spanish","italian","chinese","japanese",
+                  "swiss","canadian","australian","new zealand"};
+   for(int i=0;i<ArraySize(skip);i++) if(StringFind(e,skip[i])>=0) return false;
+   string keys[]={"federal funds","fomc","rate decision","official bank rate",
+                  "main refinancing","cash rate","cpi","non-farm","nonfarm",
+                  "gdp","pmi","unemployment rate","ecb press"};
+   for(int i=0;i<ArraySize(keys);i++) if(StringFind(e,keys[i])>=0) return true;
+   return false;
+  }
 //+------------------------------------------------------------------+
 //| Display-only high-impact economic-event lines from              |
 //| Common\Files\econ_events.csv (datetime_utc,ccy,event,actual,     |
@@ -647,6 +690,7 @@ void DrawEconEvents()
       if(t<=0 || t<tmin || t>tmax) continue;
       int rel=0;
       if(ccy==base) rel=1; else if(ccy==quote) rel=-1; else continue;
+      if(InpEventTopTierOnly && !IsTopTierEvent(ev)) continue;
       int tb=cb*rel;
       color clr=(tb>0?InpEvtBull:(tb<0?InpEvtBear:InpEvtNeutral));
       string tag=(tb>0?" [BULL]":(tb<0?" [BEAR]":""));
@@ -671,7 +715,7 @@ void DrawEconEvents()
            {
             ObjectSetString (0,tn,OBJPROP_TEXT,txt);
             ObjectSetInteger(0,tn,OBJPROP_COLOR,clr);
-            ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,7);
+            ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
             ObjectSetDouble (0,tn,OBJPROP_ANGLE,90.0);
             ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_LEFT);
             ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false);
@@ -709,11 +753,11 @@ void DrawFibo(string p,SignalCandidate &c)
    if(!ObjectCreate(0,fb,OBJ_FIBO,0,c.leg_t0,c.leg_p0,c.leg_t1,c.leg_p1))
      { Print("FIBCHK: OBJ_FIBO create failed err=",GetLastError()); return; }
    ObjectSetInteger(0,fb,OBJPROP_COLOR,clrGoldenrod);
-   ObjectSetInteger(0,fb,OBJPROP_WIDTH,1);
+   ObjectSetInteger(0,fb,OBJPROP_WIDTH,InpLineWidth);
    ObjectSetInteger(0,fb,OBJPROP_BACK,true);
    ObjectSetInteger(0,fb,OBJPROP_SELECTABLE,false);
    ObjectSetInteger(0,fb,OBJPROP_SELECTED,false);
-   ObjectSetInteger(0,fb,OBJPROP_RAY_RIGHT,true);
+   ObjectSetInteger(0,fb,OBJPROP_RAY_RIGHT,InpFibRay);
    ObjectSetString (0,fb,OBJPROP_TEXT,"Deep-Fib impulse grid");
    ObjectSetInteger(0,fb,OBJPROP_LEVELS,7);
 
@@ -772,7 +816,7 @@ void DrawSwings(string p,SignalCandidate &c)
       if(ObjectCreate(0,an,OBJ_ARROW_DOWN,0,c.swing_hi_t[i],c.swing_hi_p[i]))
         {
          ObjectSetInteger(0,an,OBJPROP_COLOR,clrOrangeRed);
-         ObjectSetInteger(0,an,OBJPROP_WIDTH,1);
+         ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
          ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_BOTTOM);   // arrow above the high
          ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false);
          ObjectSetInteger(0,an,OBJPROP_SELECTED,false);
@@ -782,7 +826,7 @@ void DrawSwings(string p,SignalCandidate &c)
         {
          ObjectSetString (0,tn,OBJPROP_TEXT,"swing high");
          ObjectSetInteger(0,tn,OBJPROP_COLOR,clrOrangeRed);
-         ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,7);
+         ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
          ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_LOWER);    // text above the high
          ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false);
          ObjectSetInteger(0,tn,OBJPROP_SELECTED,false);
@@ -794,7 +838,7 @@ void DrawSwings(string p,SignalCandidate &c)
       if(ObjectCreate(0,an,OBJ_ARROW_UP,0,c.swing_lo_t[i],c.swing_lo_p[i]))
         {
          ObjectSetInteger(0,an,OBJPROP_COLOR,clrDodgerBlue);
-         ObjectSetInteger(0,an,OBJPROP_WIDTH,1);
+         ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
          ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_TOP);      // arrow below the low
          ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false);
          ObjectSetInteger(0,an,OBJPROP_SELECTED,false);
@@ -804,7 +848,7 @@ void DrawSwings(string p,SignalCandidate &c)
         {
          ObjectSetString (0,tn,OBJPROP_TEXT,"swing low");
          ObjectSetInteger(0,tn,OBJPROP_COLOR,clrDodgerBlue);
-         ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,7);
+         ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
          ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_UPPER);    // text below the low
          ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false);
          ObjectSetInteger(0,tn,OBJPROP_SELECTED,false);
