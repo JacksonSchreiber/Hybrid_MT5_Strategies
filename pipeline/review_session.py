@@ -219,6 +219,54 @@ def sec_edits(u, bl, out):
     out.append("")
 
 
+def load_actions(path):
+    """Load the sibling <SYM>_<from>_<to>.actions.csv (manual mid-trade
+    interventions). Missing file => no manual-management section."""
+    try:
+        with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+            rows = list(csv.DictReader(fh))
+    except FileNotFoundError:
+        return None
+    for r in rows:
+        r["_t"]      = parse_dt(r.get("bar_time"))
+        r["_open_r"] = fnum(r.get("open_r"))
+        r["_bank_r"] = fnum(r.get("banked_r"))
+        r["action"]  = (r.get("action") or "").strip()
+    return rows
+
+
+ACTION_LABELS = {"CLOSE": "full close", "CLOSE50": "close 50%", "SL_BE": "SL→break-even"}
+
+
+def sec_manual(actions, out):
+    out.append("## Manual mid-trade interventions\n")
+    if actions is None:
+        out.append("_No actions log supplied (pass --actions <…>.actions.csv)._\n")
+        return
+    if not actions:
+        out.append("_No manual interventions this session (all trades ran to their "
+                   "systematic exit)._\n")
+        return
+    counts = {}
+    for a in actions:
+        counts[a["action"]] = counts.get(a["action"], 0) + 1
+    tally = ", ".join(f"{ACTION_LABELS.get(k,k)}: {v}" for k, v in sorted(counts.items()))
+    out.append(f"- **{len(actions)}** manual action(s) — {tally}.")
+    out.append("- Each is the operator overriding the systematic plan; the coach grades "
+               "whether the intervention beat letting it run (open R at the moment of action "
+               "is the counterfactual anchor).\n")
+    out.append("| bar_time | signal | action | price | lots before→after | banked R | open R @ action |")
+    out.append("|---|---:|---|---:|---|---:|---:|")
+    for a in sorted(actions, key=lambda x: (x["_t"] or datetime.min)):
+        lb, la = a.get("lots_before", "?"), a.get("lots_after", "?")
+        oR = f"{a['_open_r']:+.2f}" if a["_open_r"] is not None else "?"
+        bR = f"{a['_bank_r']:+.2f}" if a["_bank_r"] is not None else "?"
+        out.append(f"| {a.get('bar_time','?')} | {a.get('signal_id','?')} | "
+                   f"{ACTION_LABELS.get(a['action'], a['action'])} | {a.get('price','?')} | "
+                   f"{lb}→{la} | {bR} | {oR} |")
+    out.append("")
+
+
 def sec_latency(u, out):
     out.append("## Decision latency\n")
     ms = [r["_ms"] for r in u if r["_ms"] is not None and r["_ms"] > 0]
@@ -288,6 +336,7 @@ def main():
     ap = argparse.ArgumentParser(description="Grade a discretionary tester session vs the take-everything baseline.")
     ap.add_argument("--user", required=True, help="interactive session journal CSV")
     ap.add_argument("--baseline", required=True, help="AA_ALL headless journal CSV (same symbol+window)")
+    ap.add_argument("--actions", help="manual-actions log (…_.actions.csv sibling of --user)")
     ap.add_argument("--out", help="write markdown report here (default: stdout)")
     a = ap.parse_args()
 
@@ -304,6 +353,7 @@ def main():
     sec_discretion(u, b, out)
     sec_skips(u, bl, out)
     sec_edits(u, bl, out)
+    sec_manual(load_actions(a.actions) if a.actions else None, out)
     sec_latency(u, out)
     sec_ftmo(u, out)
     report = "\n".join(out) + "\n"

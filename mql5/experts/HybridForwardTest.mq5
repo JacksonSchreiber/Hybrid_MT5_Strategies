@@ -41,6 +41,14 @@ int  TD_SkipReason(void);   // 1-6 skip-reason code from the last skip (0 none)
 void TD_SetOrderType(string s); // set the "Order" row (MARKET / BUY LIMIT @ x)
 void TD_SetEvents(string abs_dates,string rel_dates); // upcoming-events list (both forms)
 int  TD_Coach(void);        // 1 = coach mode on (scrub chart label to match)
+//--- mid-trade MANAGEMENT PANEL (separate, non-modal window on its OWN thread,
+//--- so it stays live + clickable while the visual tester is PAUSED - which is
+//--- exactly when the operator decides at bar close). The EA only pushes state
+//--- and drains a latched button action; all trading stays on the MQL thread.
+int  TDM_Open(string title);                       // spawn panel; 1=up
+void TDM_Update(string state_text,double lots,int be_enabled); // push live state
+int  TDM_Poll(void);        // 0 none, 1 close, 2 close50, 3 SL->BE (one-shot)
+void TDM_Close(void);       // tear down + join the panel thread
 #import
 #import "user32.dll"
 int MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType);
@@ -114,6 +122,9 @@ input int    InpShotH        = 900;           // screenshot height (px)
 input int    InpPendingExpiryBars = 3;        // unfilled pending order auto-cancels after N H4 bars
 input bool   InpForcePendingTest  = false;    // TEST-ONLY: under AA_ALL, place a forced STOP pending (verify fill-binding headlessly)
 input int    InpForcePendingPts   = 0;        // TEST-ONLY: stop offset in points (0 = auto: 3x stops-level)
+//--- mid-trade management panel (interactive/visual only)
+input bool   InpManagePanel  = true;          // show the mid-trade management panel while a position is open
+input double InpBEPadPips     = 1.0;           // SL->break-even padding (pips in the profit direction; covers spread)
 
 //--- globals
 CTrade         g_trade;
@@ -178,6 +189,29 @@ struct JournalRow
   };
 JournalRow g_rows[];
 
+//--- mid-trade management panel state
+bool   g_can_panel = false;   // interactive + visual + DLLs + InpManagePanel
+bool   g_panel_open= false;   // the panel window is currently up
+
+//--- manual mid-trade interventions (Close / Close50 / SL->BE), logged to a
+//--- sibling .actions.csv so the coach can grade them (proposed plan vs the
+//--- operator's actual intervention). One row per button press.
+struct ManualAction
+  {
+   int      id;            // owning signal id
+   long     posid;         // position id acted on
+   datetime bar_time;      // H4 bar time of the action
+   string   action;        // CLOSE / CLOSE50 / SL_BE
+   double   price;         // market price at the action (exit-side)
+   double   lots_before;   // position volume before
+   double   lots_after;    // position volume after
+   double   sl_after;      // SL after the action (unchanged unless SL_BE)
+   double   banked_r;      // realised R so far (row.r_multiple)
+   double   open_r;        // unrealised R on the remaining volume at action time
+  };
+ManualAction g_actions[];
+string       g_actions_part = "";
+
 //+------------------------------------------------------------------+
 string DirStr(int d) { return (d>0 ? "BUY" : "SELL"); }
 string StampCompact(datetime t)
@@ -227,8 +261,13 @@ int OnInit()
          " risk=",DoubleToString(InpRiskPct*100.0,1),"%");
    //--- build tag: if the popup misbehaves, confirm THIS line appears (fresh EA)
    //--- and that MT5 was restarted so the matching TradeDialog.dll is loaded.
-   Print("HFT build 2026-08-06b: TP1/TP2 scale-out edit + persistent swings + coach-label"
-         " (needs matching TradeDialog.dll - restart MT5 after a rebuild).");
+   //--- the mid-trade panel needs the same footing as the interactive dialog
+   //--- (real window + human): interactive mode, visual tester, DLLs allowed.
+   //--- Headless AA_ALL/AA_SKIP runs never create a window.
+   g_can_panel = (g_active && !auto_mode && in_visual && dll_ok && InpManagePanel);
+
+   Print("HFT build 2026-08-07a: mid-trade management panel (Close / Close50 / SL->BE) +"
+         " day-of-week signal time (needs matching TradeDialog.dll - restart MT5 after a rebuild).");
    return(INIT_SUCCEEDED);
   }
 
@@ -246,6 +285,7 @@ void OnTick()
       g_started=true;
       g_start_time=TimeCurrent(); g_last_time=g_start_time;
       g_journal_part=StringFormat("journal\\%s_%s.part.csv",_Symbol,StampCompact(g_start_time));
+      g_actions_part=StringFormat("journal\\%s_%s.actions.part.csv",_Symbol,StampCompact(g_start_time));
       WriteJournal(g_journal_part);
       if(InpShowSwings) DrawSwingMarkers();   // first draw (new-bar gate skips tick 1)
      }
@@ -255,6 +295,12 @@ void OnTick()
    ManageOpenPositions();
    //--- age out unfilled pending orders (edited-entry setups) every tick
    ExpireStalePendings();
+
+   //--- mid-trade management panel: poll/execute/refresh EVERY tick and tear it
+   //--- down the moment we go flat. MUST run above the new-bar gate: a position
+   //--- that closes mid-bar frees HandleSignal on the same tick, so the panel
+   //--- has to be gone before a fresh signal can open the approval dialog.
+   if(g_can_panel) ManagePanelTick();
 
    //--- new-bar gate: detection only when a fresh H4 bar has closed
    datetime bar0=iTime(_Symbol,g_tf,0);
@@ -622,6 +668,222 @@ void ManageOpenPositions()
          g_trade.PositionModify((ulong)g_rows[i].posid,be,g_rows[i].tp2);
         }
       g_rows[i].tp1_done=true;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| MID-TRADE MANAGEMENT PANEL                                        |
+//+------------------------------------------------------------------+
+//--- index of the row holding the currently OPEN position (posid bound, not
+//--- closed, still selectable), or -1. Both the state refresh and the action
+//--- paths need the ROW, which HasOpenPosition() doesn't give.
+int ActiveRowIdx()
+  {
+   for(int i=0;i<ArraySize(g_rows);i++)
+     {
+      if(g_rows[i].posid<=0 || g_rows[i].closed) continue;
+      if(g_rows[i].symbol!=_Symbol) continue;
+      if(PositionSelectByTicket((ulong)g_rows[i].posid)) return i;
+     }
+   return -1;
+  }
+
+//--- pip size (a "pip" = 10 points on 3/5-digit FX quotes, else 1 point)
+double PipSize() { return ((_Digits==3 || _Digits==5) ? 10.0*_Point : _Point); }
+
+//--- BE stop price for a row's open position: the ACTUAL fill (row.entry) +
+//--- pad in the PROFIT direction (pad covers the spread so a hit is ~flat).
+double BEPrice(int idx)
+  {
+   double pad=InpBEPadPips*PipSize();
+   return (g_rows[idx].direction>0 ? g_rows[idx].entry+pad : g_rows[idx].entry-pad);
+  }
+
+//--- is SL->BE currently placeable? PositionModify rejects an SL inside the
+//--- broker's stops-level band, so the button is gated on it (otherwise the
+//--- click silently does nothing).
+bool BEPlaceable(int idx)
+  {
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return false;
+   double be=BEPrice(idx);
+   double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   if(g_rows[idx].direction>0) return (bid-be)>=stops;   // BUY: SL must sit below bid
+   return (be-ask)>=stops;                               // SELL: SL must sit above ask
+  }
+
+//--- unrealised R on the CURRENT (remaining) volume, volume-weighted exactly
+//--- like OnTradeTransaction accumulates banked R (wfrac = vol / initial-lots),
+//--- so Open R + Banked R = close-now total and neither double-counts.
+double OpenR(int idx)
+  {
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return 0.0;
+   if(g_rows[idx].risk_px<=0.0 || g_rows[idx].lots<=0.0) return 0.0;
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double exitpx=(g_rows[idx].direction>0? bid : ask);   // exit-side price
+   double moved =(g_rows[idx].direction>0? exitpx-g_rows[idx].entry : g_rows[idx].entry-exitpx);
+   return (vol/g_rows[idx].lots)*(moved/g_rows[idx].risk_px);
+  }
+
+//--- persist the manual-actions log (sibling to the journal CSV).
+void WriteActions(string path)
+  {
+   if(path=="") return;
+   int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE){ Print("WARNING: cannot open actions log '",path,"' err=",GetLastError()); return; }
+   FileWriteString(h,"signal_id,posid,bar_time,action,price,lots_before,lots_after,sl_after,banked_r,open_r\n");
+   for(int i=0;i<ArraySize(g_actions);i++)
+     {
+      ManualAction a=g_actions[i];
+      FileWriteString(h,StringFormat("%d,%d,%s,%s,%s,%s,%s,%s,%.2f,%.2f\n",
+         a.id,a.posid,TimeToString(a.bar_time,TIME_DATE|TIME_SECONDS),a.action,
+         DoubleToString(a.price,_Digits),DoubleToString(a.lots_before,2),
+         DoubleToString(a.lots_after,2),DoubleToString(a.sl_after,_Digits),
+         a.banked_r,a.open_r));
+     }
+   FileFlush(h); FileClose(h);
+  }
+
+//--- append one manual-intervention row + rewrite the actions CSV.
+void LogManualAction(int idx,string what,double price,double lots_before,
+                     double lots_after,double sl_after)
+  {
+   int n=ArraySize(g_actions); ArrayResize(g_actions,n+1);
+   g_actions[n].id=g_rows[idx].id; g_actions[n].posid=g_rows[idx].posid;
+   g_actions[n].bar_time=iTime(_Symbol,g_tf,0); g_actions[n].action=what;
+   g_actions[n].price=price; g_actions[n].lots_before=lots_before;
+   g_actions[n].lots_after=lots_after; g_actions[n].sl_after=sl_after;
+   g_actions[n].banked_r=g_rows[idx].r_multiple; g_actions[n].open_r=OpenR(idx);
+   WriteActions(g_actions_part);
+  }
+
+//--- manual FULL close (news-eve flatten / kill-condition). R accounting is
+//--- handled by OnTradeTransaction's DEAL_ENTRY_OUT path (grades it correctly).
+void ManualClose(int idx)
+  {
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return;
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   double sl =PositionGetDouble(POSITION_SL);
+   double px =(g_rows[idx].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID)
+                                      : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   LogManualAction(idx,"CLOSE",px,vol,0.0,sl);
+   if(g_trade.PositionClose((ulong)g_rows[idx].posid))
+      Print("Signal #",g_rows[idx].id," MANUAL CLOSE ",DoubleToString(vol,2)," lots @ ",DoubleToString(px,_Digits));
+   else
+      Print("Signal #",g_rows[idx].id," manual close FAILED: ",g_trade.ResultRetcode());
+  }
+
+//--- manual CLOSE 50% of CURRENT volume (scale-out fallback). Disables the auto
+//--- TP1 scale-out: ManageOpenPositions sizes its partial off the INITIAL lots,
+//--- so leaving it armed would close the whole runner. SL is left alone - that's
+//--- the separate BE button's job (one-edit doctrine: BE is the only stop move).
+void ManualClose50(int idx)
+  {
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return;
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0)step=0.01;
+   double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0)vmin=0.01;
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   double sl =PositionGetDouble(POSITION_SL);
+   double pv=MathFloor((vol*0.5)/step)*step;
+   if(pv<vmin || (vol-pv)<vmin)
+     { Print("Signal #",g_rows[idx].id," manual 50%: volume too small to split - ignored."); return; }
+   double px=(g_rows[idx].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID)
+                                     : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   LogManualAction(idx,"CLOSE50",px,vol,vol-pv,sl);
+   g_rows[idx].tp1_done=true;   // manual scale-out replaces the auto one (no double-close)
+   if(g_trade.PositionClosePartial((ulong)g_rows[idx].posid,pv))
+      Print("Signal #",g_rows[idx].id," MANUAL CLOSE 50% -> banked ",DoubleToString(pv,2),
+            " lots (auto scale-out disabled)");
+   else
+      Print("Signal #",g_rows[idx].id," manual 50% FAILED: ",g_trade.ResultRetcode());
+  }
+
+//--- manual SL->break-even (+ pad). NEVER writes g_rows[].sl - that is the risk
+//--- basis for every R number; only the position's live stop moves. TP is read
+//--- back + passed unchanged (no mid-trade TP moves). tp1_done is left alone so
+//--- the auto scale-out (which also moves SL->BE at TP1) still runs.
+void ManualBE(int idx)
+  {
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return;
+   double be=NormPrice(BEPrice(idx));
+   double tp=PositionGetDouble(POSITION_TP);
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   if(g_trade.PositionModify((ulong)g_rows[idx].posid,be,tp))
+     {
+      LogManualAction(idx,"SL_BE",be,vol,vol,be);
+      Print("Signal #",g_rows[idx].id," MANUAL SL->BE @ ",DoubleToString(be,_Digits));
+     }
+   else
+      Print("Signal #",g_rows[idx].id," SL->BE FAILED: ",g_trade.ResultRetcode()," (too close to market?)");
+  }
+
+//--- the panel's live state block (multiline; \r\n for the Win32 EDIT).
+string PanelStateText(int idx,bool be_ok)
+  {
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return "position closed";
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   double psl=PositionGetDouble(POSITION_SL);
+   double ptp=PositionGetDouble(POSITION_TP);
+   double oR =OpenR(idx);
+   double bR =g_rows[idx].r_multiple;
+   string s="";
+   s+=StringFormat("%s  %s   #%d\r\n",g_rows[idx].strategy,DirStr(g_rows[idx].direction),g_rows[idx].id);
+   s+=StringFormat("Lots: %s  (init %s)\r\n",DoubleToString(vol,2),DoubleToString(g_rows[idx].lots,2));
+   s+=StringFormat("Entry: %s\r\n",DoubleToString(g_rows[idx].entry,_Digits));
+   s+=StringFormat("SL: %s    TP: %s\r\n",DoubleToString(psl,_Digits),DoubleToString(ptp,_Digits));
+   s+=StringFormat("Open R: %+.2f    Banked R: %+.2f\r\n",oR,bR);
+   s+=StringFormat("Close-now total: %+.2f R\r\n",oR+bR);
+   s+=(be_ok? "Ready." : "SL->BE unavailable (too close to market)");
+   return s;
+  }
+
+//+------------------------------------------------------------------+
+//| Per-tick panel driver: open when a position appears, drain+execute |
+//| a confirmed button action, refresh state, tear down when flat.     |
+//+------------------------------------------------------------------+
+void ManagePanelTick()
+  {
+   int idx=ActiveRowIdx();
+   if(idx<0)
+     {
+      if(g_panel_open){ TDM_Close(); g_panel_open=false; }
+      return;
+     }
+   static bool warned=false;
+   if(!g_panel_open)
+     {
+      if(TDM_Open("Manage position")==1) { g_panel_open=true; warned=false; }
+      else                               // window not up yet; retry next tick
+        {
+         if(!warned){ Print("Management panel not up yet (retrying) - if this persists the DLL window failed to create."); warned=true; }
+         return;
+        }
+     }
+
+   //--- drain a CONFIRMED button press and execute it on THIS (MQL) thread
+   int act=TDM_Poll();
+   if(act==1)      ManualClose(idx);
+   else if(act==2) ManualClose50(idx);
+   else if(act==3) ManualBE(idx);
+
+   //--- a full close / final exit may have flattened us this tick
+   idx=ActiveRowIdx();
+   if(idx<0){ TDM_Close(); g_panel_open=false; return; }
+
+   //--- refresh at most once per tester-clock SECOND (or immediately after an
+   //--- action): pushing every tick under model-1 fast-forward floods the panel
+   //--- thread with repaints and makes it sluggish exactly when a click is due.
+   static datetime last_push=0;
+   datetime now=TimeCurrent();
+   if(now!=last_push || act!=0)
+     {
+      bool be_ok=BEPlaceable(idx);
+      double vol=(PositionSelectByTicket((ulong)g_rows[idx].posid)? PositionGetDouble(POSITION_VOLUME):0.0);
+      TDM_Update(PanelStateText(idx,be_ok),vol,be_ok?1:0);
+      last_push=now;
      }
   }
 
@@ -1229,6 +1491,29 @@ bool IsTopTierEvent(string ev)
    for(int i=0;i<ArraySize(keys);i++) if(StringFind(e,keys[i])>=0) return true;
    return false;
   }
+
+//--- general significance tier for the popup events list: 2=HIGH, 1=MED, 0=LOW.
+//--- econ_events.csv has no native impact field, so it is keyword-derived from
+//--- the event name. HIGH = rate decisions + the biggest surprise-movers
+//--- (NFP/CPI/GDP + central-bank statements/pressers); MED = other notable
+//--- second-tier prints (PMI, unemployment, retail sales, PPI...); LOW = the
+//--- rest. NOTE: the popup list is curated to top-tier events (IsTopTierEvent),
+//--- so in practice ratings read HIGH or MED - a LOW-impact print isn't listed.
+int EventSignificance(string ev)
+  {
+   string e=ev; StringToLower(e);
+   string hi[]={"federal funds","fomc","rate decision","official bank rate",
+                "main refinancing","cash rate","interest rate","rate statement",
+                "bank rate","monetary policy","press conference","ecb press",
+                "non-farm","nonfarm","cpi","gdp"};
+   for(int i=0;i<ArraySize(hi);i++) if(StringFind(e,hi[i])>=0) return 2;
+   string md[]={"pmi","unemployment","retail sales","ppi","employment change",
+                "jobless","confidence","durable goods","ism","trade balance",
+                "core"};
+   for(int i=0;i<ArraySize(md);i++) if(StringFind(e,md[i])>=0) return 1;
+   return 0;
+  }
+string SigTag(int s){ return (s>=2 ? "[HIGH]" : (s==1 ? "[MED]" : "[LOW]")); }
 //+------------------------------------------------------------------+
 //| Display-only high-impact economic-event lines from              |
 //| Common\Files\econ_events.csv (datetime_utc,ccy,event,actual,     |
@@ -1356,7 +1641,7 @@ void BuildEventBlocks(datetime sig,string &absb,string &relb)
       if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote) continue;
       long ds=(long)(t-sig);
       int dd=(int)(ds/86400), hh=(int)((ds%86400)/3600);
-      string nm=StringFormat("%s %s",g_ev_ccy[i],g_ev_name[i]);
+      string nm=StringFormat("%s %s  %s",g_ev_ccy[i],g_ev_name[i],SigTag(EventSignificance(g_ev_name[i])));
       absb+=StringFormat("%s  %s\r\n",FmtAbsDate(t),nm);
       relb+=StringFormat("in %dd %dh  %s\r\n",dd,hh,nm);
       if(++cnt>=InpEvtListMax){ absb+="(+ more)\r\n"; relb+="(+ more)\r\n"; break; }
@@ -1673,6 +1958,9 @@ double OnTester()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   //--- tear the management panel down first (joins its thread) so nothing
+   //--- outlives the test run.
+   if(g_panel_open){ TDM_Close(); g_panel_open=false; }
    if(g_active && g_started)
      {
       string finalp=StringFormat("journal\\%s_%s_%s.csv",
@@ -1680,6 +1968,15 @@ void OnDeinit(const int reason)
       WriteJournal(finalp);
       if(g_journal_part!="" && g_journal_part!=finalp) FileDelete(g_journal_part,FILE_COMMON);
       Print("Journal finalised: <Terminal>\\Common\\Files\\",finalp," (",ArraySize(g_rows)," signals)");
+      //--- finalise the manual-actions log alongside the journal (if any fired)
+      if(ArraySize(g_actions)>0)
+        {
+         string af=StringFormat("journal\\%s_%s_%s.actions.csv",
+                                _Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+         WriteActions(af);
+         if(g_actions_part!="" && g_actions_part!=af) FileDelete(g_actions_part,FILE_COMMON);
+         Print("Manual-actions log finalised: <Terminal>\\Common\\Files\\",af," (",ArraySize(g_actions)," actions)");
+        }
       if(InpCleanupOnDeinit) ObjectsDeleteAll(0,InpObjPrefix);
      }
    for(int i=0;i<g_ndet;i++)

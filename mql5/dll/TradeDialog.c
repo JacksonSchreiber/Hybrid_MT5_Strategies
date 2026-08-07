@@ -87,6 +87,14 @@
 #define ID_EVTOGGLE 215   /* BUTTON: collapse/expand the events list */
 #define ID_REASON1  300   /* 6 reason buttons: ID_REASON1 + (code-1), code 1..6 */
 
+/* ---- management-panel control ids (separate window, separate thread) ------ */
+#define ID_MCLOSE   400   /* BUTTON: close full position (arm -> confirm)      */
+#define ID_MCLOSE50 401   /* BUTTON: close 50% (arm -> confirm)                */
+#define ID_MBE      402   /* BUTTON: SL -> break-even (instant; reversible)    */
+#define ID_MSTATE   403   /* read-only multiline EDIT: live position state     */
+#define PM_UPDATE   (WM_APP + 1)   /* EA pushed new state text (cross-thread)  */
+#define PM_KILL     (WM_APP + 2)   /* EA asked to tear the panel down          */
+
 /* ---- layout metrics (file-scope so relayout() shares them with TD_Open) --- */
 #define L_PADX     22
 #define L_PADY     18
@@ -150,6 +158,42 @@ typedef struct {
 } DlgState;
 
 static DlgState g;              /* single active dialog */
+
+/* ---- management panel: a SEPARATE, non-modal window on its OWN thread ------
+ * The signal dialog above is pumped by the EA's blocking OnTick loop, so it
+ * dies the instant the tester pauses. The management panel must do the OPPOSITE:
+ * stay live + clickable WHILE the visual tester is paused (that is exactly when
+ * the operator decides at bar close). A tester pause stops OnTick, so nothing on
+ * the MQL side could pump it - therefore the panel runs its own GetMessage loop
+ * on a dedicated thread. The EA never touches these HWNDs; it only:
+ *   - TDM_Open  : spawn the thread + window, return once it exists
+ *   - TDM_Update: copy state text under a lock + PostMessage (never a
+ *                 cross-thread SetWindowTextW), set the BE-button enable
+ *   - TDM_Poll  : drain a latched button action (InterlockedExchange) and
+ *                 execute the actual trade op on the MQL thread (trading must
+ *                 not happen in this UI thread)
+ *   - TDM_Close : PostMessage a kill + join the thread
+ * Close / Close-50% arm on the first click (caption -> "Confirm ...") and fire
+ * on the second; SL->BE is instant (reversible). Arming disarms if the volume
+ * changes under it (an auto scale-out fired), so a stale confirm can't fire.  */
+typedef struct {
+    HANDLE  hThread;
+    HANDLE  hReady;             /* signaled once the window+controls exist   */
+    HWND    hwnd;
+    HWND    hState;             /* read-only multiline: direction/lots/R/... */
+    HWND    hClose, hClose50, hBe;
+    volatile LONG action;       /* 0 none, 1 close, 2 close50, 3 be (latched)*/
+    volatile LONG be_enable;    /* 1 = BE button clickable (valid stop dist)  */
+    CRITICAL_SECTION cs;        /* guards buf + lots                          */
+    wchar_t buf[1024];          /* pending state text (EA -> panel)           */
+    double  lots;               /* current volume (EA -> panel)               */
+    double  last_lots;          /* panel-thread: last seen volume (disarm)    */
+    int     armed;              /* panel-thread only: 0 / 1(close) / 2(c50)   */
+    int     inited;             /* cs initialised (teardown guard)            */
+    wchar_t title[128];
+    HFONT   fBody, fBtn;
+} PanelState;
+static PanelState gm;
 
 /* ------------------------------------------------------------------------ */
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
@@ -647,6 +691,214 @@ void TD_SetEvents(const wchar_t *abs_dates, const wchar_t *rel_dates)
     wcsncpy(g.evAbs, abs_dates ? abs_dates : L"", 4095); g.evAbs[4095] = 0;
     wcsncpy(g.evRel, rel_dates ? rel_dates : L"", 4095); g.evRel[4095] = 0;
     if (g.hEvents) SetWindowTextW(g.hEvents, g.redact ? g.evRel : g.evAbs);
+}
+
+/* ==========================================================================
+ *  MANAGEMENT PANEL  (mid-trade actions; own thread so it survives a pause)
+ * ========================================================================== */
+static ATOM gm_cls = 0;
+static const wchar_t *PCLS = L"HybridMgmtPanel";
+
+/* panel layout metrics */
+#define P_W       300
+#define P_PAD     12
+#define P_STATEH  178
+#define P_BTNH    30
+#define P_BTNGAP  8
+#define P_BTNW    ((P_W - 2*P_PAD - 2*P_BTNGAP) / 3)
+
+static void panel_disarm(void)
+{
+    gm.armed = 0;
+    if (gm.hClose)   SetWindowTextW(gm.hClose,   L"Close");
+    if (gm.hClose50) SetWindowTextW(gm.hClose50, L"Close 50%");
+}
+
+static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_CTLCOLORSTATIC: {           /* the state box: white read-only field */
+        HDC hdc = (HDC)wp; HWND hc = (HWND)lp;
+        if (GetDlgCtrlID(hc) == ID_MSTATE) {
+            SetTextColor(hdc, COL_VALUE); SetBkColor(hdc, COL_EDITBG);
+            return (LRESULT)(g_edbg ? g_edbg : (HBRUSH)GetStockObject(WHITE_BRUSH));
+        }
+        SetBkMode(hdc, TRANSPARENT); SetTextColor(hdc, COL_VALUE);
+        return (LRESULT)(g_bg ? g_bg : (HBRUSH)GetStockObject(WHITE_BRUSH));
+    }
+    case WM_CTLCOLOREDIT: {
+        HDC hdc = (HDC)wp;
+        SetTextColor(hdc, COL_VALUE); SetBkColor(hdc, COL_EDITBG);
+        return (LRESULT)(g_edbg ? g_edbg : (HBRUSH)GetStockObject(WHITE_BRUSH));
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORDLG:
+        return (LRESULT)(g_bg ? g_bg : (HBRUSH)GetStockObject(WHITE_BRUSH));
+
+    case WM_COMMAND: {
+        int id = LOWORD(wp);
+        if (id == ID_MBE) { InterlockedExchange(&gm.action, 3); return 0; }  /* instant */
+        if (id == ID_MCLOSE) {
+            if (gm.armed == 1) { InterlockedExchange(&gm.action, 1); panel_disarm(); }
+            else { panel_disarm(); gm.armed = 1; SetWindowTextW(gm.hClose, L"Confirm CLOSE"); }
+            return 0;
+        }
+        if (id == ID_MCLOSE50) {
+            if (gm.armed == 2) { InterlockedExchange(&gm.action, 2); panel_disarm(); }
+            else { panel_disarm(); gm.armed = 2; SetWindowTextW(gm.hClose50, L"Confirm 50%"); }
+            return 0;
+        }
+        break;
+    }
+
+    case PM_UPDATE: {                    /* EA pushed fresh state (our thread now) */
+        EnterCriticalSection(&gm.cs);
+        SetWindowTextW(gm.hState, gm.buf);
+        double lots = gm.lots;
+        LeaveCriticalSection(&gm.cs);
+        EnableWindow(gm.hBe, gm.be_enable ? TRUE : FALSE);
+        double d = lots - gm.last_lots; if (d < 0) d = -d;
+        if (gm.last_lots >= 0 && d > 1e-9) panel_disarm();   /* volume changed => stale confirm */
+        gm.last_lots = lots;
+        return 0;
+    }
+    case PM_KILL:
+        DestroyWindow(hwnd); gm.hwnd = NULL; PostQuitMessage(0);
+        return 0;
+    case WM_CLOSE:                        /* [X]: minimise (recoverable from taskbar), never destroy */
+        ShowWindow(hwnd, SW_MINIMIZE);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static DWORD WINAPI panel_thread(LPVOID param)
+{
+    (void)param;
+    if (gm_cls == 0) {
+        WNDCLASSEXW wc; ZeroMemory(&wc, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = PanelProc;
+        wc.hInstance = g_hinst;
+        wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        wc.hbrBackground = g_bg;
+        wc.lpszClassName = PCLS;
+        gm_cls = RegisterClassExW(&wc);
+    }
+    gm.fBody = make_font(-15, FW_NORMAL);
+    gm.fBtn  = make_font(-15, FW_NORMAL);
+
+    DWORD style   = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    DWORD exstyle = WS_EX_APPWINDOW;               /* taskbar button => minimise/restore works */
+    int clientH = P_PAD + P_STATEH + 10 + P_BTNH + P_PAD;
+    RECT rc = { 0, 0, P_W, clientH };
+    AdjustWindowRectEx(&rc, style, FALSE, exstyle);
+    int winW = rc.right - rc.left, winH = rc.bottom - rc.top;
+    int px = GetSystemMetrics(SM_CXSCREEN) - winW - 24;   /* anchor: top-right corner */
+    int py = 64;
+
+    HWND hwnd = CreateWindowExW(exstyle, PCLS,
+        gm.title[0] ? gm.title : L"Manage position",
+        style, px, py, winW, winH, NULL, NULL, g_hinst, NULL);
+    if (!hwnd) { SetEvent(gm.hReady); return 0; }
+
+    int y = P_PAD;
+    gm.hState = CreateWindowExW(0, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_LEFT,
+        P_PAD, y, P_W - 2*P_PAD, P_STATEH, hwnd, (HMENU)(INT_PTR)ID_MSTATE, g_hinst, NULL);
+    SendMessageW(gm.hState, WM_SETFONT, (WPARAM)gm.fBody, TRUE);
+    y += P_STATEH + 10;
+
+    gm.hClose = CreateWindowExW(0, L"BUTTON", L"Close",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        P_PAD, y, P_BTNW, P_BTNH, hwnd, (HMENU)(INT_PTR)ID_MCLOSE, g_hinst, NULL);
+    gm.hClose50 = CreateWindowExW(0, L"BUTTON", L"Close 50%",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        P_PAD + P_BTNW + P_BTNGAP, y, P_BTNW, P_BTNH, hwnd, (HMENU)(INT_PTR)ID_MCLOSE50, g_hinst, NULL);
+    gm.hBe = CreateWindowExW(0, L"BUTTON", L"SL → BE",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        P_PAD + 2*(P_BTNW + P_BTNGAP), y, P_BTNW, P_BTNH, hwnd, (HMENU)(INT_PTR)ID_MBE, g_hinst, NULL);
+    SendMessageW(gm.hClose,   WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
+    SendMessageW(gm.hClose50, WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
+    SendMessageW(gm.hBe,      WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
+
+    gm.hwnd = hwnd;
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);      /* visible but don't steal focus */
+    SetEvent(gm.hReady);
+
+    MSG msg;
+    while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        if (!IsDialogMessageW(gm.hwnd ? gm.hwnd : hwnd, &msg)) {
+            TranslateMessage(&msg); DispatchMessageW(&msg);
+        }
+    }
+    if (gm.fBody) { DeleteObject(gm.fBody); gm.fBody = NULL; }
+    if (gm.fBtn)  { DeleteObject(gm.fBtn);  gm.fBtn  = NULL; }
+    return 0;
+}
+
+/* Open the management panel (idempotent). Returns 1 if the window exists. */
+__declspec(dllexport)
+int TDM_Open(const wchar_t *title)
+{
+    if (gm.hThread && gm.hwnd) return 1;       /* already up */
+    if (gm.hThread) {
+        /* thread exists but no window yet: still starting, OR it died (CreateWindow
+           failed / ready-wait timed out). A dead thread would wedge every retry at
+           "return 0" forever, so reap it and fall through to a clean re-open.      */
+        if (WaitForSingleObject(gm.hThread, 0) != WAIT_OBJECT_0) return 0;  /* genuinely starting */
+        CloseHandle(gm.hThread); gm.hThread = NULL;
+        if (gm.hReady) { CloseHandle(gm.hReady); gm.hReady = NULL; }
+        if (gm.inited) { DeleteCriticalSection(&gm.cs); gm.inited = 0; }
+    }
+    ZeroMemory(&gm, sizeof(gm));
+    gm.last_lots = -1.0;
+    wcsncpy(gm.title, title ? title : L"Manage position", 127); gm.title[127] = 0;
+    if (g_bg   == NULL) g_bg   = CreateSolidBrush(COL_BG);
+    if (g_edbg == NULL) g_edbg = CreateSolidBrush(COL_EDITBG);
+    InitializeCriticalSection(&gm.cs); gm.inited = 1;
+    gm.hReady = CreateEventW(NULL, TRUE, FALSE, NULL);
+    gm.hThread = CreateThread(NULL, 0, panel_thread, NULL, 0, NULL);
+    if (!gm.hThread) {
+        if (gm.hReady) { CloseHandle(gm.hReady); gm.hReady = NULL; }
+        DeleteCriticalSection(&gm.cs); gm.inited = 0;
+        return 0;
+    }
+    if (gm.hReady) WaitForSingleObject(gm.hReady, 3000);
+    return gm.hwnd ? 1 : 0;
+}
+
+/* Push the live position-state text (multiline), current volume (for the arm-
+   disarm on an auto scale-out), and whether SL->BE is currently valid.        */
+__declspec(dllexport)
+void TDM_Update(const wchar_t *state_text, double lots, int be_enabled)
+{
+    if (!gm.hwnd) return;
+    EnterCriticalSection(&gm.cs);
+    wcsncpy(gm.buf, state_text ? state_text : L"", 1023); gm.buf[1023] = 0;
+    gm.lots = lots;
+    LeaveCriticalSection(&gm.cs);
+    InterlockedExchange(&gm.be_enable, be_enabled ? 1 : 0);
+    PostMessageW(gm.hwnd, PM_UPDATE, 0, 0);
+}
+
+/* Drain a confirmed button action: 0 none, 1 close, 2 close50, 3 SL->BE. The EA
+   executes the trade op itself (on the MQL thread) - this only reports intent. */
+__declspec(dllexport)
+int TDM_Poll(void) { return (int)InterlockedExchange(&gm.action, 0); }
+
+/* Tear the panel down (position went flat / test ended). Joins the thread. */
+__declspec(dllexport)
+void TDM_Close(void)
+{
+    if (gm.hThread) {
+        if (gm.hwnd) PostMessageW(gm.hwnd, PM_KILL, 0, 0);
+        WaitForSingleObject(gm.hThread, 2000);
+        CloseHandle(gm.hThread); gm.hThread = NULL;
+    }
+    if (gm.hReady) { CloseHandle(gm.hReady); gm.hReady = NULL; }
+    if (gm.inited) { DeleteCriticalSection(&gm.cs); gm.inited = 0; }
+    gm.hwnd = NULL;
 }
 
 /* ------------------------------------------------------------------------ */

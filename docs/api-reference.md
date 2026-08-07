@@ -313,11 +313,13 @@ visual tester.)
 
 ### Exported symbols and C signatures
 
-Nine exports, all **undecorated names** (verified by `build.sh`'s PE
-export-table parser): `TD_Open`, `TD_Poll`, `TD_SetDisplay`, `TD_SkipReason`,
-`TD_SetOrderType`, `TD_SetEvents`, `TD_Coach`, `TD_Close`, and a legacy
-`ShowTradeDialog` stub. `tp2` (empty string ⇒ single-target) drives whether the
-dialog shows one editable TP or two (TP1 bank + TP2 runner) for scale-out.
+Thirteen exports, all **undecorated names** (verified by `build.sh`'s PE
+export-table parser). The **signal dialog** (blocking, EA-pumped): `TD_Open`,
+`TD_Poll`, `TD_SetDisplay`, `TD_SkipReason`, `TD_SetOrderType`, `TD_SetEvents`,
+`TD_Coach`, `TD_Close`. The **management panel** (non-modal, own thread):
+`TDM_Open`, `TDM_Update`, `TDM_Poll`, `TDM_Close`. Plus a legacy `ShowTradeDialog`
+stub. `tp2` (empty string ⇒ single-target) drives whether the signal dialog shows
+one editable TP or two (TP1 bank + TP2 runner) for scale-out.
 
 ```c
 // Create the window. Entry/SL/TP all editable; a non-empty tp2 adds a second
@@ -363,6 +365,37 @@ void TD_Close(void);
 // Legacy single-call modal export — retained as a no-op stub (returns 0) for
 // binary compatibility only; the EA drives the poll API above.
 int  ShowTradeDialog(const wchar_t *title, ... );   // 9 wchar_t* args, returns 0
+```
+
+#### Management panel (`TDM_*`) — mid-trade actions, own thread
+
+The signal dialog above is pumped by the EA's blocking `OnTick` loop, so it dies
+the instant the visual tester pauses. The management panel must do the **opposite**
+— stay live + clickable **while the tester is paused** (that is exactly when the
+operator decides at bar close). A pause stops `OnTick`, so nothing on the MQL side
+could pump it; therefore the panel runs its **own `GetMessage` loop on a dedicated
+thread**. The EA never touches these HWNDs — it only pushes state and drains a
+latched button action; all trading stays on the MQL thread. Close / Close-50% arm
+on the first click (caption → "Confirm …") and fire on the second; SL→BE is instant
+(reversible). Arming auto-disarms if the volume changes under it (an auto scale-out
+fired), so a stale confirm can't fire.
+
+```c
+// Spawn the panel thread + window (idempotent; self-heals a dead thread on retry).
+// Returns 1 = window up, 0 = not yet (caller retries next tick).
+int  TDM_Open(const wchar_t *title);
+
+// Push the live state text (multiline, \r\n), current volume (for arm-disarm on an
+// auto scale-out), and whether SL→BE is currently placeable (be_enabled). Copies
+// under a lock + PostMessage — never a cross-thread SetWindowTextW.
+void TDM_Update(const wchar_t *state_text, double lots, int be_enabled);
+
+// Drain a confirmed button action: 0 none, 1 close, 2 close50, 3 SL→BE. One-shot
+// (InterlockedExchange). The EA executes the actual trade op on the MQL thread.
+int  TDM_Poll(void);
+
+// Tear the panel down (position went flat / test ended). PostMessage kill + join.
+void TDM_Close(void);
 ```
 
 All numeric math (R:R lock, lot sizing, tick/stops normalisation) lives in
@@ -622,6 +655,8 @@ declarations.
 | `InpShotOnDecision` | `bool` | `true` | Save a chart screenshot to `MQL5\Files\journal\shots\<stem>_<id>.png` when the dialog opens |
 | `InpShotW` / `InpShotH` | `int` | `1600` / `900` | Screenshot dimensions (px) |
 | `InpForcePendingTest` | `bool` | `false` | **Test-only.** Under `AA_ALL`, place a forced STOP pending instead of a market order — verifies the `OnTradeTransaction` pending-fill binding headlessly (`mt5_verify.sh --force-pending`) |
+| `InpManagePanel` | `bool` | `true` | Show the mid-trade management panel (Close / Close 50% / SL→BE) while a position is open. Interactive/visual only — dormant in `AA_ALL`/`AA_SKIP` headless runs |
+| `InpBEPadPips` | `double` | `1.0` | SL→break-even padding, in pips, in the profit direction (covers spread so a BE hit is ~flat). The panel's SL→BE button is disabled when this stop would fall inside the broker stops-level band |
 
 > Display/overlay inputs (`InpShow*`, `InpFontSize`, `InpLineWidth`, event/
 > imbalance/declutter knobs) are documented in
@@ -728,3 +763,42 @@ A position is considered fully closed (`closed=true`, `exit_*`/`pnl`/
 `r_multiple` finalized) once `closed_vol >= lots - step*0.5` in
 `OnTradeTransaction`, i.e. accumulated closing volume matches the original
 lots within half a volume step.
+
+## Manual-actions CSV schema
+
+Source: `HybridForwardTest.mq5 :: WriteActions()`. A **sibling** of the journal,
+written only when the operator uses the mid-trade management panel (one row per
+button press). Same `FILE_COMMON` location + `.part` → final rename convention:
+
+```
+<Terminal>\Common\Files\journal\<SYMBOL>_<start>_<end>.actions.csv
+```
+
+Feeds `pipeline/review_session.py --actions <…>.actions.csv` (the "Manual mid-trade
+interventions" section). Grades the operator's overrides of the systematic plan;
+`open_r` at the moment of action is the counterfactual anchor (what letting it run
+was worth right then).
+
+**Header line (exact — 10 columns):**
+
+```
+signal_id,posid,bar_time,action,price,lots_before,lots_after,sl_after,banked_r,open_r
+```
+
+| Column | Type/format | Meaning |
+|---|---|---|
+| `signal_id` | int | Owning signal (`g_rows[].id`) — joins back to the journal row |
+| `posid` | long | Position id acted on |
+| `bar_time` | date string | H4 bar time of the action (`iTime(...,0)`) |
+| `action` | `CLOSE` / `CLOSE50` / `SL_BE` | Which button fired |
+| `price` | price string | Exit-side market price at the action (bid for BUY, ask for SELL) |
+| `lots_before` | `%.2f` | Position volume before the action |
+| `lots_after` | `%.2f` | Position volume after (`0` for a full close; half for `CLOSE50`; unchanged for `SL_BE`) |
+| `banked_r` | `%.2f` | Realised R so far on this position (`g_rows[].r_multiple`) at action time |
+| `open_r` | `%.2f` | Unrealised R on the **remaining** volume at action time, volume-weighted the same way `r_multiple` accumulates (`vol/initial_lots × moved/risk_px`) |
+
+> `CLOSE50` sets the row's `tp1_done=1` (the manual scale-out replaces the auto one
+> — `ManageOpenPositions` sizes its TP1 partial off the *initial* lots, so leaving
+> it armed would close the whole runner). `SL_BE` moves only the position's live
+> stop; it **never** writes the journal `sl` (the risk basis for every R number) and
+> leaves `tp1_done` alone, so the auto scale-out's own BE move still runs.

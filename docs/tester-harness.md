@@ -146,8 +146,14 @@ the `Common\Files` journal folder where the CSVs live.
 **Upcoming-events list + Coach mode.** The dialog lists the **notable scheduled
 events** for the pair's currencies over the next `InpEvtListDays` (14) days — the
 economic-calendar context you'd want *before* deciding (ECB/Fed decisions, CPI,
-NFP, GDP, PMIs). It's scheduled info only (time + currency + name); no outcome is
-ever shown, because every listed event is after the decision. The **Coach mode**
+NFP, GDP, PMIs). Each line carries a **significance tag** — `[HIGH]` / `[MED]` /
+`[LOW]` — a keyword-derived rating (`EventSignificance`; there's no impact field in
+`econ_events.csv`): rate decisions + central-bank statements/pressers + NFP/CPI/GDP
+read `[HIGH]`, second-tier prints (PMI, unemployment, retail sales…) read `[MED]`.
+Because the list itself is curated to top-tier events, tags in practice read HIGH
+or MED (a genuinely low-impact print isn't listed). It's scheduled info only (time
++ currency + name + rating); no outcome is ever shown, because every listed event
+is after the decision. The **Coach mode**
 button redacts a screenshot for the AI coach: it blanks the **symbol** (`██████`),
 switches all dates to **relative** (`in 1d 4h`), and **date-scrubs the on-chart
 signal label** (the corner label's `@ <timestamp>` is dropped) — so neither the
@@ -164,10 +170,47 @@ outcome is leaked ahead of time. (Previously the overlay drew once at the first
 tick and, in the tester, only ever showed events *before* the test start — so
 forward events never appeared.)
 
-Exported symbols (undecorated, x64 — match the MQL5 `#import`): **`TD_Open`**,
-**`TD_Poll`**, **`TD_SetDisplay`**, **`TD_SkipReason`**, **`TD_SetOrderType`**,
-**`TD_SetEvents`**, **`TD_Close`** (plus a legacy no-op `ShowTradeDialog` stub).
+Exported symbols (undecorated, x64 — match the MQL5 `#import`): the signal dialog
+**`TD_Open`**, **`TD_Poll`**, **`TD_SetDisplay`**, **`TD_SkipReason`**,
+**`TD_SetOrderType`**, **`TD_SetEvents`**, **`TD_Coach`**, **`TD_Close`**; the
+management panel **`TDM_Open`**, **`TDM_Update`**, **`TDM_Poll`**, **`TDM_Close`**
+(plus a legacy no-op `ShowTradeDialog` stub).
 Full contract in [api-reference.md](api-reference.md#tradedialogdll).
+
+## The mid-trade management panel
+
+While a position is open, a small **non-modal** panel appears (top-right of the
+screen) and auto-hides the moment you go flat. It lets you act on the advisor's
+mid-trade doctrine — flatten before a red-folder event, exit at break-even on a
+kill condition, or scale out manually — none of which the Accept/Skip dialog can
+do. It shows live state (direction, lots, entry, current SL/TP, and **Open R +
+Banked R** — R being the only unit decisions are made in) and three buttons:
+
+- **Close** — full market exit. *(news-eve flatten, kill-condition exit)*
+- **Close 50%** — partial exit of current volume. *(manual scale-out fallback)*
+- **SL → BE** — move the stop to entry + `InpBEPadPips` pips. *(pre-news lockdown,
+  rejection-at-resistance hold)*
+
+Close and Close-50% **arm on the first click** (the caption changes to
+"Confirm …") and fire on the second — a paused tester makes mis-clicks easy.
+SL→BE is instant (it's reversible), and is **greyed out** when break-even would
+sit inside the broker's stops-level band (too close to price to place). The panel
+minimises to the taskbar (its `[X]` minimises rather than closes, so you can't
+lose it mid-trade).
+
+**Why it's a separate window on its own thread:** the Accept/Skip dialog is pumped
+by the EA's blocking `OnTick` loop, so it freezes the instant you pause the visual
+tester. But pausing at bar close is *exactly* when you'd manage a trade — so the
+panel runs its own Win32 message loop on a dedicated thread and stays live and
+clickable while the tester is paused. Your click is executed on the next tick
+(when you resume); the advisor's rules are evaluated on bar close anyway.
+
+Every button press is logged to a sibling **`…_.actions.csv`** (bar time, price,
+lots before→after, banked/open R) so the coach can grade the intervention —
+`pipeline/review_session.py --actions <…>.actions.csv`. The panel is
+interactive/visual-only (dormant in headless `AA_ALL`/`AA_SKIP`); toggle it with
+`InpManagePanel`. Its four `TDM_*` exports are new, so **restart MT5** after a
+rebuild (as with any DLL signature change).
 
 ### Build & deploy the DLL
 
