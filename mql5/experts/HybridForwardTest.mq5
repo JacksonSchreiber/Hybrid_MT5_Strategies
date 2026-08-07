@@ -33,13 +33,14 @@
 //--- lines live, until the user clicks Accept(1)/Skip(2). See TradeDialog.c.
 #import "TradeDialog.dll"
 int  TD_Open(string title,string symbol,string strategy,string direction,
-             string entry,string sl,string tp,string lots,string rr);
-int  TD_Poll(double &entry,double &sl,double &tp,int &dirty);
-void TD_SetDisplay(string entry,string sl,string tp,string lots,string rr,int ok);
+             string entry,string sl,string tp,string tp2,string lots,string rr);
+int  TD_Poll(double &entry,double &sl,double &tp,double &tp2,int &dirty);
+void TD_SetDisplay(string entry,string sl,string tp,string tp2,string lots,string rr,int ok);
 void TD_Close(void);
 int  TD_SkipReason(void);   // 1-6 skip-reason code from the last skip (0 none)
 void TD_SetOrderType(string s); // set the "Order" row (MARKET / BUY LIMIT @ x)
 void TD_SetEvents(string abs_dates,string rel_dates); // upcoming-events list (both forms)
+int  TD_Coach(void);        // 1 = coach mode on (scrub chart label to match)
 #import
 #import "user32.dll"
 int MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType);
@@ -55,6 +56,10 @@ enum ENUM_AUTO_APPROVE { AA_NONE=0, AA_ALL=1, AA_SKIP=2 };
 
 //--- inputs
 input double InpRiskPct     = 0.01;     // risk per trade (fraction of equity)
+//--- account-safety guards (reject degenerate signals; cap monster positions)
+input double InpMinStopATR  = 0.5;      // reject signal if SL distance < this * ATR(14)
+input double InpMinStopSpreads = 2.0;   // ...also require SL distance >= this * current spread
+input double InpMaxMarginPct = 0.50;    // hard cap: one position may use <= this fraction of free margin
 input long   InpMagic       = 990217;   // magic number
 input int    InpDeviation   = 50;       // max slippage (points)
 input bool   InpCleanupOnDeinit = false;// delete overlay objects on EA removal
@@ -94,7 +99,8 @@ input int    InpEvtListMax   = 15;            // popup: cap the events list to t
 //--- readability / decluttering
 input int    InpMaxVisibleSignals = 1;        // recent setups whose overlays stay on chart (older auto-clear)
 input bool   InpEventTopTierOnly  = true;     // events: only top-tier movers (rate/CPI/NFP/GDP/PMI)
-input bool   InpShowSwings  = true;           // draw swing high/low markers
+input bool   InpShowSwings  = true;           // draw swing high/low markers (persistent, rolling window)
+input int    InpSwingDays   = 14;             // swing markers: rolling lookback window (days)
 input bool   InpShowAux     = true;           // draw aux level lines + labels
 input bool   InpShowFib     = true;           // draw the native Fib grid
 input bool   InpFibRay      = true;           // extend fib levels right across the chart
@@ -144,6 +150,8 @@ struct JournalRow
    double   orig_entry;     // detector's PROPOSED entry (before any operator edit)
    double   orig_sl;        // detector's proposed SL
    double   orig_tp;        // detector's proposed TP (the single/display target)
+   double   orig_tp1;       // detector's proposed TP1 (scale-out bank target; 0 if none)
+   double   orig_tp2;       // detector's proposed TP2 (scale-out runner; 0 if none)
    double   entry;          // realised fill price (for R math)
    double   sl;             // ORIGINAL sl (risk basis; never overwritten by BE move)
    double   tp;             // TP actually placed on the order (tp2 for two-target)
@@ -217,6 +225,10 @@ int OnInit()
                          : "INTERACTIVE");
    Print("HybridForwardTest ACTIVE [",mode,"] on ",_Symbol," detectors=",g_ndet,
          " risk=",DoubleToString(InpRiskPct*100.0,1),"%");
+   //--- build tag: if the popup misbehaves, confirm THIS line appears (fresh EA)
+   //--- and that MT5 was restarted so the matching TradeDialog.dll is loaded.
+   Print("HFT build 2026-08-06b: TP1/TP2 scale-out edit + persistent swings + coach-label"
+         " (needs matching TradeDialog.dll - restart MT5 after a rebuild).");
    return(INIT_SUCCEEDED);
   }
 
@@ -235,6 +247,7 @@ void OnTick()
       g_start_time=TimeCurrent(); g_last_time=g_start_time;
       g_journal_part=StringFormat("journal\\%s_%s.part.csv",_Symbol,StampCompact(g_start_time));
       WriteJournal(g_journal_part);
+      if(InpShowSwings) DrawSwingMarkers();   // first draw (new-bar gate skips tick 1)
      }
    g_last_time=TimeCurrent();
 
@@ -251,6 +264,8 @@ void OnTick()
    //--- roll the econ-event overlay forward with the replay (reveals upcoming
    //--- events within the lookahead; bias stays hidden until each one fires)
    if(InpShowEvents) DrawEconEvents();
+   //--- persistent swing markers over the rolling window (signal-independent)
+   if(InpShowSwings) DrawSwingMarkers();
 
    //--- call ALL detectors every bar so each advances its state machine;
    //--- keep the highest-priority valid emit (array is in priority order).
@@ -348,6 +363,53 @@ string OrderTypeName(ENUM_ORDER_TYPE t)
      }
   }
 
+//--- ATR(14) on the working timeframe (last CLOSED bar); 0 if unavailable
+double SignalATR()
+  {
+   int h=iATR(_Symbol,g_tf,14);
+   if(h==INVALID_HANDLE) return 0.0;
+   double a[]; ArraySetAsSeries(a,true);
+   if(CopyBuffer(h,0,0,2,a)<2) return 0.0;
+   return a[1];
+  }
+
+//--- minimum acceptable stop distance: an account-safety floor on RISK (the R:R
+//--- floor screens reward, not risk). A stop tighter than this is rejected so a
+//--- degenerate signal can't feed the 1%-risk sizer a near-zero distance and
+//--- produce a monster position.
+double MinStopDist(double atr)
+  {
+   double spread=SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   if(spread<0.0) spread=0.0;
+   double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   double m=InpMinStopATR*atr;
+   double sp=InpMinStopSpreads*spread;
+   if(sp>m)    m=sp;
+   if(stops>m) m=stops;
+   return m;
+  }
+
+//--- log a rejected (never-shown) signal to the journal so the coach can see it
+//--- and the underlying bug is never silently hidden.
+void JournalReject(int id,SignalCandidate &cand,string why)
+  {
+   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+   g_rows[n].id=id; g_rows[n].time=cand.zone_to; g_rows[n].symbol=_Symbol;
+   g_rows[n].strategy=cand.strategy; g_rows[n].direction=cand.direction;
+   g_rows[n].orig_entry=cand.entry; g_rows[n].orig_sl=cand.sl; g_rows[n].orig_tp=cand.tp;
+   g_rows[n].orig_tp1=cand.tp1; g_rows[n].orig_tp2=cand.tp2;
+   g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=cand.tp;
+   g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=0.0;
+   g_rows[n].lots=0.0; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
+   g_rows[n].decision="rejected"; g_rows[n].skip_reason=0; g_rows[n].edited=false;
+   g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0;
+   g_rows[n].tp1_done=true; g_rows[n].decision_ms=0; g_rows[n].posid=0;
+   g_rows[n].closed=true; g_rows[n].exit_time=0; g_rows[n].exit_price=0.0;
+   g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
+   Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," REJECTED: ",why);
+   WriteJournal(g_journal_part);
+  }
+
 //+------------------------------------------------------------------+
 //| Size -> overlays -> dialog -> execute (market or pending) -> log   |
 //+------------------------------------------------------------------+
@@ -355,6 +417,21 @@ void HandleSignal(SignalCandidate &cand)
   {
    g_sig_seq++;
    int id=g_sig_seq;
+
+   //--- ACCOUNT-SAFETY GATE (before sizing/overlays/dialog): a stop tighter than
+   //--- the min distance is a degenerate signal - reject it, log it, journal it.
+   //--- This is what catches the "1.9-pip stop -> 13-lot monster" class of bug.
+   double atr_now=SignalATR();
+   double stopdist=MathAbs(cand.entry-cand.sl);
+   double minstop=MinStopDist(atr_now);
+   if(stopdist<minstop || stopdist<=0.0)
+     {
+      double atrx=(atr_now>0.0? stopdist/atr_now : 0.0);
+      JournalReject(id,cand,StringFormat("SL distance %s (%.2f ATR) < min %s - degenerate stop",
+                    DoubleToString(stopdist,_Digits),atrx,DoubleToString(minstop,_Digits)));
+      return;
+     }
+
    double lots=SizeByRisk(cand.entry,cand.sl);
 
    DrawOverlays(id,cand);
@@ -363,6 +440,7 @@ void HandleSignal(SignalCandidate &cand)
 
    //--- snapshot the detector's PROPOSED levels BEFORE the dialog can edit them
    double orig_entry=cand.entry, orig_sl=cand.sl, orig_tp=cand.tp;
+   double orig_tp1=cand.tp1, orig_tp2=cand.tp2;
 
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
    long decision_ms=0; int skip_reason=0; bool entry_edited=false;
@@ -378,7 +456,9 @@ void HandleSignal(SignalCandidate &cand)
    if(etol<=0.0) etol=0.5*_Point;
    bool any_edited=(MathAbs(cand.entry-orig_entry)>etol
                     || MathAbs(cand.sl-orig_sl)>etol
-                    || MathAbs(cand.tp-orig_tp)>etol);
+                    || MathAbs(cand.tp-orig_tp)>etol
+                    || MathAbs(cand.tp1-orig_tp1)>etol
+                    || MathAbs(cand.tp2-orig_tp2)>etol);
 
    //--- for two-target strategies the order TP is the RUNNER (tp2); we bank
    //--- partial_fraction at tp1 en route and move SL to BE.
@@ -389,6 +469,7 @@ void HandleSignal(SignalCandidate &cand)
    g_rows[n].id=id; g_rows[n].time=cand.zone_to; g_rows[n].symbol=_Symbol;
    g_rows[n].strategy=cand.strategy; g_rows[n].direction=cand.direction;
    g_rows[n].orig_entry=orig_entry; g_rows[n].orig_sl=orig_sl; g_rows[n].orig_tp=orig_tp;
+   g_rows[n].orig_tp1=orig_tp1; g_rows[n].orig_tp2=orig_tp2;
    g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=order_tp;
    g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=(two_target?cand.partial_fraction:0.0);
    g_rows[n].lots=lots; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
@@ -624,130 +705,182 @@ void DecisionScreenshot(int id)
       Print("Signal #",id," screenshot failed err=",GetLastError());
   }
 
+//--- R:R readout. Single-target => "1 : R". Scale-out => per-target R1/R2 plus
+//--- the split-weighted blend (display only, "if both fill"). Returns `blended`
+//--- (info / journal) and `runnerR` = the RUNNER's R, which is what the floor
+//--- GATE uses: the detectors floor MIN_RR on the target they place (tp2 for
+//--- EMA, tp1==tp for Fib), so gating on the runner never false-blocks an
+//--- unedited signal, while an edit that pulls the runner in still blocks.
+string RrText(bool scaleout,double e,double s,double tp1,double tp2,double frac,
+              double &blended,double &runnerR)
+  {
+   double risk=MathAbs(e-s);
+   if(!scaleout)
+     { double R=(risk>0.0?MathAbs(tp1-e)/risk:0.0); blended=R; runnerR=R;
+       return StringFormat("1 : %s",DoubleToString(R,2)); }
+   double R1=(risk>0.0?MathAbs(tp1-e)/risk:0.0);
+   double R2=(risk>0.0?MathAbs(tp2-e)/risk:0.0);
+   blended=frac*R1+(1.0-frac)*R2; runnerR=R2;
+   return StringFormat("T1 %s / T2 %s / blend %s",
+                       DoubleToString(R1,2),DoubleToString(R2,2),DoubleToString(blended,2));
+  }
+
+//--- lots display for the dialog, WITH the stop distance in ATR multiples so a
+//--- human glance catches a degenerate stop ("SL 0.06 ATR" is an instant flag).
+string LotsLine(double lots,double e,double s,double atr)
+  {
+   double x=(atr>0.0? MathAbs(e-s)/atr : 0.0);
+   return StringFormat("%s  (%.1f%% risk, SL %.2f ATR)",DoubleToString(lots,2),InpRiskPct*100.0,x);
+  }
+
+//--- scale-out geometry: TP1 and TP2 each valid vs entry/SL, and TP2 strictly
+//--- beyond TP1 in the trade direction (runner further than the bank target).
+bool ValidScale(int dir,double e,double s,double tp1,double tp2,double ts)
+  {
+   if(!ValidGeom(dir,e,s,tp1) || !ValidGeom(dir,e,s,tp2)) return false;
+   if(dir>0) { if(tp2<=tp1+0.5*ts) return false; }
+   else      { if(tp2>=tp1-0.5*ts) return false; }
+   return true;
+  }
+
 //+------------------------------------------------------------------+
 //| Interactive EDITABLE approval (poll-driven TradeDialog.dll).      |
-//| Entry/SL/TP are INDEPENDENT editable fields (SL & TP are          |
-//| structural, so editing one never moves the other). Each edit      |
-//| re-sizes lots to hold 1% risk, recomputes + displays the live     |
-//| R:R, MOVES the chart lines, and BLOCKS Accept while R:R is below  |
-//| the strategy's floor. On Accept, writes the final levels into     |
-//| cand (collapsing a two-target plan to a single target if edited). |
-//| Entry moved away from market => a pending order. true=approve.    |
+//| Entry/SL/TP(s) are INDEPENDENT editable fields - editing one       |
+//| never moves another (SL & TP are structural). Scale-out strategies |
+//| (partial_fraction>0) split TP into TP1(bank)+TP2(runner), each      |
+//| editable; the plan is PRESERVED under edits. Each edit re-sizes     |
+//| lots, recomputes the live (blended) R:R, moves the chart lines, and |
+//| BLOCKS Accept below the strategy floor. Coach mode also scrubs the  |
+//| chart corner label's timestamp. Entry away from market => pending.  |
 //+------------------------------------------------------------------+
 bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
                        int &skip_reason,bool &entry_edited)
   {
    skip_reason=0; entry_edited=false;
    int    dir=cand.direction;
-   double e0=NormPrice(cand.entry), s0=NormPrice(cand.sl), t0=NormPrice(cand.tp);
-   //--- R:R is a live OUTPUT of the levels (not locked); rr0 is just the opening value
-   double rr=RRatio(e0,s0,t0);
-   if(rr<=0.0) rr=cand.rr;
+   bool   scaleout=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
+   double frac=cand.partial_fraction;
    double floor=StratMinRR(cand.strategy);   // strategy's minimum R:R (Accept blocked below it)
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(ts<=0.0) ts=_Point;
+   double tol=0.5*ts;
+   double atr=SignalATR();   // for the "SL x.x ATR" readout in the lots line
+   double minstop=MinStopDist(atr);   // also block Accept if an EDIT makes the stop too tight
 
+   //--- committed levels. For scale-out, the "TP" field is TP1 and c2 is TP2.
+   double ce=NormPrice(cand.entry), cs=NormPrice(cand.sl);
+   double c1=NormPrice(scaleout? cand.tp1 : cand.tp);
+   double c2=scaleout? NormPrice(cand.tp2) : 0.0;
+   double e0=ce;                                 // for the entry_edited (pending) test
+   string tp2str=(scaleout? DoubleToString(c2,_Digits) : "");
+
+   double blended=0.0, runnerR=0.0;
+   string rrs=RrText(scaleout,ce,cs,c1,c2,frac,blended,runnerR);
    string stratArg=cand.strategy+(cand.d1_context?"  [D1 aligned]":"");
    if(cand.comment!="") stratArg+=" - "+cand.comment;
    string p=StringFormat("%s%d_",InpObjPrefix,id);
-   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(ts<=0.0) ts=_Point;
-   double tol=0.5*ts;
 
-   double lots0=SizeByRisk(e0,s0);
-   int ok0 = (ValidGeom(dir,e0,s0,t0) && rr>=floor) ? 1 : 0;
+   double lots0=SizeByRisk(ce,cs);
+   int ok0=(( scaleout? ValidScale(dir,ce,cs,c1,c2,ts) : ValidGeom(dir,ce,cs,c1) )
+            && runnerR>=floor && MathAbs(ce-cs)>=minstop)?1:0;
    if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),
-              DoubleToString(e0,_Digits),DoubleToString(s0,_Digits),DoubleToString(t0,_Digits),
-              StringFormat("%s  (%.1f%% risk)",DoubleToString(lots0,2),InpRiskPct*100.0),
-              StringFormat("1 : %s%s",DoubleToString(rr,2),plan))!=1)
+              DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),tp2str,
+              LotsLine(lots0,ce,cs,atr),rrs)!=1)
      {
       Print("Signal #",id," dialog failed to open - fail-closed to SKIP.");
       return false;
      }
-   //--- decision-time chart snapshot: exactly what the operator sees now (the
-   //--- overlays were drawn + redrawn before this call). The Win32 dialog is a
-   //--- separate window, so it is NOT in the shot - just the chart + overlays.
+   //--- decision-time chart snapshot (overlays already drawn; dialog not in shot)
    DecisionScreenshot(id);
-   //--- populate the popup's upcoming-events list (both absolute + relative forms
-   //--- so the coach-mode toggle can redact without re-querying).
+   //--- popup upcoming-events list (both date forms for the coach-mode toggle)
    string ev_abs="",ev_rel="";
    if(g_ev_loaded) BuildEventBlocks(cand.zone_to,ev_abs,ev_rel);
    else            { ev_abs="(events not loaded)"; ev_rel=ev_abs; }
    TD_SetEvents(ev_abs,ev_rel);
-   //--- ensure the Accept button starts in the correct enabled state
-   TD_SetDisplay(DoubleToString(e0,_Digits),DoubleToString(s0,_Digits),DoubleToString(t0,_Digits),
-                 StringFormat("%s  (%.1f%% risk)",DoubleToString(lots0,2),InpRiskPct*100.0),
-                 StringFormat("1 : %s%s",DoubleToString(rr,2),plan),ok0);
+   TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),tp2str,
+                 LotsLine(lots0,ce,cs,atr),rrs,ok0);
 
-   double ce=e0, cs=s0, ct=t0;    // current committed (normalised) levels
-   bool   edited=false;
-   bool   shown_invalid=false;    // pushed the invalid state to the dialog already?
-   int    r=0;
+   //--- corner-label full vs coach-scrubbed (drop the " @ <timestamp>...")
+   string lblFull=ObjectGetString(0,p+"label",OBJPROP_TEXT);
+   string lblScrub=lblFull; int atp=StringFind(lblScrub," @ ");
+   if(atp>=0) lblScrub=StringSubstr(lblScrub,0,atp);
+   int coach=0;
+
+   bool edited=false, shown_invalid=false;
+   int  r=0;
    while(true)
      {
-      double e=ce, s=cs, t=ct; int dirty=0;
-      r=TD_Poll(e,s,t,dirty);
-      if(r!=0) { if(r==2) skip_reason=TD_SkipReason(); break; }  // 1=accept, 2=skip
+      double e=ce, s=cs, t1=c1, t2=c2; int dirty=0;
+      r=TD_Poll(e,s,t1,t2,dirty);
+      if(r!=0) { if(r==2) skip_reason=TD_SkipReason(); break; }
+      //--- coach mode: scrub/unscrub the CHART corner label to match the dialog
+      //--- (only if we actually captured a label - never blank it)
+      int cnow=TD_Coach();
+      if(cnow!=coach && lblFull!="")
+        { coach=cnow; ObjectSetString(0,p+"label",OBJPROP_TEXT,coach?lblScrub:lblFull); ChartRedraw(0); }
       if(!dirty) { UiSpin(12); continue; }
 
-      //--- which field did the user change? (tolerance kills sub-tick jitter)
+      //--- which of the up-to-4 fields changed (tolerance kills sub-tick jitter)
       int changed=0;
-      if(MathAbs(e-ce)>tol)      changed=1;
-      else if(MathAbs(s-cs)>tol) changed=2;
-      else if(MathAbs(t-ct)>tol) changed=3;
+      if(MathAbs(e-ce)>tol)                 changed=1;   // entry
+      else if(MathAbs(s-cs)>tol)            changed=2;   // SL
+      else if(MathAbs(t1-c1)>tol)           changed=3;   // TP1 / single TP
+      else if(scaleout && MathAbs(t2-c2)>tol) changed=4; // TP2
       if(changed==0) { UiSpin(12); continue; }
 
-      //--- INDEPENDENT levels: an edit changes ONLY its own field. SL and TP are
-      //--- structural (a prior extreme, a swing) - editing the stop must not move
-      //--- the target, and vice-versa; entry edits leave SL/TP put. R:R is a live
-      //--- readout + a floor guard (Accept blocks below the strategy's minimum),
-      //--- never a lock. Lots re-size to hold 1% on the new stop distance.
-      if(changed==1)      { e=NormPrice(e); s=cs; t=ct; }   // entry moved (SL/TP fixed)
-      else if(changed==2) { s=NormPrice(s); e=ce; t=ct; }   // SL moved (entry/TP fixed)
-      else                { t=NormPrice(t); e=ce; s=cs; }   // TP moved (entry/SL fixed)
+      //--- INDEPENDENT: an edit changes ONLY its own field. Editing the SL never
+      //--- mutates the TP side (values OR the TP1/TP2 scale-out structure).
+      e =(changed==1? NormPrice(e ): ce);
+      s =(changed==2? NormPrice(s ): cs);
+      t1=(changed==3? NormPrice(t1): c1);
+      t2=(changed==4? NormPrice(t2): c2);
 
-      if(ValidGeom(dir,e,s,t))
+      bool valid=(scaleout? ValidScale(dir,e,s,t1,t2,ts) : ValidGeom(dir,e,s,t1));
+      if(valid)
         {
-         ce=e; cs=s; ct=t; edited=true; shown_invalid=false;
+         ce=e; cs=s; c1=t1; c2=t2; edited=true; shown_invalid=false;
          entry_edited=(MathAbs(ce-e0)>tol);
-         rr=RRatio(ce,cs,ct);
-         bool okr=(rr>=floor);                 // block Accept below the strategy floor
+         rrs=RrText(scaleout,ce,cs,c1,c2,frac,blended,runnerR);
+         bool okr=(runnerR>=floor && MathAbs(ce-cs)>=minstop);   // also gate on min stop distance
          double lots=SizeByRisk(ce,cs);
-         //--- move the real chart lines + redraw (proven to repaint while held)
          ObjectSetDouble(0,p+"entry",OBJPROP_PRICE,ce);
          ObjectSetDouble(0,p+"sl",   OBJPROP_PRICE,cs);
-         ObjectSetDouble(0,p+"tp",   OBJPROP_PRICE,ct);
+         ObjectSetDouble(0,p+"tp",   OBJPROP_PRICE,c1);
+         if(scaleout) ObjectSetDouble(0,p+"tp2",OBJPROP_PRICE,c2);
          ChartRedraw(0);
          TD_SetOrderType(OrderNote(dir,ce));
-         string rrs=StringFormat("1 : %s%s",DoubleToString(rr,2),
-                     (okr?"":StringFormat("   < MIN %s",DoubleToString(floor,1))));
-         TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(ct,_Digits),
-                       StringFormat("%s  (%.1f%% risk)",DoubleToString(lots,2),InpRiskPct*100.0),
-                       rrs, okr?1:0);
+         string rrd=rrs+(okr?"":StringFormat("  < MIN %s",DoubleToString(floor,1)));
+         TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),
+                       (scaleout?DoubleToString(c2,_Digits):""),
+                       LotsLine(lots,ce,cs,atr),
+                       rrd, okr?1:0);
         }
       else if(!shown_invalid)
         {
-         //--- bad ordering (SL/entry/TP crossed): flag once, keep last-good levels.
          shown_invalid=true;
-         TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(ct,_Digits),
-                       "--","(bad levels)",0);
+         TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),
+                       (scaleout?DoubleToString(c2,_Digits):""),"--","(bad levels)",0);
         }
       UiSpin(12);
      }
    TD_Close();
 
-   if(r==1)   // approved: commit the (possibly edited) levels into cand
+   if(r==1)   // approved: commit the (possibly edited) levels; NEVER collapse
      {
-      cand.entry=ce; cand.sl=cs; cand.tp=ct;
-      double risk=MathAbs(ce-cs);
-      cand.rr=(risk>0.0 ? MathAbs(ct-ce)/risk : cand.rr);
-      if(edited)
+      cand.entry=ce; cand.sl=cs;
+      if(scaleout)
         {
-         //--- the detector's TP1/TP2 partial plan is anchored to the ORIGINAL
-         //--- levels; once the user retunes Entry/SL/TP it is stale, so collapse
-         //--- to a single target at the edited TP.
-         cand.tp1=0.0; cand.tp2=0.0; cand.partial_fraction=0.0;
-         Print("Signal #",id," levels edited -> single target E=",DoubleToString(ce,_Digits),
-               " SL=",DoubleToString(cs,_Digits)," TP=",DoubleToString(ct,_Digits),
-               "  (R:R ",DoubleToString(cand.rr,2),")");
+         cand.tp1=c1; cand.tp2=c2; cand.tp=c2;    // placed TP = runner; partial_fraction preserved
+         RrText(scaleout,ce,cs,c1,c2,frac,blended,runnerR); cand.rr=blended;
         }
+      else
+        {
+         cand.tp=c1;                               // single target; tp1/tp2 (SMC aux) left as-is
+         double risk=MathAbs(ce-cs); cand.rr=(risk>0.0? MathAbs(c1-ce)/risk : cand.rr);
+        }
+      if(edited)
+         Print("Signal #",id," levels edited: E=",DoubleToString(ce,_Digits)," SL=",DoubleToString(cs,_Digits),
+               (scaleout? " TP1="+DoubleToString(c1,_Digits)+" TP2="+DoubleToString(c2,_Digits)
+                        : " TP="+DoubleToString(c1,_Digits)),"  (R:R ",DoubleToString(cand.rr,2),")");
       return true;
      }
    return false;
@@ -808,6 +941,25 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
   }
 
 //+------------------------------------------------------------------+
+//--- hard backstop: never let one position consume more than InpMaxMarginPct of
+//--- free margin, regardless of the computed risk lots. A final net under the
+//--- min-stop gate so no single upstream failure can place a monster position.
+double MarginCapLots(double entry,double sl,double lots)
+  {
+   if(lots<=0.0 || InpMaxMarginPct<=0.0) return lots;
+   double price=(entry>0.0? entry : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   ENUM_ORDER_TYPE ot=(entry>sl? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
+   double mreq=0.0;
+   if(!OrderCalcMargin(ot,_Symbol,lots,price,mreq) || mreq<=0.0) return lots;
+   double cap=InpMaxMarginPct*AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(cap<=0.0 || mreq<=cap) return lots;
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0.0) step=0.01;
+   double capped=MathFloor((lots*cap/mreq)/step)*step;
+   Print("SAFETY: lots ",DoubleToString(lots,2)," -> ",DoubleToString(capped,2),
+         " (margin cap ",DoubleToString(InpMaxMarginPct*100.0,0),"% of free) - check the stop distance.");
+   return capped;
+  }
+
 double SizeByRisk(double entry,double sl)
   {
    double lots=LotsForRisk(_Symbol,entry,sl,InpRiskPct);   // shared math (floored, no clamp)
@@ -821,10 +973,10 @@ double SizeByRisk(double entry,double sl)
       //--- risk-based lots rounded below vol_min: clamp up (harness policy)
       if(vmin>0.0)
         { Print("NOTE: risk lots < vol_min - clamping up; risks > ",DoubleToString(InpRiskPct*100.0,1),"%.");
-          return(vmin); }
+          return(MarginCapLots(entry,sl,vmin)); }
       return(0.0);
      }
-   return(lots);
+   return(MarginCapLots(entry,sl,lots));
   }
 
 //+------------------------------------------------------------------+
@@ -842,9 +994,23 @@ void DrawOverlays(int id,SignalCandidate &c)
       ObjectSetInteger(0,rz,OBJPROP_FILL,true);
       ObjectSetInteger(0,rz,OBJPROP_STYLE,STYLE_DOT);
      }
+   bool c_scaleout=(c.partial_fraction>0.0 && c.tp1>0.0 && c.tp2>0.0);
    DrawHLine(p+"entry",c.entry,C'0,160,0');
    DrawHLine(p+"sl",   c.sl,   C'204,0,0');
-   DrawHLine(p+"tp",   c.tp,   C'0,0,204');
+   //--- TP line = TP1 (bank) for scale-out, else the single target; a dashed
+   //--- runner line marks TP2 so the two editable TP fields map to the chart.
+   DrawHLine(p+"tp",   (c_scaleout? c.tp1 : c.tp), C'0,0,204');
+   if(c_scaleout)
+     {
+      string t2n=p+"tp2";
+      if(ObjectCreate(0,t2n,OBJ_HLINE,0,0,c.tp2))
+        {
+         ObjectSetInteger(0,t2n,OBJPROP_COLOR,C'0,0,204');
+         ObjectSetInteger(0,t2n,OBJPROP_WIDTH,InpLineWidth);
+         ObjectSetInteger(0,t2n,OBJPROP_STYLE,STYLE_DASH);
+         ObjectSetInteger(0,t2n,OBJPROP_BACK,false);
+        }
+     }
 
    //--- aux levels (dashed, brightened for contrast) + labels
    for(int k=0;InpShowAux && k<c.aux_count && k<8;k++)
@@ -891,8 +1057,8 @@ void DrawOverlays(int id,SignalCandidate &c)
    //--- the Fib strategy (the only detector that sets a retracement leg).
    if(InpShowFib && c.strategy=="DeepFib" && c.leg_t0>0 && c.leg_t1>0)
       DrawFibo(p,c);
-   //--- generic confirmed-swing markers, labelled "swing high" / "swing low"
-   if(InpShowSwings) DrawSwings(p,c);
+   //--- generic swing markers are now a PERSISTENT, signal-independent overlay
+   //--- (DrawSwingMarkers, redrawn each bar) - not drawn per-signal here.
    //--- FVG / price-gap / tick-volume imbalance highlights (display-only context)
    if(InpShowImbal) DrawImbalances(p,c);
    //--- corner label
@@ -1270,6 +1436,69 @@ void FiboApplyLevels(string fb,double &lv[],string &lt[],bool remap)
   }
 
 //+------------------------------------------------------------------+
+//| PERSISTENT swing markers over a rolling InpSwingDays window,        |
+//| independent of any signal (EMArev never fills the per-signal swing  |
+//| arrays, so its setups showed no markers). Fractal 2-left/2-right    |
+//| highs & lows; redrawn each new bar. Own prefix HFT_SW_ so neither   |
+//| the per-signal prune (HFT_<id>_) nor the econ sweep (HFT_EVT) touch |
+//| it. Replaces the per-signal generic swing markers.                 |
+//+------------------------------------------------------------------+
+void DrawSwingMarkers()
+  {
+   string swp=InpObjPrefix+"SW_";
+   ObjectsDeleteAll(0,swp);
+   int avail=Bars(_Symbol,g_tf);
+   int nbars=(int)MathMin(InpSwingDays*6+8,avail-1);   // ~6 H4 bars/day + fractal margin
+   if(nbars<12) return;
+   MqlRates r[]; ArraySetAsSeries(r,true);
+   if(CopyRates(_Symbol,g_tf,0,nbars,r)<12) return;
+   int N=2, drawn=0;
+   for(int i=N;i<nbars-N && drawn<120;i++)
+     {
+      bool sh=true,sl=true;
+      for(int k=1;k<=N;k++)
+        {
+         if(!(r[i].high>r[i-k].high && r[i].high>r[i+k].high)) sh=false;
+         if(!(r[i].low <r[i-k].low  && r[i].low <r[i+k].low )) sl=false;
+        }
+      if(sh)
+        {
+         string an=StringFormat("%sH_a%d",swp,i);
+         if(ObjectCreate(0,an,OBJ_ARROW_DOWN,0,r[i].time,r[i].high))
+           { ObjectSetInteger(0,an,OBJPROP_COLOR,clrOrangeRed);
+             ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
+             ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_BOTTOM);
+             ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false); }
+         string tn=StringFormat("%sH_t%d",swp,i);
+         if(ObjectCreate(0,tn,OBJ_TEXT,0,r[i].time,r[i].high))
+           { ObjectSetString(0,tn,OBJPROP_TEXT,"swing high");
+             ObjectSetInteger(0,tn,OBJPROP_COLOR,clrOrangeRed);
+             ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
+             ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_LOWER);
+             ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false); }
+         drawn++;
+        }
+      if(sl)
+        {
+         string an=StringFormat("%sL_a%d",swp,i);
+         if(ObjectCreate(0,an,OBJ_ARROW_UP,0,r[i].time,r[i].low))
+           { ObjectSetInteger(0,an,OBJPROP_COLOR,clrDodgerBlue);
+             ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
+             ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_TOP);
+             ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false); }
+         string tn=StringFormat("%sL_t%d",swp,i);
+         if(ObjectCreate(0,tn,OBJ_TEXT,0,r[i].time,r[i].low))
+           { ObjectSetString(0,tn,OBJPROP_TEXT,"swing low");
+             ObjectSetInteger(0,tn,OBJPROP_COLOR,clrDodgerBlue);
+             ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
+             ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_UPPER);
+             ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false); }
+         drawn++;
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| Mark confirmed fractal swings with an arrow + a literal            |
 //| "swing high" / "swing low" text label. Non-selectable so the user  |
 //| can't drag them; names are per-signal prefixed (p) for cleanup.    |
@@ -1403,16 +1632,17 @@ void WriteJournal(string path)
    if(h==INVALID_HANDLE) { Print("WARNING: cannot open journal '",path,"' err=",GetLastError()); return; }
    FileWriteString(h,
       "signal_id,signal_time,symbol,strategy,direction,"
-      "orig_entry,orig_sl,orig_tp,entry,sl,tp,tp1,tp2,partial_frac,lots,"
+      "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
       "exit_time,exit_price,pnl,r_multiple\n");
    for(int i=0;i<ArraySize(g_rows);i++)
      {
       JournalRow r=g_rows[i];
       string line=StringFormat(
-         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s\n",
+         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s\n",
          r.id,TimeToString(r.time,TIME_DATE|TIME_SECONDS),r.symbol,r.strategy,DirStr(r.direction),
          DoubleToString(r.orig_entry,_Digits),DoubleToString(r.orig_sl,_Digits),DoubleToString(r.orig_tp,_Digits),
+         (r.orig_tp1>0?DoubleToString(r.orig_tp1,_Digits):""),(r.orig_tp2>0?DoubleToString(r.orig_tp2,_Digits):""),
          DoubleToString(r.entry,_Digits),DoubleToString(r.sl,_Digits),DoubleToString(r.tp,_Digits),
          (r.tp1>0?DoubleToString(r.tp1,_Digits):""),(r.tp2>0?DoubleToString(r.tp2,_Digits):""),
          r.partial_frac,DoubleToString(r.lots,2),

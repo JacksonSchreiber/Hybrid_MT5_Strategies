@@ -74,7 +74,8 @@
 #define ID_NO       101
 #define ID_ENTRY    200   /* EDIT */
 #define ID_SL       201   /* EDIT */
-#define ID_TP       202   /* EDIT */
+#define ID_TP       202   /* EDIT (single TP, or TP1 for scale-out) */
+#define ID_TP2      206   /* EDIT (TP2 runner; only shown for scale-out) */
 #define ID_LOTS     203   /* STATIC value */
 #define ID_RR       204   /* STATIC value */
 #define ID_ORDER    205   /* STATIC: order type to be placed (MARKET / pending) */
@@ -118,7 +119,8 @@ static const wchar_t *CLS = L"HybridTradeDlg";
 /* ---- persistent dialog state (poll-driven; lives between API calls) ----- */
 typedef struct {
     HWND   hwnd;
-    HWND   hEntry, hSl, hTp;     /* editable */
+    HWND   hEntry, hSl, hTp, hTp2; /* editable (hTp2 = NULL for single-target) */
+    int    rows_bot;             /* Y where the field rows end (relayout anchor) */
     HWND   hSymbol;              /* symbol value static (redactable) */
     HWND   hLots,  hRr;          /* recomputed statics */
     HWND   hOrder;               /* "MARKET" / "BUY LIMIT @ x" (set by EA) */
@@ -222,7 +224,7 @@ static void relayout(void)
 {
     if (!g.hwnd) return;
     int W = L_CLIENTW;
-    int y = L_ROWSBOT + 6;
+    int y = g.rows_bot + 6;
 
     /* events collapse toggle (always visible) */
     MoveWindow(g.hEvToggle, L_PADX, y, W - 2 * L_PADX, L_TGLH, TRUE);
@@ -298,7 +300,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         COLORREF c = COL_VALUE;
         if (id == ID_ENTRY) c = COL_ENTRY;
         else if (id == ID_SL) c = COL_SL;
-        else if (id == ID_TP) c = COL_TP;
+        else if (id == ID_TP || id == ID_TP2) c = COL_TP;
         SetTextColor(hdc, c);
         SetBkColor(hdc, COL_EDITBG);
         return (LRESULT)(g_edbg ? g_edbg : (HBRUSH)GetStockObject(WHITE_BRUSH));
@@ -336,7 +338,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g.result = 2; g.skip_reason = id - ID_REASON1 + 1; return 0;
         }
         if (HIWORD(wp) == EN_CHANGE && !g.suppress &&
-            (id == ID_ENTRY || id == ID_SL || id == ID_TP)) g.dirty = 1;
+            (id == ID_ENTRY || id == ID_SL || id == ID_TP || id == ID_TP2)) g.dirty = 1;
         break;
     }
 
@@ -365,8 +367,8 @@ __declspec(dllexport)
 int TD_Open(const wchar_t *title,   const wchar_t *symbol,
             const wchar_t *strategy, const wchar_t *direction,
             const wchar_t *entry,   const wchar_t *sl,
-            const wchar_t *tp,      const wchar_t *lots,
-            const wchar_t *rr)
+            const wchar_t *tp,      const wchar_t *tp2,
+            const wchar_t *lots,    const wchar_t *rr)
 {
     if (InterlockedCompareExchange(&g_inuse, 1, 0) != 0) {
         OutputDebugStringW(L"[TradeDialog] TD_Open while busy -> ignored\n");
@@ -402,7 +404,7 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
        (and the window sized) by relayout(), which also handles the events-
        collapse and reason-picker states. --- */
     const int PADX=L_PADX, LABELW=L_LABELW, GAP=L_GAP, VALUEW=L_VALUEW;
-    const int ROWH=L_ROWH, EDITH=L_EDITH, NROWS=L_NROWS, rowsTop=L_PADY;
+    const int ROWH=L_ROWH, EDITH=L_EDITH, rowsTop=L_PADY;
 
     /* NOT topmost + a minimise box: the operator can background/minimise the
        dialog (the tester stays paused; TD_Poll keeps pumping). WS_EX_APPWINDOW
@@ -424,51 +426,53 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     }
     g.hwnd = hwnd;
 
-    const wchar_t *caps[9] = { L"Symbol", L"Strategy", L"Direction",
-                               L"Entry", L"Stop Loss", L"Take Profit",
-                               L"Lot size", L"R : R", L"Order" };
     int vx = PADX + LABELW + GAP;
-    for (int i = 0; i < NROWS; i++) {
-        int ry = rowsTop + i * ROWH;
-        HWND cap = CreateWindowExW(0, L"STATIC", caps[i], WS_CHILD | WS_VISIBLE | SS_LEFT,
-            PADX, ry, LABELW, ROWH - 6, hwnd, NULL, g_hinst, NULL);
-        SendMessageW(cap, WM_SETFONT, (WPARAM)g.fCaption, TRUE);
-    }
-    int r = rowsTop;
-    g.hSymbol = make_value_static(hwnd, symbol, vx, r,  VALUEW, ROWH - 6, COL_VALUE, g.fNormal); r += ROWH;
-    make_value_static(hwnd, strategy, vx, r,            VALUEW, ROWH - 6, COL_VALUE, g.fNormal); r += ROWH;
-    make_value_static(hwnd, direction,vx, r,            VALUEW, ROWH - 6,
-                      g.isBuy ? COL_BUY : COL_SELL, g.fBold);                                    r += ROWH;
-
-    /* Entry / Stop Loss / Take Profit are ALL editable. Editing the entry away
-       from market turns Accept into a pending order (the EA decides the type and
-       shows it in the "Order" row). Green/red/blue tie each to its chart line.  */
+    int scaleout = (tp2 && tp2[0]);          /* non-empty tp2 => two editable TP fields */
     DWORD est = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL | ES_LEFT;
-    g.hEntry = CreateWindowExW(0, L"EDIT", entry ? entry : L"", est,
-        vx, r + 1, 150, EDITH, hwnd, (HMENU)(INT_PTR)ID_ENTRY, g_hinst, NULL); r += ROWH;
-    g.hSl = CreateWindowExW(0, L"EDIT", sl ? sl : L"", est,
-        vx, r + 1, 150, EDITH, hwnd, (HMENU)(INT_PTR)ID_SL, g_hinst, NULL);    r += ROWH;
-    g.hTp = CreateWindowExW(0, L"EDIT", tp ? tp : L"", est,
-        vx, r + 1, 150, EDITH, hwnd, (HMENU)(INT_PTR)ID_TP, g_hinst, NULL);    r += ROWH;
-    SendMessageW(g.hEntry, WM_SETFONT, (WPARAM)g.fBold, TRUE);
-    SendMessageW(g.hSl,    WM_SETFONT, (WPARAM)g.fBold, TRUE);
-    SendMessageW(g.hTp,    WM_SETFONT, (WPARAM)g.fBold, TRUE);
-    SendMessageW(g.hEntry, EM_SETLIMITTEXT, (WPARAM)24, 0);
-    SendMessageW(g.hSl,    EM_SETLIMITTEXT, (WPARAM)24, 0);
-    SendMessageW(g.hTp,    EM_SETLIMITTEXT, (WPARAM)24, 0);
+    int r = rowsTop;
+    #define CAP(txt) do { HWND _c = CreateWindowExW(0, L"STATIC", (txt), \
+        WS_CHILD | WS_VISIBLE | SS_LEFT, PADX, r, LABELW, ROWH - 6, hwnd, NULL, g_hinst, NULL); \
+        SendMessageW(_c, WM_SETFONT, (WPARAM)g.fCaption, TRUE); } while (0)
+    #define VSTAT(id, txt) CreateWindowExW(0, L"STATIC", (txt), WS_CHILD | WS_VISIBLE | SS_LEFT, \
+        vx, r, VALUEW, ROWH - 6, hwnd, (HMENU)(INT_PTR)(id), g_hinst, NULL)
 
-    g.hLots = CreateWindowExW(0, L"STATIC", lots ? lots : L"",
-        WS_CHILD | WS_VISIBLE | SS_LEFT, vx, r, VALUEW, ROWH - 6,
-        hwnd, (HMENU)(INT_PTR)ID_LOTS, g_hinst, NULL);
-    SendMessageW(g.hLots, WM_SETFONT, (WPARAM)g.fNormal, TRUE);  r += ROWH;
-    g.hRr = CreateWindowExW(0, L"STATIC", rr ? rr : L"",
-        WS_CHILD | WS_VISIBLE | SS_LEFT, vx, r, VALUEW, ROWH - 6,
-        hwnd, (HMENU)(INT_PTR)ID_RR, g_hinst, NULL);
-    SendMessageW(g.hRr, WM_SETFONT, (WPARAM)g.fNormal, TRUE);    r += ROWH;
-    g.hOrder = CreateWindowExW(0, L"STATIC", L"MARKET",
-        WS_CHILD | WS_VISIBLE | SS_LEFT, vx, r, VALUEW, ROWH - 6,
-        hwnd, (HMENU)(INT_PTR)ID_ORDER, g_hinst, NULL);
-    SendMessageW(g.hOrder, WM_SETFONT, (WPARAM)g.fBold, TRUE);
+    CAP(L"Symbol");    g.hSymbol = make_value_static(hwnd, symbol, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fNormal); r += ROWH;
+    CAP(L"Strategy");  make_value_static(hwnd, strategy, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fNormal);          r += ROWH;
+    CAP(L"Direction"); make_value_static(hwnd, direction, vx, r, VALUEW, ROWH - 6,
+                       g.isBuy ? COL_BUY : COL_SELL, g.fBold);                                                   r += ROWH;
+
+    /* Entry / SL / TP(s) are ALL editable + independent. Green/red/blue tie each
+       to its chart line. Scale-out strategies split TP into TP1 (bank) + TP2. */
+    CAP(L"Entry"); g.hEntry = CreateWindowExW(0, L"EDIT", entry ? entry : L"", est,
+        vx, r + 1, 150, EDITH, hwnd, (HMENU)(INT_PTR)ID_ENTRY, g_hinst, NULL);
+    SendMessageW(g.hEntry, WM_SETFONT, (WPARAM)g.fBold, TRUE);
+    SendMessageW(g.hEntry, EM_SETLIMITTEXT, (WPARAM)24, 0);                                r += ROWH;
+    CAP(L"Stop Loss"); g.hSl = CreateWindowExW(0, L"EDIT", sl ? sl : L"", est,
+        vx, r + 1, 150, EDITH, hwnd, (HMENU)(INT_PTR)ID_SL, g_hinst, NULL);
+    SendMessageW(g.hSl, WM_SETFONT, (WPARAM)g.fBold, TRUE);
+    SendMessageW(g.hSl, EM_SETLIMITTEXT, (WPARAM)24, 0);                                   r += ROWH;
+    CAP(scaleout ? L"TP1 (bank)" : L"Take Profit");
+    g.hTp = CreateWindowExW(0, L"EDIT", tp ? tp : L"", est,
+        vx, r + 1, 150, EDITH, hwnd, (HMENU)(INT_PTR)ID_TP, g_hinst, NULL);
+    SendMessageW(g.hTp, WM_SETFONT, (WPARAM)g.fBold, TRUE);
+    SendMessageW(g.hTp, EM_SETLIMITTEXT, (WPARAM)24, 0);                                   r += ROWH;
+    if (scaleout) {
+        CAP(L"TP2 (runner)");
+        g.hTp2 = CreateWindowExW(0, L"EDIT", tp2, est,
+            vx, r + 1, 150, EDITH, hwnd, (HMENU)(INT_PTR)ID_TP2, g_hinst, NULL);
+        SendMessageW(g.hTp2, WM_SETFONT, (WPARAM)g.fBold, TRUE);
+        SendMessageW(g.hTp2, EM_SETLIMITTEXT, (WPARAM)24, 0);                              r += ROWH;
+    } else g.hTp2 = NULL;
+
+    CAP(L"Lot size"); g.hLots = VSTAT(ID_LOTS, lots ? lots : L"");
+    SendMessageW(g.hLots, WM_SETFONT, (WPARAM)g.fNormal, TRUE);                            r += ROWH;
+    CAP(L"R : R");    g.hRr = VSTAT(ID_RR, rr ? rr : L"");
+    SendMessageW(g.hRr, WM_SETFONT, (WPARAM)g.fNormal, TRUE);                              r += ROWH;
+    CAP(L"Order");    g.hOrder = VSTAT(ID_ORDER, L"MARKET");
+    SendMessageW(g.hOrder, WM_SETFONT, (WPARAM)g.fBold, TRUE);                             r += ROWH;
+    #undef CAP
+    #undef VSTAT
+    g.rows_bot = r;
 
     /* --- controls below the field rows are created at nominal positions;
        relayout() (called at the end) places them + sizes the window. --- */
@@ -534,7 +538,7 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
 
 /* ------------------------------------------------------------------------ */
 __declspec(dllexport)
-int TD_Poll(double *entry, double *sl, double *tp, int *dirty)
+int TD_Poll(double *entry, double *sl, double *tp, double *tp2, int *dirty)
 {
     if (!g.hwnd) { if (dirty) *dirty = 0; return 2; }   /* not open => treat as skip */
 
@@ -542,7 +546,7 @@ int TD_Poll(double *entry, double *sl, double *tp, int *dirty)
     while (guard++ < 256 && PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_KEYDOWN) {
             HWND f = GetFocus();
-            int in_edit = (f == g.hEntry || f == g.hSl || f == g.hTp);
+            int in_edit = (f == g.hEntry || f == g.hSl || f == g.hTp || f == g.hTp2);
             if (msg.wParam == VK_ESCAPE) {
                 if (g.reason_mode)   show_reason_picker(0);   /* cancel the picker */
                 else if (!in_edit)   show_reason_picker(1);   /* Esc = Skip = ask why */
@@ -567,6 +571,7 @@ int TD_Poll(double *entry, double *sl, double *tp, int *dirty)
     if (entry) *entry = e;
     if (sl)    *sl    = s;
     if (tp)    *tp    = t;
+    if (tp2)   *tp2   = g.hTp2 ? read_edit(g.hTp2, *tp2) : *tp2;   /* single-target: unchanged */
     if (dirty) { *dirty = g.dirty ? 1 : 0; }
     g.dirty = 0;
 
@@ -576,13 +581,14 @@ int TD_Poll(double *entry, double *sl, double *tp, int *dirty)
 /* ------------------------------------------------------------------------ */
 __declspec(dllexport)
 void TD_SetDisplay(const wchar_t *entry, const wchar_t *sl, const wchar_t *tp,
-                   const wchar_t *lots,  const wchar_t *rr, int ok)
+                   const wchar_t *tp2, const wchar_t *lots,  const wchar_t *rr, int ok)
 {
     if (!g.hwnd) return;
     HWND focus = GetFocus();
     set_edit(g.hEntry, entry, focus);
     set_edit(g.hSl,    sl,    focus);
     set_edit(g.hTp,    tp,    focus);
+    if (g.hTp2) set_edit(g.hTp2, tp2, focus);
     if (lots) SetWindowTextW(g.hLots, lots);
     if (rr)   SetWindowTextW(g.hRr,   rr);
     g.ok = ok ? 1 : 0;
@@ -612,6 +618,13 @@ void TD_Close(void)
 /* until the next TD_Open zeroes it).                                        */
 __declspec(dllexport)
 int TD_SkipReason(void) { return g.skip_reason; }
+
+/* ------------------------------------------------------------------------ */
+/* Coach-mode state (1 = redacted). The EA polls this to date-scrub the CHART
+   corner label to match the dialog's redaction (the chart is EA-drawn, so the
+   DLL toggle alone can't touch it).                                          */
+__declspec(dllexport)
+int TD_Coach(void) { return g.redact; }
 
 /* ------------------------------------------------------------------------ */
 /* Set the "Order" row text ("MARKET" or e.g. "BUY LIMIT @ 1.08200"). The EA */

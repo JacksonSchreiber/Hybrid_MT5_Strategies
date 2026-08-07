@@ -313,29 +313,36 @@ visual tester.)
 
 ### Exported symbols and C signatures
 
-Eight exports, all **undecorated names** (verified by `build.sh`'s PE
+Nine exports, all **undecorated names** (verified by `build.sh`'s PE
 export-table parser): `TD_Open`, `TD_Poll`, `TD_SetDisplay`, `TD_SkipReason`,
-`TD_SetOrderType`, `TD_SetEvents`, `TD_Close`, and a legacy `ShowTradeDialog` stub.
+`TD_SetOrderType`, `TD_SetEvents`, `TD_Coach`, `TD_Close`, and a legacy
+`ShowTradeDialog` stub. `tp2` (empty string ⇒ single-target) drives whether the
+dialog shows one editable TP or two (TP1 bank + TP2 runner) for scale-out.
 
 ```c
-// Create the window (Entry / SL / TP all editable) and return immediately.
-// Returns 1 = shown OK, 0 = failure (caller must fail-closed to skip).
+// Create the window. Entry/SL/TP all editable; a non-empty tp2 adds a second
+// editable TP row (scale-out). Returns 1 = shown OK, 0 = failure (fail-closed).
 int  TD_Open(const wchar_t *title,   const wchar_t *symbol,
              const wchar_t *strategy, const wchar_t *direction,   // "BUY"/"SELL"
              const wchar_t *entry,   const wchar_t *sl,
-             const wchar_t *tp,      const wchar_t *lots, const wchar_t *rr);
+             const wchar_t *tp,      const wchar_t *tp2,          // tp2="" => single TP
+             const wchar_t *lots,    const wchar_t *rr);
 
 // Drain pending window messages (bounded PeekMessage pump), read the current
-// Entry/SL/TP box text into the out-params, set *dirty=1 if the user changed a
-// box since the last poll. Returns 0 = pending, 1 = Accept, 2 = Skip/closed.
-// Digit keys 1-6 (when focus is NOT in a number box) skip with that reason.
-int  TD_Poll(double *entry, double *sl, double *tp, int *dirty);
+// Entry/SL/TP(/TP2) box text into the out-params, set *dirty=1 if the user
+// changed a box. Returns 0 = pending, 1 = Accept, 2 = Skip/closed. Digit keys
+// 1-6 (when focus is NOT in a number box) skip with that reason.
+int  TD_Poll(double *entry, double *sl, double *tp, double *tp2, int *dirty);
 
 // Push RECOMPUTED, normalised strings back into the boxes (skipping whichever
-// box currently has keyboard focus, so it never fights the cursor) + the
-// lots/RR statics. ok=0 disables the Accept button (invalid geometry).
+// box currently has keyboard focus) + the lots/RR statics. tp2 ignored when the
+// dialog is single-target. ok=0 disables Accept (bad geometry or R:R < floor).
 void TD_SetDisplay(const wchar_t *entry, const wchar_t *sl, const wchar_t *tp,
-                   const wchar_t *lots,  const wchar_t *rr, int ok);
+                   const wchar_t *tp2, const wchar_t *lots, const wchar_t *rr, int ok);
+
+// Coach-mode state (1 = redacted). The EA polls this to date-scrub the CHART
+// corner label to match the dialog's symbol/date redaction.
+int  TD_Coach(void);
 
 // Skip-reason code (1-6) from the last skip; 6 = bare Skip/Esc/close. Valid
 // after TD_Poll returns 2. (0 only if never skipped.)
@@ -591,6 +598,9 @@ declarations.
 | Input | Type | Default | Meaning |
 |---|---|---|---|
 | `InpRiskPct` | `double` | `0.01` | Risk per trade as a fraction of equity (1%) |
+| `InpMinStopATR` | `double` | `0.5` | **Account safety.** Reject a signal (never shown) if its SL distance < this × ATR(14) — screens degenerate too-tight stops that would size a monster position. Also blocks Accept if an edit makes the stop this tight |
+| `InpMinStopSpreads` | `double` | `2.0` | Account safety: the min stop distance is also floored at this × current spread (and the broker stops-level) |
+| `InpMaxMarginPct` | `double` | `0.50` | Account safety backstop: cap lots so one position uses ≤ this fraction of free margin, regardless of computed risk |
 | `InpMagic` | `long` | `990217` | Magic number for orders/positions this EA owns |
 | `InpDeviation` | `int` | `50` | Max slippage, in points |
 | `InpCleanupOnDeinit` | `bool` | `false` | If `true`, deletes all `InpObjPrefix`-prefixed chart objects on EA removal |
@@ -669,10 +679,10 @@ rewritten and `FileFlush`-ed on every signal and every trade-close event
 (`OnTradeTransaction`), so a tester crash never loses more than the
 in-flight write.
 
-**Header line (exact, current schema — 26 columns):**
+**Header line (exact, current schema — 28 columns):**
 
 ```
-signal_id,signal_time,symbol,strategy,direction,orig_entry,orig_sl,orig_tp,entry,sl,tp,tp1,tp2,partial_frac,lots,decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,exit_time,exit_price,pnl,r_multiple
+signal_id,signal_time,symbol,strategy,direction,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,exit_time,exit_price,pnl,r_multiple
 ```
 
 > This is the current, authoritative schema — trust this page. The
@@ -691,7 +701,9 @@ signal_id,signal_time,symbol,strategy,direction,orig_entry,orig_sl,orig_tp,entry
 | `direction` | `"BUY"`/`"SELL"` | From `cand.direction` |
 | `orig_entry` | price string | The **detector's proposed** entry, snapshotted before any operator edit (orig-vs-final analysis) |
 | `orig_sl` | price string | Detector's proposed SL |
-| `orig_tp` | price string | Detector's proposed TP (the single/display target) |
+| `orig_tp` | price string | Detector's proposed TP (single/display target) |
+| `orig_tp1` | price string or empty | Detector's proposed TP1 (scale-out bank target; empty if single-target) |
+| `orig_tp2` | price string or empty | Detector's proposed TP2 (scale-out runner; empty if single-target) |
 | `entry` | price string | **Realised fill price** if filled (overwritten from the deal — market or pending), else the placed/proposed entry |
 | `sl` | price string | **Original** SL — the risk basis; never overwritten by the breakeven move |
 | `tp` | price string | The TP actually placed on the order — `tp2` (the runner) for a two-target signal, else `cand.tp` |
@@ -699,7 +711,7 @@ signal_id,signal_time,symbol,strategy,direction,orig_entry,orig_sl,orig_tp,entry
 | `tp2` | price string or empty | Runner target price (empty if `0`) |
 | `partial_frac` | `%.2f` | Fraction banked at `tp1` (`0.00` if single-target, incl. min-lot fallback and any operator-edited setup) |
 | `lots` | `%.2f` | Initial order lots (`SizeByRisk` on the final risk distance) |
-| `decision` | `"approved"` / `"skipped"` / `"approved_pending"` / `"expired"` | Operator (or auto-approve) decision. `approved_pending` = edited-entry pending order (whether it later filled or not — check `posid`); `expired` = pending cancelled unfilled after `InpPendingExpiryBars` H4 bars |
+| `decision` | `"approved"` / `"skipped"` / `"approved_pending"` / `"expired"` / `"rejected"` | Operator (or auto-approve) decision. `approved_pending` = edited-entry pending order (whether it later filled or not — check `posid`); `expired` = pending cancelled unfilled after `InpPendingExpiryBars` H4 bars; `rejected` = **auto-rejected by the account-safety gate** (stop distance below the min, never shown to the operator; `lots=0`, no order) |
 | `skip_reason` | int `0`–`6` | Skip-reason code (`0` for non-skips and headless skips): 1 counter-trend, 2 news/event, 3 ugly structure, 4 target obstructed, 5 correlated exposure, 6 gut/other |
 | `edited` | `0`/`1` | `1` if the operator changed any level vs the detector's proposal. **Authoritative** — computed from the committed levels *before* `entry` is overwritten by the fill, so downstream analysis must not infer edits from `orig_entry` vs `entry` (the fill ≈ never equals the proposal) |
 | `is_pending` | `0`/`1` | `1` if the order originated as a pending (entry edited away from market), even after it fills. Doubles as the "realised entry differs from a market fill" signal for edit-delta analysis |

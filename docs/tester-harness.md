@@ -102,14 +102,22 @@ Accept (only when valid), **Esc** = Skip; typing routes to the focused SL/TP box
 `TD_Poll` returns `0` (pending) / `1` (Accept) / `2` (Skip). A re-entrancy guard
 makes a second concurrent `TD_Open` return failure immediately.
 
-**Editing Entry / SL / TP — independent levels.** Each field edits on its own:
-SL and TP are structural (a prior extreme / swing), so **editing the stop never
-moves the target, and vice-versa**; editing the entry leaves SL/TP put. Every
-edit re-sizes lots to hold 1% risk and **recomputes the live R:R** (it's a
-readout now, not a locked ratio). If your edit drives R:R below the strategy's
-floor (2.0 for SMC/Fib, 1.3 for EMA), the R:R shows **`< MIN 2.0`** and **Accept
-is blocked** until you bring it back. Editing any level collapses a two-target
-(TP1/TP2) plan to a **single target at the edited TP**.
+**Editing levels — independent, scale-out preserved.** Each field edits on its
+own: SL and TP are structural, so **editing the stop never moves the target (or
+the scale-out structure), and vice-versa**; editing entry leaves the TPs put.
+Scale-out strategies (EMArev, DeepFib) show **TP1 (bank) and TP2 (runner) as
+separate editable fields** — the plan is preserved through edits; SMC shows one
+TP. The R:R row shows **per-target R1/R2 + the split-weighted blend** (single-TP
+shows `1 : R`). Every edit re-sizes lots to hold 1% risk and recomputes the live
+R:R. Accept **blocks below the strategy floor** (2.0 SMC/Fib, 1.3 EMA), tested on
+the **runner's R** so an *unedited* signal never false-blocks while an edit that
+pulls the runner in does (`< MIN x.x` shows in the R:R). The chart shows a solid
+TP1 line + a dashed TP2 runner line that move as you edit.
+
+**Persistent swing markers.** "swing high"/"swing low" markers are now a
+signal-independent overlay over a rolling `InpSwingDays` (14-day) window, redrawn
+each bar — so they're always present (EMArev used to show none, since it never
+populated the per-signal swing arrays).
 
 **Entry → pending order.** Leave the entry at market and Accept fills at market
 as before. Move it away and Accept places a **pending order** at that price —
@@ -140,10 +148,12 @@ events** for the pair's currencies over the next `InpEvtListDays` (14) days — 
 economic-calendar context you'd want *before* deciding (ECB/Fed decisions, CPI,
 NFP, GDP, PMIs). It's scheduled info only (time + currency + name); no outcome is
 ever shown, because every listed event is after the decision. The **Coach mode**
-button redacts a screenshot for the AI coach: it blanks the **symbol** (`██████`)
-and switches all dates to **relative** (`in 1d 4h`) so the coach can't reverse-
-identify the historical instance and grade with hindsight. Normal (un-toggled)
-shows the real symbol + absolute `DD MMM HH:MM`.
+button redacts a screenshot for the AI coach: it blanks the **symbol** (`██████`),
+switches all dates to **relative** (`in 1d 4h`), and **date-scrubs the on-chart
+signal label** (the corner label's `@ <timestamp>` is dropped) — so neither the
+dialog nor the chart behind it can reverse-identify the historical instance for
+hindsight grading. Normal (un-toggled) shows the real symbol + absolute
+`DD MMM HH:MM` + the full chart label.
 
 **Chart event overlay (look-ahead-safe).** The dashed vertical event lines on the
 chart now roll **forward** with the replay: the calendar is cached once and
