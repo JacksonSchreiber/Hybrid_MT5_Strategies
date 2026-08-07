@@ -47,13 +47,13 @@ esac; done
 # Keep in sync with training/training-program.html level cards.
 case "$LEVEL" in
   0)  P=(EURUSD.dk 2021.07.01 2021.12.31); A=(EURUSD.dk 2020.07.01 2020.12.31);;
-  1)  P=(EURUSD.dk 2021.01.01 2021.12.31); A=(EURUSD.dk 2020.01.01 2020.12.31);;
-  2)  P=(EURUSD.dk 2022.01.01 2022.12.31); A=(EURUSD.dk 2023.01.01 2023.12.31);;
+  1)  P=(EURUSD.dk 2021.01.01 2021.06.30); A=(EURUSD.dk 2023.01.01 2023.06.30);;   # amended 2026-08-07: coached L0 runs burned 2021-H2 + 2020-H2 (see coach-log.md)
+  2)  P=(EURUSD.dk 2022.01.01 2022.12.31); A=(EURUSD.dk 2023.07.01 2023.12.31);;   # alt halved so it can't collide with L1-alt
   3)  P=(GBPUSD.dk 2023.01.01 2023.12.31); A=(GBPUSD.dk 2021.01.01 2021.12.31);;
   4)  P=(USDJPY.dk 2024.01.01 2024.12.31); A=(USDJPY.dk 2022.01.01 2022.12.31);;
   5)  P=(XAUUSD.dk 2023.01.01 2023.12.31); A=(XAUUSD.dk 2022.01.01 2022.12.31);;
   6)  P=(US100.dk  2022.01.01 2022.12.31); A=(US500.dk  2022.01.01 2022.12.31);;
-  7a) P=(EURUSD.dk 2025.01.01 2025.12.31); A=();;
+  7a) P=(EURUSD.dk 2025.07.01 2026.06.30); A=();;   # was 2025 full year: 2025-H1 sits inside the interactively-traded 2024-01→2025-06 window (amended 2026-08-07; engineer must verify .dk tick coverage into 2026 before this runs)
   7b) P=(GBPUSD.dk 2025.01.01 2025.12.31); A=();;
   7c) P=(XAUUSD.dk 2025.01.01 2025.12.31); A=();;
   *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c)";;
