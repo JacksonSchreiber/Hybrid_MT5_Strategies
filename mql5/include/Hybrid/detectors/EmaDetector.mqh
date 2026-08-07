@@ -22,6 +22,7 @@ private:
    int      ENTRY_VALID_BARS;
    double   MAX_EXTEND_ATR;
    double   SL_BUFFER_ATR;
+   double   TP1_MIN_ATR;      // min distance (in ATR) TP1(mean) must sit beyond entry
    double   MIN_RR;
    double   RISK_PCT;
 
@@ -40,7 +41,7 @@ private:
    bool     m_pool;
    //--- diagnostic funnel counters
    int      m_dbg_bars, m_dbg_stretch, m_dbg_adxrej, m_dbg_d1rej, m_dbg_forming,
-            m_dbg_trigger, m_dbg_skip, m_dbg_emit;
+            m_dbg_trigger, m_dbg_skip, m_dbg_emit, m_dbg_geomrej;
    int      m_dbg_calls, m_dbg_newbar, m_dbg_handles, m_dbg_barscalc, m_dbg_rates;
 
 public:
@@ -48,18 +49,18 @@ public:
      {
       EMA_PERIOD=20; ATR_PERIOD=14; STRETCH_MIN=stretch_min; ADX_PERIOD=14;
       ADX_CEILING=adx_ceiling; D1_BREAK_LOOKBACK=20; PIN_WICK_RATIO=1.5;
-      ENTRY_VALID_BARS=3; MAX_EXTEND_ATR=1.0; SL_BUFFER_ATR=0.10; MIN_RR=min_rr; RISK_PCT=risk_pct;
+      ENTRY_VALID_BARS=3; MAX_EXTEND_ATR=1.0; SL_BUFFER_ATR=0.10; TP1_MIN_ATR=0.25; MIN_RR=min_rr; RISK_PCT=risk_pct;
       m_hEMA=INVALID_HANDLE; m_hATR=INVALID_HANDLE; m_hADX=INVALID_HANDLE;
       m_init=false; m_sym=""; m_last_bar=0; ResetCtx();
       m_dbg_bars=0; m_dbg_stretch=0; m_dbg_adxrej=0; m_dbg_d1rej=0;
-      m_dbg_forming=0; m_dbg_trigger=0; m_dbg_skip=0; m_dbg_emit=0;
+      m_dbg_forming=0; m_dbg_trigger=0; m_dbg_skip=0; m_dbg_emit=0; m_dbg_geomrej=0;
       m_dbg_calls=0; m_dbg_newbar=0; m_dbg_handles=0; m_dbg_barscalc=0; m_dbg_rates=0;
      }
   ~CEma20MeanRev()
      {
-      PrintFormat("EMA funnel: calls=%d newbar=%d handles=%d barscalc=%d rates=%d bars=%d stretch=%d adxrej=%d d1rej=%d forming=%d trigger=%d skip=%d EMIT=%d",
+      PrintFormat("EMA funnel: calls=%d newbar=%d handles=%d barscalc=%d rates=%d bars=%d stretch=%d adxrej=%d d1rej=%d forming=%d trigger=%d geomrej=%d skip=%d EMIT=%d",
                   m_dbg_calls,m_dbg_newbar,m_dbg_handles,m_dbg_barscalc,m_dbg_rates,
-                  m_dbg_bars,m_dbg_stretch,m_dbg_adxrej,m_dbg_d1rej,m_dbg_forming,m_dbg_trigger,m_dbg_skip,m_dbg_emit);
+                  m_dbg_bars,m_dbg_stretch,m_dbg_adxrej,m_dbg_d1rej,m_dbg_forming,m_dbg_trigger,m_dbg_geomrej,m_dbg_skip,m_dbg_emit);
      }
    string Name(void) { return "EMArev"; }
 
@@ -190,6 +191,17 @@ private:
          double band=m_ema_frozen-STRETCH_MIN*m_atr_frozen;
          tp2=MathMin(entry-MIN_RR*risk,band); tp=tp2; rr=(entry-tp)/risk;
         }
+      //--- SCALE-OUT GEOMETRY GUARD. The mean-reversion premise needs the entry to
+      //--- still sit stretched BEYOND the mean by a real distance, so TP1(=mean) is
+      //--- a genuine profit-side bank target and TP2 lies beyond TP1. Entry is the
+      //--- (later) trigger bar's close, which can revert PAST the frozen mean - if
+      //--- it has, the partial-at-mean leg is spent and the setup is degenerate
+      //--- ("TP1 above entry on a SELL"). Reject rather than emit a wrong-side
+      //--- scale-out or silently drop to single-target (which would change the
+      //--- 0.5/0.5 strategy into a different one wearing the same journal name).
+      double tp1gap  =(m_dir>0 ? tp1-entry : entry-tp1);
+      bool   tp2_beyond=(m_dir>0 ? tp2>tp1 : tp2<tp1);
+      if(tp1gap < TP1_MIN_ATR*m_atr_frozen || !tp2_beyond) { m_dbg_geomrej++; ResetCtx(); return false; }
       if(rr<MIN_RR) { ResetCtx(); return false; }
       if(LotsForRisk(sym,entry,sl,RISK_PCT)<DC_VolMin(sym)) { ResetCtx(); return false; }
 
