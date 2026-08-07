@@ -13,7 +13,9 @@ Three subsystems, built/planned in order:
 2. **Interactive forward-test harness** (Phase 2, built) — three MQL5
    detectors run inside the MT5 Strategy Tester against the imported tick
    data; every setup is drawn on the chart and presented to the account owner
-   via a colour-coded modal before anything is sized/placed.
+   via a colour-coded, **editable** dialog (retune Entry/SL/TP independently,
+   R:R recomputed live with a strategy floor; the chart lines update live)
+   before anything is sized/placed.
 3. **Production loop** (Phase 3, **planned, not built**) — an unattended EA on
    a VPS pushes signals to Telegram for remote approval. Nothing in this repo
    implements this yet.
@@ -150,10 +152,16 @@ ISignalDetector::Detect()  (mql5/include/Hybrid/detectors/{Smc,Fib,Ema}Detector.
 HybridForwardTest.mq5 :: HandleSignal()
          │  1. DrawOverlays()   -- zone rectangle, entry/SL/TP H-lines (colour-matched),
          │                         aux levels, optional 2nd zone, impulse-leg trendline
-         │  2. AskApproval()    -- TradeDialog.dll modal (or MessageBoxW fallback)
-         │                         BLOCKS the tester thread until answered
-         │  3. on approve: SizeByRisk() (1% equity / SL distance) -> g_trade.Buy/Sell()
-         │     on deny:    journal a "denied" row, no order
+         │  2. AskApproval()    -- TradeDialog.dll EDITABLE, poll-driven dialog
+         │                         (or MessageBoxW fallback). The EA pumps it from a
+         │                         while-loop in OnTick: holds the tester on the bar,
+         │                         but MQL runs between keystrokes so editing Entry/SL/TP
+         │                         (independent levels) re-sizes lots, recomputes live R:R
+         │                         (Accept blocked below the strategy floor), and moves the
+         │                         chart lines LIVE. Entry away from market => a pending order.
+         │  3. on approve: SizeByRisk() (1% equity / SL distance) -> market fill, OR a
+         │                 pending order (edited entry) bound to the setup on fill
+         │     on skip:    journal a "skipped" row (+ 1-6 reason), no order
          ▼
 ManageOpenPositions()  (every tick)
          │  for two-target strategies (Fib, EMA): bank partial_fraction at tp1,
@@ -174,7 +182,7 @@ how to headless-verify" workflow is in
 
 ### Hard safety rule
 
-The DLL modal is invoked **only** when `MQL_TESTER && MQL_VISUAL_MODE &&
+The interactive dialog is invoked **only** when `MQL_TESTER && MQL_VISUAL_MODE &&
 MQL_DLLS_ALLOWED` are all true (`HybridForwardTest.mq5 :: OnInit()`).
 Anywhere else — a live chart, a non-visual optimization run — the EA prints
 an explanation and stays completely inert: no dialog, no trades. This is
@@ -186,12 +194,19 @@ gated the same way, used for automated verification
 ### Why a DLL and not native MQL5
 
 `MessageBox()` does nothing inside the Strategy Tester. `user32.dll`'s
-`MessageBoxW` blocks the tester thread and does work, but cannot colour
-text. `TradeDialog.dll` (`mql5/dll/TradeDialog.c`) is a small Win32 helper
-that reproduces `MessageBoxW`'s blocking, system-modal behaviour with
-colour-coded fields matching the chart overlay palette. See
-[api-reference.md](api-reference.md#tradedialogdll) for the exact exported
-signature.
+`MessageBoxW` blocks the tester thread and does work, but cannot colour text
+and cannot be edited. `TradeDialog.dll` (`mql5/dll/TradeDialog.c`) is a small
+Win32 helper hosting colour-coded fields (matching the chart overlay palette)
+with **editable Stop Loss / Take Profit boxes**. It is **poll-driven**, not a
+blocking modal: `TD_Open` shows the window and returns, and the EA pumps it
+via `TD_Poll` from a `while`-loop in `OnTick`. That loop still blocks `OnTick`
+(so the tester stays held on the bar), but MQL runs between keystrokes — which
+is what lets it recompute R:R-locked levels, re-size lots, and reposition the
+chart H-lines live before the operator commits. Editing the entry is
+deliberately disallowed (read-only): these signals fill at market, so the
+entry price is a readout, not a level to place — see
+[decisions.md](decisions.md). See
+[api-reference.md](api-reference.md#tradedialogdll) for the exact exports.
 
 ## 3. Phase 3 (planned — not built)
 

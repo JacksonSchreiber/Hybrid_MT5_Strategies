@@ -21,7 +21,7 @@ project overview.
 |---|---|---|
 | 0 | Dev environment, agent team, QDM CLI working | Done |
 | 1 | Dukascopy tick data for all 49 symbols, imported to MT5 custom symbols | Pipeline built and running (see [docs/README.md](docs/README.md) for the live count) |
-| 2 | Interactive forward test: MT5 visual tester pauses on each alert for a manual yes/no via modal | Built (3 detectors + arbitration + two-target scale-out) |
+| 2 | Interactive forward test: MT5 visual tester pauses on each alert for a manual Accept/Skip via an editable dialog (retune Entry/SL/TP independently, live R:R + floor, chart lines update live) | Built (3 detectors + arbitration + two-target scale-out) |
 | 3 | Production: cloud EA → VPS → Telegram approval loop | Planned, not built |
 
 Details, current counts, and every contract: [docs/README.md](docs/README.md).

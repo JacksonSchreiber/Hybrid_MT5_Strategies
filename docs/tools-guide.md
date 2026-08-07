@@ -376,7 +376,7 @@ above — it should not re-alert on a normal slow download.
 
 **Purpose:** headless Strategy-Tester verification of
 `HybridForwardTest.mq5` — runs a tester pass in `AA_ALL`/`AA_SKIP` mode (no
-modal, no DLL) and summarizes the resulting journal. Source:
+dialog, no DLL) and summarizes the resulting journal. Source:
 `pipeline/mt5_verify.sh`.
 
 ```sh
@@ -393,6 +393,7 @@ modal, no DLL) and summarizes the resulting journal. Source:
 | `--from` / `--to` | `2023.01.01` / `2024.12.31` | Tester date range |
 | `--model` | `1` | `0`=every-tick, `1`=1-min OHLC (fast, default), `4`=real ticks (production-representative, slower) |
 | `--timeout` | `1800` | Max seconds to wait |
+| `--force-pending` | off | **Test-only.** Under `--mode ALL`, sets `InpForcePendingTest=true` so each signal is placed as a forced STOP pending instead of a market order — verifies the pending-order fill-binding / scale-out / expiry lifecycle headlessly (the journal shows `decision=approved_pending`, `is_pending=1`, `posid>0`, and populated `r_multiple`) |
 
 Mechanics: writes an EA `.set` file to `MQL5\Profiles\Tester\hft_verify.set`
 and a `[Tester]` startup ini (`ShutdownTerminal=1`), launches `terminal64
@@ -401,6 +402,44 @@ under `<Terminal>\Common\Files\journal\` (diffing directory listings
 before/after) and greps per-strategy row counts (`SweepMSS`/`DeepFib`/
 `EMArev`) plus the total row count. Same "refuse if terminal64 already
 running" safety as `mt5_import.sh`.
+
+---
+
+## review_session.py
+
+**Purpose:** grade a discretionary interactive session against the
+take-everything baseline — the AI-coaching report card. Source:
+`pipeline/review_session.py` (stdlib-only Python).
+
+```sh
+# 1. produce a baseline for the SAME symbol + window you traded interactively:
+./pipeline/mt5_verify.sh --mode ALL --strat SMC,Fib,EMA \
+      --symbol EURUSD.dk --from 2024.01.01 --to 2024.03.31 --model 4
+#    -> Common\Files\journal\EURUSD.dk_20240101_20240331.csv   (the baseline)
+
+# 2. grade your interactive journal against it:
+./pipeline/review_session.py \
+      --user     .../EURUSD.dk_<your interactive run>.csv \
+      --baseline .../EURUSD.dk_20240101_20240331.csv \
+      --out      session_report.md
+```
+
+| Flag | Meaning |
+|---|---|
+| `--user` | Your interactive session journal CSV (decisions, edits, `skip_reason`) |
+| `--baseline` | An `AA_ALL` headless journal for the **same symbol + window** (every signal taken at original levels) |
+| `--out` | Write the markdown report here (default: stdout) |
+
+The report card contains: **discretion alpha** (your total R minus the
+take-everything baseline, overall + per-strategy), **skip precision** (% of your
+skips whose baseline outcome was a loss, plus every bad skip / bad approve),
+**edit delta** (realised R on edited setups vs the original levels), **decision
+latency** (median / p90 `decision_ms` + fastest-quartile outcome split), and an
+**FTMO breach check** (hypothetical 5% daily / 10% max-drawdown on the $25k
+tester equity). Rows join on `signal_time`+`strategy` (nearest-bar fallback);
+every percentage prints its `n`, and per-strategy stats under n=10 are suppressed
+as "insufficient sample". Everything is read in R except the FTMO check (raw PnL,
+only as accurate as custom-symbol `tick_value`).
 
 ---
 

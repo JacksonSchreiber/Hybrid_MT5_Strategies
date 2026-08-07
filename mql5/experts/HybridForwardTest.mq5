@@ -26,10 +26,20 @@
 #include <Hybrid\detectors\FibDetector.mqh>
 #include <Hybrid\detectors\EmaDetector.mqh>
 
-//--- coloured dialog + plain fallback (both early-bound; see docs)
+//--- coloured EDITABLE dialog (poll-driven) + plain fallback (early-bound)
+//--- TD_Open shows the window (Entry/SL/TP as edit boxes) and returns at once;
+//--- the EA then loops TD_Poll (pumps window msgs, reads the boxes) and pushes
+//--- R:R-locked recomputed values back via TD_SetDisplay, moving the real chart
+//--- lines live, until the user clicks Accept(1)/Skip(2). See TradeDialog.c.
 #import "TradeDialog.dll"
-int ShowTradeDialog(string title,string symbol,string strategy,string direction,
-                    string entry,string sl,string tp,string lots,string rr);
+int  TD_Open(string title,string symbol,string strategy,string direction,
+             string entry,string sl,string tp,string lots,string rr);
+int  TD_Poll(double &entry,double &sl,double &tp,int &dirty);
+void TD_SetDisplay(string entry,string sl,string tp,string lots,string rr,int ok);
+void TD_Close(void);
+int  TD_SkipReason(void);   // 1-6 skip-reason code from the last skip (0 none)
+void TD_SetOrderType(string s); // set the "Order" row (MARKET / BUY LIMIT @ x)
+void TD_SetEvents(string abs_dates,string rel_dates); // upcoming-events list (both forms)
 #import
 #import "user32.dll"
 int MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType);
@@ -77,6 +87,10 @@ input color  InpEvtBull     = clrLimeGreen;   // event that came out BULLISH for
 input color  InpEvtBear     = clrOrangeRed;   // event that came out BEARISH for this ticker
 input color  InpEvtNeutral  = clrGray;        // as-expected / no actual (neutral)
 input int    InpEvtMaxDraw  = 600;            // safety cap on event lines drawn
+input int    InpEvtLookaheadHours = 48;       // overlay: draw upcoming events this far AHEAD (rolling)
+input int    InpEvtPastDays  = 7;             // overlay: also keep released events this many days back
+input int    InpEvtListDays  = 14;            // popup: list scheduled events this many days after a signal
+input int    InpEvtListMax   = 15;            // popup: cap the events list to this many rows
 //--- readability / decluttering
 input int    InpMaxVisibleSignals = 1;        // recent setups whose overlays stay on chart (older auto-clear)
 input bool   InpEventTopTierOnly  = true;     // events: only top-tier movers (rate/CPI/NFP/GDP/PMI)
@@ -86,13 +100,30 @@ input bool   InpShowFib     = true;           // draw the native Fib grid
 input bool   InpFibRay      = true;           // extend fib levels right across the chart
 input int    InpFontSize    = 10;             // overlay label font size (bigger = more readable)
 input int    InpLineWidth   = 2;              // overlay line width (thicker = more readable)
+//--- coaching / decision-capture (Phase-2 enhancements)
+input bool   InpShotOnDecision = true;        // save a chart screenshot when the dialog opens
+input int    InpShotW        = 1600;          // screenshot width (px)
+input int    InpShotH        = 900;           // screenshot height (px)
+//--- editable-entry pending orders
+input int    InpPendingExpiryBars = 3;        // unfilled pending order auto-cancels after N H4 bars
+input bool   InpForcePendingTest  = false;    // TEST-ONLY: under AA_ALL, place a forced STOP pending (verify fill-binding headlessly)
+input int    InpForcePendingPts   = 0;        // TEST-ONLY: stop offset in points (0 = auto: 3x stops-level)
 
 //--- globals
 CTrade         g_trade;
 ISignalDetector *g_detectors[3];           // priority order: [0]=SMC,[1]=Fib,[2]=EMA
 int            g_ndet       = 0;
 ENUM_TIMEFRAMES g_tf        = PERIOD_H4;
-bool            g_events_drawn = false;      // econ-event lines drawn once (first tick)
+bool            g_events_drawn = false;      // econ-event lines drawn once (first tick) [legacy, unused]
+//--- econ-event cache (parsed once from Common\Files\econ_events.csv, filtered to
+//--- THIS symbol's base/quote ccy). Redrawn each new bar so upcoming events appear
+//--- as replay advances; bias/actual is revealed ONLY once an event has passed.
+bool            g_ev_loaded = false;
+datetime        g_ev_t[];                    // event time (UTC)
+string          g_ev_ccy[];                  // event currency (base or quote of _Symbol)
+string          g_ev_name[];                 // event name
+int             g_ev_cb[];                   // ccy_bias (surprise sign for the event's ccy)
+bool            g_ev_top[];                  // passes the top-tier (notable) filter
 int             g_sig_ids[];                 // ids of setups with overlays on chart (for pruning)
 bool           g_active     = false;
 bool           g_started    = false;
@@ -110,6 +141,9 @@ struct JournalRow
    string   symbol;
    string   strategy;
    int      direction;
+   double   orig_entry;     // detector's PROPOSED entry (before any operator edit)
+   double   orig_sl;        // detector's proposed SL
+   double   orig_tp;        // detector's proposed TP (the single/display target)
    double   entry;          // realised fill price (for R math)
    double   sl;             // ORIGINAL sl (risk basis; never overwritten by BE move)
    double   tp;             // TP actually placed on the order (tp2 for two-target)
@@ -120,7 +154,12 @@ struct JournalRow
    double   risk_px;        // |entry - original sl|
    bool     tp1_done;       // partial taken + SL moved to BE
    double   closed_vol;     // accumulated closed volume
-   string   decision;       // approved / denied
+   string   decision;       // approved / skipped / approved_pending / expired
+   int      skip_reason;    // 1-6 skip-reason code (0 = not a skip / headless)
+   bool     edited;         // operator changed any level vs the detector's proposal
+   bool     is_pending;     // true = order placed as a pending (edited entry), awaiting fill
+   long     order_ticket;   // pending-order ticket (0 until placed; for expiry/fill binding)
+   datetime placed_time;    // when the pending order was placed (expiry bar-count basis)
    long     decision_ms;
    long     posid;
    bool     closed;
@@ -186,8 +225,9 @@ void OnTick()
   {
    if(!g_active) return;
 
-   //--- draw the high-impact economic-event lines once, on the first tick
-   if(InpShowEvents && !g_events_drawn) { DrawEconEvents(); g_events_drawn=true; }
+   //--- econ-event lines: parse the calendar once, then redraw on each new bar
+   //--- (below) so the forward window rolls with the replay.
+   if(InpShowEvents && !g_ev_loaded) { LoadEconEvents(); DrawEconEvents(); }
 
    if(!g_started)
      {
@@ -200,11 +240,17 @@ void OnTick()
 
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
+   //--- age out unfilled pending orders (edited-entry setups) every tick
+   ExpireStalePendings();
 
    //--- new-bar gate: detection only when a fresh H4 bar has closed
    datetime bar0=iTime(_Symbol,g_tf,0);
    if(bar0==g_last_bar) return;
    g_last_bar=bar0;
+
+   //--- roll the econ-event overlay forward with the replay (reveals upcoming
+   //--- events within the lookahead; bias stays hidden until each one fires)
+   if(InpShowEvents) DrawEconEvents();
 
    //--- call ALL detectors every bar so each advances its state machine;
    //--- keep the highest-priority valid emit (array is in priority order).
@@ -218,9 +264,10 @@ void OnTick()
    if(!have) return;
 
    //--- ONE active setup per symbol: suppress a new emit while a position is live
-   if(HasOpenPosition())
+   //--- OR while a pending order (edited-entry setup) is still resting/unfilled.
+   if(HasActiveOrderOrPosition())
      {
-      Print("Signal from ",best.strategy," suppressed - a position is already active (one setup/symbol).");
+      Print("Signal from ",best.strategy," suppressed - a position or pending order is already active (one setup/symbol).");
       return;
      }
    HandleSignal(best);
@@ -240,8 +287,69 @@ bool HasOpenPosition()
    return false;
   }
 
+//--- a resting, unfilled pending order counts as an active setup too
+bool HasActiveOrderOrPosition()
+  {
+   if(HasOpenPosition()) return true;
+   for(int i=0;i<ArraySize(g_rows);i++)
+      if(g_rows[i].is_pending && g_rows[i].order_ticket>0
+         && g_rows[i].posid<=0 && !g_rows[i].closed)
+         return true;
+   return false;
+  }
+
 //+------------------------------------------------------------------+
-//| Size -> overlays -> modal -> execute (two-target aware) -> log     |
+//| Cancel unfilled pending orders older than InpPendingExpiryBars H4 |
+//| bars and journal them as "expired". A fill (posid>0) or a prior    |
+//| close short-circuits. Proactive OrderDelete => we own the outcome. |
+//+------------------------------------------------------------------+
+void ExpireStalePendings()
+  {
+   for(int i=0;i<ArraySize(g_rows);i++)
+     {
+      if(!g_rows[i].is_pending || g_rows[i].posid>0 || g_rows[i].closed) continue;
+      if(g_rows[i].order_ticket<=0 || g_rows[i].placed_time<=0) continue;
+      int age=iBarShift(_Symbol,g_tf,g_rows[i].placed_time,false);   // H4 bars since placed
+      if(age<InpPendingExpiryBars) continue;
+      bool del=g_trade.OrderDelete((ulong)g_rows[i].order_ticket);
+      g_rows[i].decision="expired";
+      g_rows[i].closed=true;
+      Print("Signal #",g_rows[i].id," pending EXPIRED after ",age," H4 bars (unfilled)",
+            (del?"":"  [OrderDelete rc="+IntegerToString(g_trade.ResultRetcode())+"]"));
+      WriteJournal(g_journal_part);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| If the two-target split would leave either leg below the broker's |
+//| min volume, fall back to a single target. Runs at fill time (works |
+//| for both market fills and later pending fills).                    |
+//+------------------------------------------------------------------+
+void MinLotSplitGuard(int n)
+  {
+   if(g_rows[n].partial_frac<=0.0) return;
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0)step=0.01;
+   double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0)vmin=0.01;
+   double pv=MathFloor((g_rows[n].partial_frac*g_rows[n].lots)/step)*step;
+   if(pv<vmin || (g_rows[n].lots-pv)<vmin)
+     { g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0;
+       Print("Signal #",g_rows[n].id," min-lot: cannot scale out - single target."); }
+  }
+
+string OrderTypeName(ENUM_ORDER_TYPE t)
+  {
+   switch(t)
+     {
+      case ORDER_TYPE_BUY_LIMIT:  return "BUY LIMIT";
+      case ORDER_TYPE_BUY_STOP:   return "BUY STOP";
+      case ORDER_TYPE_SELL_LIMIT: return "SELL LIMIT";
+      case ORDER_TYPE_SELL_STOP:  return "SELL STOP";
+      default:                    return "MARKET";
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Size -> overlays -> dialog -> execute (market or pending) -> log   |
 //+------------------------------------------------------------------+
 void HandleSignal(SignalCandidate &cand)
   {
@@ -253,9 +361,24 @@ void HandleSignal(SignalCandidate &cand)
    PruneOverlays(id);
    ChartRedraw(0);
 
+   //--- snapshot the detector's PROPOSED levels BEFORE the dialog can edit them
+   double orig_entry=cand.entry, orig_sl=cand.sl, orig_tp=cand.tp;
+
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
-   long decision_ms=0;
-   bool approved=AskApproval(id,cand,lots,caption,decision_ms);
+   long decision_ms=0; int skip_reason=0; bool entry_edited=false;
+   bool approved=AskApproval(id,cand,lots,caption,decision_ms,skip_reason,entry_edited);
+   //--- the dialog may have retuned Entry/SL/TP (R:R held) - re-size on the
+   //--- final risk distance so the placed order + journal use edited levels.
+   lots=SizeByRisk(cand.entry,cand.sl);
+   //--- authoritative "operator edited a level" flag, taken from the COMMITTED
+   //--- cand vs the detector's proposal BEFORE any fill overwrites cand.entry.
+   //--- (Can't infer this in review from orig_entry vs entry: entry is later
+   //--- overwritten by the realised fill, which ~never equals the proposal.)
+   double etol=0.5*SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(etol<=0.0) etol=0.5*_Point;
+   bool any_edited=(MathAbs(cand.entry-orig_entry)>etol
+                    || MathAbs(cand.sl-orig_sl)>etol
+                    || MathAbs(cand.tp-orig_tp)>etol);
 
    //--- for two-target strategies the order TP is the RUNNER (tp2); we bank
    //--- partial_fraction at tp1 en route and move SL to BE.
@@ -265,55 +388,119 @@ void HandleSignal(SignalCandidate &cand)
    int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
    g_rows[n].id=id; g_rows[n].time=cand.zone_to; g_rows[n].symbol=_Symbol;
    g_rows[n].strategy=cand.strategy; g_rows[n].direction=cand.direction;
+   g_rows[n].orig_entry=orig_entry; g_rows[n].orig_sl=orig_sl; g_rows[n].orig_tp=orig_tp;
    g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=order_tp;
    g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=(two_target?cand.partial_fraction:0.0);
    g_rows[n].lots=lots; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
    g_rows[n].tp1_done=(!two_target); g_rows[n].closed_vol=0.0;
-   g_rows[n].decision_ms=decision_ms; g_rows[n].posid=0; g_rows[n].closed=false;
+   g_rows[n].decision_ms=decision_ms; g_rows[n].skip_reason=0; g_rows[n].edited=any_edited;
+   g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0;
+   g_rows[n].posid=0; g_rows[n].closed=false;
    g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
 
    if(approved)
      {
       g_rows[n].decision="approved";
       if(lots<=0.0)
+        {
          Print("Signal #",id," approved but lots<=0 - NOT placing (check ",_Symbol," specs).");
+        }
       else
         {
-         bool ok=(cand.direction>0)
-                 ? g_trade.Buy(lots,_Symbol,0.0,cand.sl,order_tp,caption)
-                 : g_trade.Sell(lots,_Symbol,0.0,cand.sl,order_tp,caption);
-         if(ok)
+         //--- decide market vs pending. Entry edited far enough from the market
+         //--- => pending (limit on the favourable side, stop on the breakout
+         //--- side). Untouched (or edited back to ~market) => market fill as today.
+         double mkt=(cand.direction>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
+                                     : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(ts<=0.0) ts=_Point;
+         double gate=MathMax(ts,(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point);
+         double pend_price=cand.entry;
+         bool want_pending=(entry_edited && MathAbs(cand.entry-mkt)>gate);
+         //--- TEST-ONLY headless probe (AA_ALL): force a pending so the
+         //--- OnTradeTransaction fill-binding + expiry paths can be verified.
+         //--- InpForcePendingPts > 0 => STOP just past market (fills fast);
+         //--- InpForcePendingPts < 0 => far LIMIT on the favourable side
+         //--- (won't fill -> exercises the expiry path); 0 => auto STOP.
+         if(InpForcePendingTest && InpAutoApprove==AA_ALL)
            {
-            ulong deal=g_trade.ResultDeal();
-            if(deal>0 && HistoryDealSelect(deal))
+            double off=(InpForcePendingPts!=0? MathAbs(InpForcePendingPts)*_Point : gate*3.0);
+            want_pending=true;
+            if(InpForcePendingPts<0)   // far limit -> likely expires unfilled
+               pend_price=(cand.direction>0? mkt-off : mkt+off);
+            else                       // stop just past market -> fills quickly
+               pend_price=(cand.direction>0? mkt+off : mkt-off);
+            //--- rigid-shift SL/TP with the forced entry so geometry stays valid
+            //--- (mirrors real EF_RIGID); keep the row's risk basis consistent.
+            double d=pend_price-cand.entry;
+            cand.sl+=d; order_tp+=d;
+            g_rows[n].sl=cand.sl; g_rows[n].tp=order_tp;
+            g_rows[n].risk_px=MathAbs(pend_price-cand.sl);
+           }
+
+         if(!want_pending)
+           {
+            //--- MARKET fill (unchanged behaviour)
+            bool ok=(cand.direction>0)
+                    ? g_trade.Buy(lots,_Symbol,0.0,cand.sl,order_tp,caption)
+                    : g_trade.Sell(lots,_Symbol,0.0,cand.sl,order_tp,caption);
+            if(ok)
               {
-               g_rows[n].posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
-               double fill=HistoryDealGetDouble(deal,DEAL_PRICE);
-               if(fill>0.0) { g_rows[n].entry=fill; g_rows[n].risk_px=MathAbs(fill-cand.sl); }
+               ulong deal=g_trade.ResultDeal();
+               if(deal>0 && HistoryDealSelect(deal))
+                 {
+                  g_rows[n].posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+                  double fill=HistoryDealGetDouble(deal,DEAL_PRICE);
+                  if(fill>0.0) { g_rows[n].entry=fill; g_rows[n].risk_px=MathAbs(fill-cand.sl); }
+                 }
+               if(two_target) MinLotSplitGuard(n);
+               Print("Signal #",id," APPROVED -> ",cand.strategy," ",DirStr(cand.direction)," ",
+                     DoubleToString(lots,2)," lots posid=",g_rows[n].posid,
+                     (two_target?"  [scale-out TP1/TP2]":"  [single TP]"));
               }
-            //--- can't-split guard (exactly-min-lot): fall back to single target
-            if(two_target)
-              {
-               double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0)step=0.01;
-               double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN); if(vmin<=0)vmin=0.01;
-               double pv=MathFloor((cand.partial_fraction*lots)/step)*step;
-               if(pv<vmin || (lots-pv)<vmin)
-                 { g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0;
-                   Print("Signal #",id," min-lot: cannot scale out - single target to TP2."); }
-              }
-            Print("Signal #",id," APPROVED -> ",cand.strategy," ",DirStr(cand.direction)," ",
-                  DoubleToString(lots,2)," lots posid=",g_rows[n].posid,
-                  (two_target?"  [scale-out TP1/TP2]":"  [single TP]"));
+            else
+               Print("Signal #",id," order FAILED: ",g_trade.ResultRetcode()," ",
+                     g_trade.ResultRetcodeDescription());
            }
          else
-            Print("Signal #",id," order FAILED: ",g_trade.ResultRetcode()," ",
-                  g_trade.ResultRetcodeDescription());
+           {
+            //--- PENDING order at the edited entry (fill binds later via OnTradeTransaction)
+            pend_price=NormPrice(pend_price);
+            ENUM_ORDER_TYPE ot;
+            if(cand.direction>0) ot=(pend_price<mkt? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_BUY_STOP);
+            else                 ot=(pend_price>mkt? ORDER_TYPE_SELL_LIMIT: ORDER_TYPE_SELL_STOP);
+            bool ok=false;
+            switch(ot)
+              {
+               case ORDER_TYPE_BUY_LIMIT:  ok=g_trade.BuyLimit (lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
+               case ORDER_TYPE_BUY_STOP:   ok=g_trade.BuyStop  (lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
+               case ORDER_TYPE_SELL_LIMIT: ok=g_trade.SellLimit(lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
+               case ORDER_TYPE_SELL_STOP:  ok=g_trade.SellStop (lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
+              }
+            if(ok)
+              {
+               g_rows[n].is_pending=true;
+               g_rows[n].order_ticket=(long)g_trade.ResultOrder();
+               g_rows[n].placed_time=TimeCurrent();
+               g_rows[n].decision="approved_pending";
+               g_rows[n].entry=pend_price;               // journal the pending price until fill
+               g_rows[n].risk_px=MathAbs(pend_price-cand.sl);
+               ObjectSetDouble(0,StringFormat("%s%d_entry",InpObjPrefix,id),OBJPROP_PRICE,pend_price);
+               ChartRedraw(0);
+               Print("Signal #",id," PENDING ",OrderTypeName(ot)," @ ",DoubleToString(pend_price,_Digits),
+                     " ticket=",g_rows[n].order_ticket," (expires in ",InpPendingExpiryBars," H4 bars)");
+              }
+            else
+               Print("Signal #",id," pending ",OrderTypeName(ot)," FAILED: ",g_trade.ResultRetcode(),
+                     " ",g_trade.ResultRetcodeDescription());
+           }
         }
      }
    else
      {
-      g_rows[n].decision="denied";
-      Print("Signal #",id," ",cand.strategy," DENIED (decided in ",decision_ms," ms)");
+      g_rows[n].decision="skipped";
+      g_rows[n].skip_reason=skip_reason;
+      Print("Signal #",id," ",cand.strategy," SKIPPED (reason ",skip_reason,
+            ", decided in ",decision_ms," ms)");
      }
 
    WriteJournal(g_journal_part);
@@ -331,7 +518,8 @@ void ManageOpenPositions()
 
    for(int i=0;i<ArraySize(g_rows);i++)
      {
-      if(g_rows[i].decision!="approved" || g_rows[i].posid<=0) continue;
+      if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending")
+         || g_rows[i].posid<=0) continue;
       if(g_rows[i].closed || g_rows[i].tp1_done) continue;
       if(g_rows[i].partial_frac<=0.0 || g_rows[i].tp1<=0.0) continue;
       if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;   // already gone
@@ -357,11 +545,233 @@ void ManageOpenPositions()
   }
 
 //+------------------------------------------------------------------+
+//| Snap a price to the symbol tick grid + round to digits.           |
+//+------------------------------------------------------------------+
+double NormPrice(double p)
+  {
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(ts<=0.0) ts=_Point;
+   if(ts>0.0) p=MathRound(p/ts)*ts;
+   return NormalizeDouble(p,_Digits);
+  }
+
+//+------------------------------------------------------------------+
+//| Geometry validity for a dir-signed setup: SL<entry<TP for BUY     |
+//| (inverted for SELL), each leg at least a tick (and broker stops   |
+//| level) apart. Entry~current market, so stops-level is a proxy.    |
+//+------------------------------------------------------------------+
+bool ValidGeom(int dir,double e,double s,double t)
+  {
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(ts<=0.0) ts=_Point;
+   double minstop=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   double gate=MathMax(ts,minstop);
+   if(e<=0.0||s<=0.0||t<=0.0) return false;
+   if(dir>0) { if(!(s<e && e<t)) return false; if(e-s<gate || t-e<gate) return false; }
+   else      { if(!(t<e && e<s)) return false; if(s-e<gate || e-t<gate) return false; }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Reward:risk from a dir-signed setup (0 if risk is degenerate).     |
+//| R:R is a live OUTPUT of the levels, not a locked invariant - SL and |
+//| TP are structural, so editing one never moves the other.           |
+//+------------------------------------------------------------------+
+double RRatio(double e,double s,double t)
+  {
+   double risk=MathAbs(e-s);
+   return (risk>0.0 ? MathAbs(t-e)/risk : 0.0);
+  }
+
+//--- the strategy's minimum acceptable R:R (for the "below floor" warning
+//--- when anchored-entry editing drives R:R under what the detector requires)
+double StratMinRR(string strat)
+  {
+   if(strat=="SweepMSS") return InpSmcMinRR;
+   if(strat=="DeepFib")  return InpFibMinRR;
+   if(strat=="EMArev")   return InpEmaMinRR;
+   return 1.0;
+  }
+
+//--- "Order" row label from the (edited) entry vs current market: within a tick/
+//--- stops-level of market => MARKET; otherwise the auto-selected pending type.
+string OrderNote(int dir,double entry)
+  {
+   double mkt=(dir>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID));
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(ts<=0.0) ts=_Point;
+   double gate=MathMax(ts,(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point);
+   if(MathAbs(entry-mkt)<=gate) return "MARKET";
+   ENUM_ORDER_TYPE ot;
+   if(dir>0) ot=(entry<mkt? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_BUY_STOP);
+   else      ot=(entry>mkt? ORDER_TYPE_SELL_LIMIT: ORDER_TYPE_SELL_STOP);
+   return OrderTypeName(ot)+" @ "+DoubleToString(entry,_Digits);
+  }
+
+//+------------------------------------------------------------------+
+//| Decision-time chart screenshot -> MQL5\Files\journal\shots\.      |
+//| Captures what the operator sees the instant the dialog opens      |
+//| (chart + overlays; the Win32 dialog is a separate window and is   |
+//| NOT in the shot). ChartScreenShot can only write under MQL5\Files |
+//| (not Common\Files), so shots live beside the terminal, separate   |
+//| from the Common\Files journal CSVs - keyed by the same stem+id.   |
+//+------------------------------------------------------------------+
+void DecisionScreenshot(int id)
+  {
+   if(!InpShotOnDecision) return;
+   FolderCreate("journal\\shots");   // MQL5\Files\journal\shots (idempotent)
+   string f=StringFormat("journal\\shots\\%s_%s_%d.png",_Symbol,StampCompact(g_start_time),id);
+   if(!ChartScreenShot(0,f,InpShotW,InpShotH,ALIGN_RIGHT))
+      Print("Signal #",id," screenshot failed err=",GetLastError());
+  }
+
+//+------------------------------------------------------------------+
+//| Interactive EDITABLE approval (poll-driven TradeDialog.dll).      |
+//| Entry/SL/TP are INDEPENDENT editable fields (SL & TP are          |
+//| structural, so editing one never moves the other). Each edit      |
+//| re-sizes lots to hold 1% risk, recomputes + displays the live     |
+//| R:R, MOVES the chart lines, and BLOCKS Accept while R:R is below  |
+//| the strategy's floor. On Accept, writes the final levels into     |
+//| cand (collapsing a two-target plan to a single target if edited). |
+//| Entry moved away from market => a pending order. true=approve.    |
+//+------------------------------------------------------------------+
+bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
+                       int &skip_reason,bool &entry_edited)
+  {
+   skip_reason=0; entry_edited=false;
+   int    dir=cand.direction;
+   double e0=NormPrice(cand.entry), s0=NormPrice(cand.sl), t0=NormPrice(cand.tp);
+   //--- R:R is a live OUTPUT of the levels (not locked); rr0 is just the opening value
+   double rr=RRatio(e0,s0,t0);
+   if(rr<=0.0) rr=cand.rr;
+   double floor=StratMinRR(cand.strategy);   // strategy's minimum R:R (Accept blocked below it)
+
+   string stratArg=cand.strategy+(cand.d1_context?"  [D1 aligned]":"");
+   if(cand.comment!="") stratArg+=" - "+cand.comment;
+   string p=StringFormat("%s%d_",InpObjPrefix,id);
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(ts<=0.0) ts=_Point;
+   double tol=0.5*ts;
+
+   double lots0=SizeByRisk(e0,s0);
+   int ok0 = (ValidGeom(dir,e0,s0,t0) && rr>=floor) ? 1 : 0;
+   if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),
+              DoubleToString(e0,_Digits),DoubleToString(s0,_Digits),DoubleToString(t0,_Digits),
+              StringFormat("%s  (%.1f%% risk)",DoubleToString(lots0,2),InpRiskPct*100.0),
+              StringFormat("1 : %s%s",DoubleToString(rr,2),plan))!=1)
+     {
+      Print("Signal #",id," dialog failed to open - fail-closed to SKIP.");
+      return false;
+     }
+   //--- decision-time chart snapshot: exactly what the operator sees now (the
+   //--- overlays were drawn + redrawn before this call). The Win32 dialog is a
+   //--- separate window, so it is NOT in the shot - just the chart + overlays.
+   DecisionScreenshot(id);
+   //--- populate the popup's upcoming-events list (both absolute + relative forms
+   //--- so the coach-mode toggle can redact without re-querying).
+   string ev_abs="",ev_rel="";
+   if(g_ev_loaded) BuildEventBlocks(cand.zone_to,ev_abs,ev_rel);
+   else            { ev_abs="(events not loaded)"; ev_rel=ev_abs; }
+   TD_SetEvents(ev_abs,ev_rel);
+   //--- ensure the Accept button starts in the correct enabled state
+   TD_SetDisplay(DoubleToString(e0,_Digits),DoubleToString(s0,_Digits),DoubleToString(t0,_Digits),
+                 StringFormat("%s  (%.1f%% risk)",DoubleToString(lots0,2),InpRiskPct*100.0),
+                 StringFormat("1 : %s%s",DoubleToString(rr,2),plan),ok0);
+
+   double ce=e0, cs=s0, ct=t0;    // current committed (normalised) levels
+   bool   edited=false;
+   bool   shown_invalid=false;    // pushed the invalid state to the dialog already?
+   int    r=0;
+   while(true)
+     {
+      double e=ce, s=cs, t=ct; int dirty=0;
+      r=TD_Poll(e,s,t,dirty);
+      if(r!=0) { if(r==2) skip_reason=TD_SkipReason(); break; }  // 1=accept, 2=skip
+      if(!dirty) { UiSpin(12); continue; }
+
+      //--- which field did the user change? (tolerance kills sub-tick jitter)
+      int changed=0;
+      if(MathAbs(e-ce)>tol)      changed=1;
+      else if(MathAbs(s-cs)>tol) changed=2;
+      else if(MathAbs(t-ct)>tol) changed=3;
+      if(changed==0) { UiSpin(12); continue; }
+
+      //--- INDEPENDENT levels: an edit changes ONLY its own field. SL and TP are
+      //--- structural (a prior extreme, a swing) - editing the stop must not move
+      //--- the target, and vice-versa; entry edits leave SL/TP put. R:R is a live
+      //--- readout + a floor guard (Accept blocks below the strategy's minimum),
+      //--- never a lock. Lots re-size to hold 1% on the new stop distance.
+      if(changed==1)      { e=NormPrice(e); s=cs; t=ct; }   // entry moved (SL/TP fixed)
+      else if(changed==2) { s=NormPrice(s); e=ce; t=ct; }   // SL moved (entry/TP fixed)
+      else                { t=NormPrice(t); e=ce; s=cs; }   // TP moved (entry/SL fixed)
+
+      if(ValidGeom(dir,e,s,t))
+        {
+         ce=e; cs=s; ct=t; edited=true; shown_invalid=false;
+         entry_edited=(MathAbs(ce-e0)>tol);
+         rr=RRatio(ce,cs,ct);
+         bool okr=(rr>=floor);                 // block Accept below the strategy floor
+         double lots=SizeByRisk(ce,cs);
+         //--- move the real chart lines + redraw (proven to repaint while held)
+         ObjectSetDouble(0,p+"entry",OBJPROP_PRICE,ce);
+         ObjectSetDouble(0,p+"sl",   OBJPROP_PRICE,cs);
+         ObjectSetDouble(0,p+"tp",   OBJPROP_PRICE,ct);
+         ChartRedraw(0);
+         TD_SetOrderType(OrderNote(dir,ce));
+         string rrs=StringFormat("1 : %s%s",DoubleToString(rr,2),
+                     (okr?"":StringFormat("   < MIN %s",DoubleToString(floor,1))));
+         TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(ct,_Digits),
+                       StringFormat("%s  (%.1f%% risk)",DoubleToString(lots,2),InpRiskPct*100.0),
+                       rrs, okr?1:0);
+        }
+      else if(!shown_invalid)
+        {
+         //--- bad ordering (SL/entry/TP crossed): flag once, keep last-good levels.
+         shown_invalid=true;
+         TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(ct,_Digits),
+                       "--","(bad levels)",0);
+        }
+      UiSpin(12);
+     }
+   TD_Close();
+
+   if(r==1)   // approved: commit the (possibly edited) levels into cand
+     {
+      cand.entry=ce; cand.sl=cs; cand.tp=ct;
+      double risk=MathAbs(ce-cs);
+      cand.rr=(risk>0.0 ? MathAbs(ct-ce)/risk : cand.rr);
+      if(edited)
+        {
+         //--- the detector's TP1/TP2 partial plan is anchored to the ORIGINAL
+         //--- levels; once the user retunes Entry/SL/TP it is stale, so collapse
+         //--- to a single target at the edited TP.
+         cand.tp1=0.0; cand.tp2=0.0; cand.partial_fraction=0.0;
+         Print("Signal #",id," levels edited -> single target E=",DoubleToString(ce,_Digits),
+               " SL=",DoubleToString(cs,_Digits)," TP=",DoubleToString(ct,_Digits),
+               "  (R:R ",DoubleToString(cand.rr,2),")");
+        }
+      return true;
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//| Short busy-wait (ms) for the interactive poll loop. Sleep() is a  |
+//| no-op in the tester, so spin on GetTickCount to cap CPU while the |
+//| dialog stays responsive between TD_Poll pumps.                    |
+//+------------------------------------------------------------------+
+void UiSpin(int ms)
+  {
+   uint t0=GetTickCount();
+   while((GetTickCount()-t0)<(uint)ms) { /* burn */ }
+  }
+
+//+------------------------------------------------------------------+
 //| Modal / auto-approve. Returns true on approve.                    |
 //+------------------------------------------------------------------+
-bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &decision_ms)
+bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &decision_ms,
+                 int &skip_reason,bool &entry_edited)
   {
-   //--- headless automated verification: no DLL, no modal
+   skip_reason=0; entry_edited=false;
+   //--- headless automated verification: no DLL, no modal (never edits entry)
    if(InpAutoApprove==AA_ALL)  { decision_ms=0; return true;  }
    if(InpAutoApprove==AA_SKIP) { decision_ms=0; return false; }
 
@@ -374,14 +784,9 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
 
    if(InpUseColoredDialog)
      {
-      string stratArg=cand.strategy+(cand.d1_context?"  [D1 aligned]":"");
-      if(cand.comment!="") stratArg+=" - "+cand.comment;
-      int r=ShowTradeDialog(caption,_Symbol,stratArg,DirStr(cand.direction),
-               DoubleToString(cand.entry,_Digits),DoubleToString(cand.sl,_Digits),
-               DoubleToString(cand.tp,_Digits),
-               StringFormat("%s  (%.1f%% risk)",DoubleToString(lots,2),InpRiskPct*100.0),
-               StringFormat("1 : %s%s",DoubleToString(cand.rr,2),plan));
-      yes=(r==1);
+      //--- editable, R:R-locked, live-updating dialog (may mutate cand levels);
+      //--- returns the skip-reason code and whether the entry was edited (pending).
+      yes=InteractiveDialog(id,cand,caption,plan,skip_reason,entry_edited);
      }
    else
      {
@@ -396,6 +801,7 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
          (cand.comment!=""?cand.comment:""),DoubleToString(lots,2),InpRiskPct*100.0);
       int res=MessageBoxW(0,body,caption,MB_YESNO|MB_ICONQUESTION|MB_SYSTEMMODAL);
       yes=(res==IDYES);
+      if(!yes) skip_reason=6;   // fallback path has no reason keys -> "other"
      }
    decision_ms=(long)(GetTickCount()-t0);
    return(yes);
@@ -646,7 +1052,9 @@ bool IsTopTierEvent(string ev)
    for(int i=0;i<ArraySize(skip);i++) if(StringFind(e,skip[i])>=0) return false;
    string keys[]={"federal funds","fomc","rate decision","official bank rate",
                   "main refinancing","cash rate","cpi","non-farm","nonfarm",
-                  "gdp","pmi","unemployment rate","ecb press"};
+                  "gdp","pmi","unemployment rate","ecb press",
+                  "monetary policy","press conference","interest rate",
+                  "rate statement","bank rate"};
    for(int i=0;i<ArraySize(keys);i++) if(StringFind(e,keys[i])>=0) return true;
    return false;
   }
@@ -660,42 +1068,67 @@ bool IsTopTierEvent(string ev)
 //| actual-vs-forecast surprise (a post-release review aid). Never    |
 //| affects trade logic.                                             |
 //+------------------------------------------------------------------+
-void DrawEconEvents()
+//--- parse econ_events.csv ONCE into the cache (only this pair's ccy events).
+void LoadEconEvents()
   {
+   g_ev_loaded=true;                 // set even on failure so we don't retry each bar
+   ArrayResize(g_ev_t,0); ArrayResize(g_ev_ccy,0);
+   ArrayResize(g_ev_name,0); ArrayResize(g_ev_cb,0); ArrayResize(g_ev_top,0);
    int h=FileOpen("econ_events.csv",FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON,',');
    if(h==INVALID_HANDLE)
      { Print("econ_events.csv not in Common\\Files - no event lines (err ",GetLastError(),")"); return; }
-
    string base,quote; SymbolCcy(base,quote);
-   int bars=Bars(_Symbol,g_tf);
-   if(bars<2){ FileClose(h); return; }
-   datetime tmin=iTime(_Symbol,g_tf,bars-1);
-   datetime tmax=iTime(_Symbol,g_tf,0)+PeriodSeconds(g_tf);
-
    for(int k=0;k<6 && !FileIsEnding(h);k++) FileReadString(h);   // skip header
-
-   int n=0,drawn=0;
-   while(!FileIsEnding(h) && drawn<InpEvtMaxDraw)
+   int n=0;
+   while(!FileIsEnding(h))
      {
       string sdt=FileReadString(h);
       if(sdt==""){ if(FileIsEnding(h)) break; else continue; }
       string ccy=FileReadString(h);
       string ev =FileReadString(h);
-      string act=FileReadString(h);
-      string fc =FileReadString(h);
+      FileReadString(h);             // actual  (not cached - never shown before release)
+      FileReadString(h);             // forecast
       int    cb =(int)StringToInteger(FileReadString(h));
-      n++;
-
+      if(ccy!=base && ccy!=quote) continue;      // only THIS pair's currencies
       datetime t=StringToTime(sdt);
-      if(t<=0 || t<tmin || t>tmax) continue;
-      int rel=0;
-      if(ccy==base) rel=1; else if(ccy==quote) rel=-1; else continue;
-      if(InpEventTopTierOnly && !IsTopTierEvent(ev)) continue;
-      int tb=cb*rel;
-      color clr=(tb>0?InpEvtBull:(tb<0?InpEvtBear:InpEvtNeutral));
-      string tag=(tb>0?" [BULL]":(tb<0?" [BEAR]":""));
+      if(t<=0) continue;
+      int m=ArraySize(g_ev_t);
+      ArrayResize(g_ev_t,m+1); ArrayResize(g_ev_ccy,m+1); ArrayResize(g_ev_name,m+1);
+      ArrayResize(g_ev_cb,m+1); ArrayResize(g_ev_top,m+1);
+      g_ev_t[m]=t; g_ev_ccy[m]=ccy; g_ev_name[m]=ev; g_ev_cb[m]=cb;
+      g_ev_top[m]=IsTopTierEvent(ev);
+      n++;
+     }
+   FileClose(h);
+   PrintFormat("econ cache: %d %s/%s events loaded",n,base,quote);
+  }
 
-      string vn=StringFormat("%sEVT_%d",InpObjPrefix,n);
+//--- rolling, LOOK-AHEAD-SAFE redraw. Upcoming events (t>now) render NEUTRAL with
+//--- an [upcoming] tag - no bias/actual leaked; a released event (t<=now) reveals
+//--- its bull/bear colour + surprise. Redrawn each new bar so the forward window
+//--- (now .. now+InpEvtLookaheadHours) fills in as replay advances.
+void DrawEconEvents()
+  {
+   if(!g_ev_loaded) return;
+   ObjectsDeleteAll(0,InpObjPrefix+"EVT");   // clear EVT_* and EVTL_* from last redraw
+   string base,quote; SymbolCcy(base,quote);
+   datetime now=iTime(_Symbol,g_tf,0);
+   datetime tmin=now-(datetime)((long)InpEvtPastDays*86400);
+   datetime tmax=now+(datetime)((long)InpEvtLookaheadHours*3600);
+   double px_now=iClose(_Symbol,g_tf,0);
+   int drawn=0;
+   for(int i=0;i<ArraySize(g_ev_t) && drawn<InpEvtMaxDraw;i++)
+     {
+      datetime t=g_ev_t[i];
+      if(t<tmin || t>tmax) continue;
+      if(InpEventTopTierOnly && !g_ev_top[i]) continue;
+      int rel=(g_ev_ccy[i]==base?1:(g_ev_ccy[i]==quote?-1:0));
+      if(rel==0) continue;
+      bool released=(t<=now);
+      int tb=(released? g_ev_cb[i]*rel : 0);   // no bias before the event fires
+      color clr=(released? (tb>0?InpEvtBull:(tb<0?InpEvtBear:InpEvtNeutral)) : InpEvtNeutral);
+      string tag=(released? (tb>0?" [BULL]":(tb<0?" [BEAR]":"")) : " [upcoming]");
+      string vn=StringFormat("%sEVT_%d",InpObjPrefix,i);
       if(ObjectCreate(0,vn,OBJ_VLINE,0,t,0))
         {
          ObjectSetInteger(0,vn,OBJPROP_COLOR,clr);
@@ -705,12 +1138,11 @@ void DrawEconEvents()
          ObjectSetInteger(0,vn,OBJPROP_SELECTABLE,false);
         }
       int sh=iBarShift(_Symbol,g_tf,t,false);
-      double py=(sh>=0? iClose(_Symbol,g_tf,sh) : 0.0);
+      double py=(released && sh>=0? iClose(_Symbol,g_tf,sh) : px_now);  // future: anchor at current price
       if(py>0.0)
         {
-         string tn=StringFormat("%sEVTL_%d",InpObjPrefix,n);
-         string txt=StringFormat(" %s %s%s",ccy,ev,tag);
-         if(act!="") txt+=StringFormat("  (a:%s f:%s)",act,fc);
+         string tn=StringFormat("%sEVTL_%d",InpObjPrefix,i);
+         string txt=StringFormat(" %s %s%s",g_ev_ccy[i],g_ev_name[i],tag);
          if(ObjectCreate(0,tn,OBJ_TEXT,0,t,py))
            {
             ObjectSetString (0,tn,OBJPROP_TEXT,txt);
@@ -723,9 +1155,43 @@ void DrawEconEvents()
         }
       drawn++;
      }
-   FileClose(h);
-   PrintFormat("econ events: drew %d high-impact lines for %s (base=%s quote=%s), scanned %d rows",
-               drawn,_Symbol,base,quote,n);
+  }
+
+//--- "DD MMM HH:MM" (absolute, human) for the popup event list
+string FmtAbsDate(datetime t)
+  {
+   MqlDateTime d; TimeToStruct(t,d);
+   string mon[]={"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+   int mi=(d.mon>=1 && d.mon<=12)? d.mon-1 : 0;
+   return StringFormat("%02d %s %02d:%02d",d.day,mon[mi],d.hour,d.min);
+  }
+
+//--- popup "upcoming events" block in BOTH forms: absolute ("22 Jul 11:45 EUR ..")
+//--- and relative ("in 1d 4h  EUR .."). Relative dates + symbol redaction stop a
+//--- coaching screenshot from being reverse-identified. Only SCHEDULED info
+//--- (time/ccy/name) - never an outcome, since every listed event is AFTER the
+//--- decision. Notable (top-tier) events over the next InpEvtListDays days.
+void BuildEventBlocks(datetime sig,string &absb,string &relb)
+  {
+   absb=""; relb="";
+   string base,quote; SymbolCcy(base,quote);
+   datetime tmax=sig+(datetime)((long)InpEvtListDays*86400);
+   int cnt=0;
+   for(int i=0;i<ArraySize(g_ev_t);i++)
+     {
+      datetime t=g_ev_t[i];
+      if(t<sig || t>tmax) continue;          // strictly the forward window
+      if(!g_ev_top[i]) continue;             // notable only
+      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote) continue;
+      long ds=(long)(t-sig);
+      int dd=(int)(ds/86400), hh=(int)((ds%86400)/3600);
+      string nm=StringFormat("%s %s",g_ev_ccy[i],g_ev_name[i]);
+      absb+=StringFormat("%s  %s\r\n",FmtAbsDate(t),nm);
+      relb+=StringFormat("in %dd %dh  %s\r\n",dd,hh,nm);
+      if(++cnt>=InpEvtListMax){ absb+="(+ more)\r\n"; relb+="(+ more)\r\n"; break; }
+     }
+   if(cnt==0)
+     { absb=StringFormat("(no high-impact events in the next %dd)",InpEvtListDays); relb=absb; }
   }
 
 //+------------------------------------------------------------------+
@@ -868,6 +1334,30 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(trans.type!=TRADE_TRANSACTION_DEAL_ADD) return;
    ulong deal=trans.deal;
    if(deal<=0 || !HistoryDealSelect(deal)) return;
+
+   //--- PENDING FILL: a pending order we placed just became a position. Bind the
+   //--- row to the new position and realise the entry/risk from the actual fill,
+   //--- so the whole downstream lifecycle (scale-out, BE, exit R) works for it.
+   if(HistoryDealGetInteger(deal,DEAL_ENTRY)==DEAL_ENTRY_IN)
+     {
+      long dorder=(long)HistoryDealGetInteger(deal,DEAL_ORDER);
+      for(int i=0;i<ArraySize(g_rows);i++)
+        {
+         if(!g_rows[i].is_pending || g_rows[i].order_ticket!=dorder) continue;
+         if(g_rows[i].posid>0 || g_rows[i].closed) continue;
+         g_rows[i].posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+         double fill=HistoryDealGetDouble(deal,DEAL_PRICE);
+         if(fill>0.0) { g_rows[i].entry=fill; g_rows[i].risk_px=MathAbs(fill-g_rows[i].sl); }
+         g_rows[i].decision="approved_pending";      // keep provenance; guards accept it
+         if(g_rows[i].partial_frac>0.0) MinLotSplitGuard(i);
+         Print("Signal #",g_rows[i].id," PENDING FILLED -> posid=",g_rows[i].posid,
+               " @ ",DoubleToString(fill,_Digits));
+         WriteJournal(g_journal_part);
+         return;
+        }
+      return;   // an entry-in deal that isn't one of our pendings
+     }
+
    if(HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_OUT) return;
 
    long posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
@@ -912,17 +1402,21 @@ void WriteJournal(string path)
    int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
    if(h==INVALID_HANDLE) { Print("WARNING: cannot open journal '",path,"' err=",GetLastError()); return; }
    FileWriteString(h,
-      "signal_id,signal_time,symbol,strategy,direction,entry,sl,tp,tp1,tp2,partial_frac,"
-      "lots,decision,decision_ms,posid,tp1_done,exit_time,exit_price,pnl,r_multiple\n");
+      "signal_id,signal_time,symbol,strategy,direction,"
+      "orig_entry,orig_sl,orig_tp,entry,sl,tp,tp1,tp2,partial_frac,lots,"
+      "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
+      "exit_time,exit_price,pnl,r_multiple\n");
    for(int i=0;i<ArraySize(g_rows);i++)
      {
       JournalRow r=g_rows[i];
-      string line=StringFormat("%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%s,%s,%s,%s,%s\n",
+      string line=StringFormat(
+         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s\n",
          r.id,TimeToString(r.time,TIME_DATE|TIME_SECONDS),r.symbol,r.strategy,DirStr(r.direction),
+         DoubleToString(r.orig_entry,_Digits),DoubleToString(r.orig_sl,_Digits),DoubleToString(r.orig_tp,_Digits),
          DoubleToString(r.entry,_Digits),DoubleToString(r.sl,_Digits),DoubleToString(r.tp,_Digits),
          (r.tp1>0?DoubleToString(r.tp1,_Digits):""),(r.tp2>0?DoubleToString(r.tp2,_Digits):""),
-         r.partial_frac,DoubleToString(r.lots,2),r.decision,r.decision_ms,r.posid,
-         (r.tp1_done?1:0),
+         r.partial_frac,DoubleToString(r.lots,2),
+         r.decision,r.skip_reason,(r.edited?1:0),(r.is_pending?1:0),r.decision_ms,r.posid,(r.tp1_done?1:0),
          (r.closed?TimeToString(r.exit_time,TIME_DATE|TIME_SECONDS):""),
          (r.closed?DoubleToString(r.exit_price,_Digits):""),
          (r.closed?DoubleToString(r.pnl,2):""),

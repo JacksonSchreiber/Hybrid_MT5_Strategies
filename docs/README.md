@@ -17,7 +17,9 @@ account. Three rule-based detectors (Liquidity Sweep + Market Structure
 Shift, Deep Fibonacci Retracement, 20 EMA Mean Reversion) watch H4/D1 charts
 across 49 FTMO symbols for setups; nothing trades automatically — every
 signal is presented to the account owner (Jackson) as a chart overlay plus a
-colour-coded approve/deny dialog, sized at 1% account risk. Phase 1 (get five-plus
+colour-coded, editable Accept/Skip dialog (retune Entry/SL/TP independently,
+R:R recomputed live with a strategy floor; chart lines update live), sized at
+1% account risk. Phase 1 (get five-plus
 years of real Dukascopy tick history into MT5 as `.dk` custom symbols) and
 Phase 2 (the interactive MT5 Strategy Tester harness that runs the detectors
 and pops the approval dialog) are built. Phase 3 (an unattended cloud EA on a
@@ -35,7 +37,7 @@ built**.
 | [pilot-eurusd.md](pilot-eurusd.md) | The original EURUSD dry run that discovered QDM CLI's real behavior (e.g. `datefrom`/`dateto` ignored by `action=update`, honored by `exportToMT5`). Historical record — findings are folded into qdm-cli.md and tools-guide.md. |
 | [mt5-import.md](mt5-import.md) | The manual tick-import pipeline design (`CustomTicksAdd` vs `CustomTicksReplace`, M1 bar building, CSV parsing) and the original EURUSD smoke-test steps. |
 | [auto-import.md](auto-import.md) | The unattended `AutoImport.mq5` EA + `mt5_import.sh` driver that replaced the manual drag-and-drop import for the 49-symbol fan-out. |
-| [tester-harness.md](tester-harness.md) | The Phase-2 interactive visual-tester workflow: overlays, the coloured modal, the Pause trick, running a demo. Field-level journal/API detail now lives in api-reference.md. |
+| [tester-harness.md](tester-harness.md) | The Phase-2 interactive visual-tester workflow: overlays, the coloured editable dialog (poll-driven, live SL/TP), the Pause trick, running a demo. Field-level journal/API detail now lives in api-reference.md. |
 | [strategies/README.md](strategies/README.md) | Shared strategy vocabulary (fractals, ATR, level pools, sizing, drawdown caps) and the at-a-glance comparison of the three strategies. |
 | [strategies/liquidity-sweep-mss.md](strategies/liquidity-sweep-mss.md), [deep-fib-retracement.md](strategies/deep-fib-retracement.md), [ema20-mean-reversion.md](strategies/ema20-mean-reversion.md) | Design specs (the "why") for each strategy, written for both the account owner and the implementer. |
 | [strategies/impl-README.md](strategies/impl-README.md) + `impl-*.md` | MQL5-level build sheets the detectors were actually coded from — read these plus the detector source to change strategy logic. |
@@ -48,7 +50,7 @@ built**.
 |---|---|---|
 | 0 | Dev environment, agent team, QDM CLI working | **Done** |
 | 1 | Tick history for all 49 FTMO symbols, imported to MT5 `.dk` custom symbols | **Built and running.** `fleet_download.py` + `rolling_import.sh` are live background workers draining the 49-symbol fleet in parallel (download → export → import → disk reclaim). As of 2026-07-17: **35/49 downloaded, 35/49 imported** (see `pipeline/fleet_state.txt`, `pipeline/import_state.txt` — these counts move; re-run `pipeline/progress.sh` for current numbers). History depth: symbols finished before 2026-07-17 were exported 2020+; from 2026-07-17 on the fleet exports **full available history** (`DATEFROM=2003.01.01` in `pipeline/fleet_download.py`, `config/settings.yaml`) — older docs that say "5 years / 2020+" describe the original, now-superseded policy. |
-| 2 | Interactive forward test: MT5 visual tester pauses on each alert for manual approval | **Built.** `mql5/experts/HybridForwardTest.mq5` runs all three real detectors with priority arbitration and two-target scale-out; verified headless via `pipeline/mt5_verify.sh` on `EURUSD.dk`. Needs a **live interactive visual-tester run** to eyeball overlay rendering and the coloured modal (see `docs/strategies/detectors-implementation.md` caveats). |
+| 2 | Interactive forward test: MT5 visual tester pauses on each alert for a manual Accept/Skip via an editable dialog | **Built.** `mql5/experts/HybridForwardTest.mq5` runs all three real detectors with priority arbitration and two-target scale-out; verified headless via `pipeline/mt5_verify.sh` on `EURUSD.dk`. The approval dialog is editable (retune Entry/SL/TP independently with live R:R + a strategy floor and chart lines live; editing entry away from market places a pending order), with skip-reason capture and a decision-time screenshot; `pipeline/review_session.py` grades a session vs the take-everything baseline. Pending-order fill/scale-out/expiry are verified headlessly; needs a **live interactive visual-tester run** to confirm keystrokes land in the edit boxes (chart-repaint-while-held is already proven) — see `docs/tester-harness.md`. |
 | 3 | Production: cloud EA → VPS → Telegram approval loop | **Planned, not built.** Nothing in this repo implements Phase 3 — do not treat any current code as Phase-3-ready. |
 
 ## Key environment facts

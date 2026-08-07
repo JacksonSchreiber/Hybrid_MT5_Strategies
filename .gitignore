@@ -8,6 +8,7 @@ pipeline/fleet_state.txt
 pipeline/fleet_failures.txt
 pipeline/import_state.txt
 pipeline/import_failures.txt
+pipeline/retry_failures.txt
 # built Windows DLLs + build byproducts are deployed, not committed (rebuild with mql5/dll/build.sh)
 mql5/dll/*.dll
 mql5/dll/*.lib

@@ -102,7 +102,7 @@ three — start there):
    m_last_bar;`, and whatever persistent forming-state struct/fields your
    strategy needs.
 3. Implement `string Name(void)` returning the strategy's short name (this
-   string is shown in the modal, the journal `strategy` column, and used by
+   string is shown in the dialog, the journal `strategy` column, and used by
    `pipeline/mt5_verify.sh` for per-strategy counts — keep it short and
    unique, e.g. `"SweepMSS"`, `"DeepFib"`, `"EMArev"`).
 4. Implement `bool Detect(const string symbol,ENUM_TIMEFRAMES tf,
@@ -155,12 +155,12 @@ carry stack garbage) — every detector calls `ResetCandidate()` from
 | Field | Type | Meaning | Who sets it | How the harness uses it |
 |---|---|---|---|---|
 | `valid` | `bool` | `false` = no signal this bar | Detector | Harness only acts if `true` |
-| `strategy` | `string` | Detector name, e.g. `"SweepMSS"` | Detector (`Name()`) | Shown in modal, journal `strategy` column, matched by `mt5_verify.sh` |
+| `strategy` | `string` | Detector name, e.g. `"SweepMSS"` | Detector (`Name()`) | Shown in dialog, journal `strategy` column, matched by `mt5_verify.sh` |
 | `direction` | `int` | `+1` = buy, `-1` = sell | Detector | Drives `Buy`/`Sell`, overlay colours (BUY green / SELL red) |
-| `entry` | `double` | Proposed entry price (must equal the expected market fill — see contract above) | Detector | Basis for `SizeByRisk`, the order's fill price is expected to match this |
-| `sl` | `double` | Stop-loss price | Detector | Order SL; risk basis for sizing |
-| `tp` | `double` | Take-profit price (single live target — the runner for two-target strategies) | Detector | Order TP unless `two_target` (then `HandleSignal` uses `tp2` instead, see below) |
-| `rr` | `double` | Reward:risk ratio | Detector | Shown in modal / journal; not re-derived by the harness |
+| `entry` | `double` | Proposed entry price (the expected market fill — see contract above) | Detector | Basis for `SizeByRisk`. **Independently editable**: left at market → market fill; moved away → a pending order at that price (SL/TP stay put, R:R + lots recompute) |
+| `sl` | `double` | Stop-loss price | Detector | Order SL; risk basis for sizing. **Independently editable** — changes only SL, re-sizes lots, recomputes R:R (TP unmoved) |
+| `tp` | `double` | Take-profit price (single live target — the runner for two-target strategies) | Detector | Order TP unless `two_target` (then `HandleSignal` uses `tp2`). **Independently editable** — changes only TP, recomputes R:R (SL unmoved) |
+| `rr` | `double` | Reward:risk ratio | Detector | A live **output** of the levels, shown in the dialog + journal; recomputed into `cand.rr` on Accept. Accept is blocked while it is below the strategy floor |
 | `zone_from` | `datetime` | Setup-zone left edge (bar time) | Detector | `OBJ_RECTANGLE` left edge in `DrawOverlays` |
 | `zone_to` | `datetime` | Setup-zone right edge (bar time) | Detector | `OBJ_RECTANGLE` right edge; also the x-anchor for aux labels and the corner label |
 | `zone_hi` | `double` | Setup-zone top price | Detector | Rectangle top |
@@ -170,11 +170,11 @@ carry stack garbage) — every detector calls `ResetCandidate()` from
 
 | Field | Type | Meaning | Who sets it | How the harness uses it |
 |---|---|---|---|---|
-| `tp1` | `double` | First/partial target price (`0` = unused) | Detector | If `>0` and `partial_fraction>0`: banked via `PositionClosePartial` in `ManageOpenPositions` when price reaches it |
-| `tp2` | `double` | Runner target price (`0` = unused) | Detector | If two-target, this becomes the **order's actual TP** (`order_tp` in `HandleSignal`) and the remainder's TP after the partial |
-| `partial_fraction` | `double` | Fraction of lots to bank at `tp1`, e.g. `0.5` (`0` = single target) | Detector | `HandleSignal` computes `two_target = (partial_fraction>0.0 && tp1>0.0 && tp2>0.0)`; if the split would leave either leg below `SYMBOL_VOLUME_MIN`, the harness silently falls back to single-target and logs a note |
-| `d1_context` | `bool` | `true` = D1-timeframe aligned/confluent | Detector | Shown in modal (`[D1 aligned]` suffix) and overlay label — **a flag, never a hard filter** (PM decision 1) — except EMA's D1 fresh-breakout check, which *is* a hard filter internally before emit, so `d1_context` there means "regime clean" |
-| `comment` | `string` | Human-readable one-liner, e.g. `"stretch 2.3 ATR, ADX 22 +pool"` | Detector | Appended to the modal's strategy line and the chart corner label |
+| `tp1` | `double` | First/partial target price (`0` = unused) | Detector | If `>0` and `partial_fraction>0`: banked via `PositionClosePartial` in `ManageOpenPositions` when price reaches it. **Zeroed if the operator edits SL/TP** (the plan is anchored to the original levels → collapses to single target) |
+| `tp2` | `double` | Runner target price (`0` = unused) | Detector | If two-target, this becomes the **order's actual TP** (`order_tp` in `HandleSignal`) and the remainder's TP after the partial. **Zeroed on an edit** (single target at the edited `tp`) |
+| `partial_fraction` | `double` | Fraction of lots to bank at `tp1`, e.g. `0.5` (`0` = single target) | Detector | `HandleSignal` computes `two_target = (partial_fraction>0.0 && tp1>0.0 && tp2>0.0)`; if the split would leave either leg below `SYMBOL_VOLUME_MIN`, the harness silently falls back to single-target and logs a note. **Zeroed on an edit** |
+| `d1_context` | `bool` | `true` = D1-timeframe aligned/confluent | Detector | Shown in dialog (`[D1 aligned]` suffix) and overlay label — **a flag, never a hard filter** (PM decision 1) — except EMA's D1 fresh-breakout check, which *is* a hard filter internally before emit, so `d1_context` there means "regime clean" |
+| `comment` | `string` | Human-readable one-liner, e.g. `"stretch 2.3 ATR, ADX 22 +pool"` | Detector | Appended to the dialog's strategy line and the chart corner label |
 | `aux_count` | `int` | Number of aux overlay levels used (≤ 8) | Detector (via `DC_AddAux`) | Loop bound in `DrawOverlays` |
 | `aux_price[8]` | `double[8]` | Horizontal price levels (fib grid, EMA, band, swept pool, ref swing, MSS, etc.) | Detector | One `OBJ_HLINE` (dashed grey) per used slot |
 | `aux_label[8]` | `string[8]` | Label per aux level | Detector | One `OBJ_TEXT` per used slot |
@@ -292,22 +292,74 @@ bool TI_SessionsOnly(const string base, const string customSuffix=".dk");
 
 Source: `mql5/dll/TradeDialog.c`, built by `mql5/dll/build.sh`.
 
-### Exported symbol and C signature
+The dialog is **editable and poll-driven**: Entry, Stop Loss and Take Profit
+are all edit boxes and **independent** — editing one never moves another (SL/TP
+are structural). Each edit re-sizes lots, recomputes the live **R:R**, and
+**moves the real chart lines live** before Accept/Skip; Accept is blocked while
+R:R is below the strategy floor. Editing the entry away from market turns Accept
+into a **pending order** whose type is shown in the "Order" row (see
+[decisions.md](decisions.md) and the [EA inputs](#hybridforwardtest-inputs)
+`InpPendingExpiryBars`). Skipping opens a reason picker (1–6).
 
-Single export, **undecorated name** (verified by `build.sh`'s PE
-export-table parser):
+Why poll-driven and not a single blocking modal: live chart updates need MQL
+code to run *between* keystrokes so it can recompute levels and reposition the
+H-lines. A one-call modal that runs its own message loop (the old design)
+never returns to MQL until the user answers, so the chart is frozen the whole
+time. Instead the window is opened once and then **pumped** from a `while`
+loop inside `OnTick` — that loop still blocks `OnTick`, so the visual tester
+stays held on the bar (the pause is preserved), but MQL runs each turn. (The
+chart *does* repaint while `OnTick` is blocked — verified empirically in the
+visual tester.)
+
+### Exported symbols and C signatures
+
+Eight exports, all **undecorated names** (verified by `build.sh`'s PE
+export-table parser): `TD_Open`, `TD_Poll`, `TD_SetDisplay`, `TD_SkipReason`,
+`TD_SetOrderType`, `TD_SetEvents`, `TD_Close`, and a legacy `ShowTradeDialog` stub.
 
 ```c
-__declspec(dllexport)
-int ShowTradeDialog(const wchar_t *title,   const wchar_t *symbol,
-                    const wchar_t *strategy, const wchar_t *direction, // "BUY" / "SELL"
-                    const wchar_t *entry,   const wchar_t *sl,
-                    const wchar_t *tp,      const wchar_t *lots,
-                    const wchar_t *rr);
+// Create the window (Entry / SL / TP all editable) and return immediately.
+// Returns 1 = shown OK, 0 = failure (caller must fail-closed to skip).
+int  TD_Open(const wchar_t *title,   const wchar_t *symbol,
+             const wchar_t *strategy, const wchar_t *direction,   // "BUY"/"SELL"
+             const wchar_t *entry,   const wchar_t *sl,
+             const wchar_t *tp,      const wchar_t *lots, const wchar_t *rr);
+
+// Drain pending window messages (bounded PeekMessage pump), read the current
+// Entry/SL/TP box text into the out-params, set *dirty=1 if the user changed a
+// box since the last poll. Returns 0 = pending, 1 = Accept, 2 = Skip/closed.
+// Digit keys 1-6 (when focus is NOT in a number box) skip with that reason.
+int  TD_Poll(double *entry, double *sl, double *tp, int *dirty);
+
+// Push RECOMPUTED, normalised strings back into the boxes (skipping whichever
+// box currently has keyboard focus, so it never fights the cursor) + the
+// lots/RR statics. ok=0 disables the Accept button (invalid geometry).
+void TD_SetDisplay(const wchar_t *entry, const wchar_t *sl, const wchar_t *tp,
+                   const wchar_t *lots,  const wchar_t *rr, int ok);
+
+// Skip-reason code (1-6) from the last skip; 6 = bare Skip/Esc/close. Valid
+// after TD_Poll returns 2. (0 only if never skipped.)
+int  TD_SkipReason(void);
+
+// Set the "Order" row text: "MARKET" or e.g. "BUY LIMIT @ 1.08200". The EA
+// computes this from the edited entry vs current market and pushes it live.
+void TD_SetOrderType(const wchar_t *s);
+
+// Fill the upcoming-events list with BOTH date forms; the dialog shows one per
+// the Coach-mode toggle (absolute normally, relative when redacted).
+void TD_SetEvents(const wchar_t *abs_dates, const wchar_t *rel_dates);
+
+// Destroy the window and free per-dialog GDI objects.
+void TD_Close(void);
+
+// Legacy single-call modal export — retained as a no-op stub (returns 0) for
+// binary compatibility only; the EA drives the poll API above.
+int  ShowTradeDialog(const wchar_t *title, ... );   // 9 wchar_t* args, returns 0
 ```
 
-Nine `wchar_t*` args in this exact order; returns `1` = Yes/Approve, `0` =
-No/Deny (or on any internal failure — it "fails closed" to deny).
+All numeric math (R:R lock, lot sizing, tick/stops normalisation) lives in
+**MQL**, where the broker-spec functions are; the DLL is display + text input
++ message pump only — it never computes a price or a lot size.
 
 ### MQL5 `#import`
 
@@ -315,18 +367,49 @@ No/Deny (or on any internal failure — it "fails closed" to deny).
 
 ```mql5
 #import "TradeDialog.dll"
-int ShowTradeDialog(string title,string symbol,string strategy,string direction,
-                    string entry,string sl,string tp,string lots,string rr);
+int  TD_Open(string title,string symbol,string strategy,string direction,
+             string entry,string sl,string tp,string lots,string rr);
+int  TD_Poll(double &entry,double &sl,double &tp,int &dirty);
+void TD_SetDisplay(string entry,string sl,string tp,string lots,string rr,int ok);
+void TD_Close(void);
 #import
 ```
 
 MQL5 `string` is UTF-16 internally and marshals directly to `LPCWSTR`
-(`wchar_t*`), so no encoding conversion is needed on the caller side.
-**`#import` DLLs are early-bound at EA load** — both `TradeDialog.dll` and
-`user32.dll` must be resolvable or the EA fails to load entirely, regardless
-of the `InpUseColoredDialog` input (that input only picks which one is
-*called*, not which is *loaded*). The DLL must live in the terminal's
-`MQL5\Libraries\` folder (not `MQL5\Files\`) — `build.sh` deploys it there.
+(`wchar_t*`); `double &`/`int &` marshal as output pointers. **`#import` DLLs
+are early-bound at EA load** — both `TradeDialog.dll` and `user32.dll` must be
+resolvable or the EA fails to load entirely, regardless of the
+`InpUseColoredDialog` input (that input only picks which path is *called*, not
+which DLL is *loaded*). The DLL must live in the terminal's `MQL5\Libraries\`
+folder (not `MQL5\Files\`) — `build.sh` deploys it there. If the DLL is
+missing/unresolved the colour path fails-closed to **Skip** with a printed
+error (it does not silently reject setups).
+
+### EA-side interactive loop (`InteractiveDialog` in `HybridForwardTest.mq5`)
+
+**Edit model: levels are INDEPENDENT; R:R is a live output + floor guard, not a
+lock** (SL and TP are structural per the strategy specs — editing one must not
+move the other). `floor = StratMinRR(strategy)` (`InpSmcMinRR`/`InpFibMinRR`/
+`InpEmaMinRR`).
+
+1. `TD_Open(...)`, then loop `TD_Poll`:
+   - **SL edited** → only SL moves (Entry, TP fixed). **TP edited** → only TP
+     moves. **Entry edited** → only Entry moves (SL/TP fixed; away from market
+     ⇒ a pending order). No cross-recompute.
+   - Normalise to tick size + digits (`NormPrice`), validate geometry
+     (`ValidGeom`: SL<Entry<TP for BUY, inverted for SELL, each leg ≥ a tick
+     and ≥ broker stops-level).
+   - If geometry valid: re-size lots (`SizeByRisk` on the new stop distance),
+     compute `rr = RRatio(entry,sl,tp)`, move the `HFT_<id>_entry/sl/tp` H-lines
+     (`ObjectSetDouble(...,OBJPROP_PRICE,...)`), `ChartRedraw(0)`, and push back
+     via `TD_SetDisplay(..., ok = rr≥floor)` — so **Accept is blocked (and the
+     R:R shows `< MIN x.x`) whenever R:R is below the strategy floor**. If
+     geometry is invalid (levels crossed): keep last-good, `ok=0` once.
+3. On **Accept**, commit the (possibly edited) levels into `cand`. If anything
+   was edited, the two-target TP1/TP2 partial plan (anchored to the *original*
+   levels) is **collapsed to a single target at the edited TP**, and lots are
+   re-sized on the final risk distance so the placed order + journal match what
+   was approved. On **Skip**, `cand` is left unchanged.
 
 ### The MessageBoxW fallback
 
@@ -341,39 +424,56 @@ int MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType);
 #define IDNO            7
 ```
 
-Called instead of `ShowTradeDialog` when `InpUseColoredDialog=false`
-(`AskApproval()` in `HybridForwardTest.mq5`); `hWnd=0` +
-`MB_SYSTEMMODAL` blocks the tester thread the same way `ShowTradeDialog`
-does. No colour, plain text body built with `StringFormat`.
+Used instead of the colour path when `InpUseColoredDialog=false`
+(`AskApproval()` in `HybridForwardTest.mq5`); `hWnd=0` + `MB_SYSTEMMODAL`
+blocks the tester thread. **No colour and no editing** — plain read-only
+Yes/No text body built with `StringFormat`. This path exists only as a
+degraded fallback; the editable feature is colour-path only.
 
 ### Behaviour, colours, return codes
 
-- Creates a centred, top-most (`WS_EX_TOPMOST`), system-modal popup
-  (`WS_POPUP|WS_CAPTION|WS_SYSMENU`) that runs **its own Win32 message
-  loop** — this is what blocks the calling (tester) thread until answered,
-  exactly like `MessageBoxW`.
+- `TD_Open` creates a centred, top-most (`WS_EX_TOPMOST`) popup
+  (`WS_POPUP|WS_CAPTION|WS_SYSMENU`) and **returns immediately**. It does *not*
+  run its own message loop; the EA pumps it via `TD_Poll` (bounded
+  `PeekMessage`/`IsDialogMessageW` drain, ≤256 msgs/call) from a `while` loop
+  in `OnTick`. That MQL loop is what holds the tester on the bar.
+- **Editable fields:** Entry, Stop Loss and Take Profit are all `EDIT` controls
+  (white background, `WS_BORDER`), coloured green/red/blue to match their chart
+  lines. Below R:R, a read-only **"Order" row** shows what Accept will place
+  (`MARKET` or e.g. `BUY LIMIT @ 1.08200`), set live by the EA via
+  `TD_SetOrderType`.
+- **Dirty tracking:** an `EN_CHANGE` from an edit box sets a `dirty` flag read
+  by `TD_Poll`. Writes the EA makes via `TD_SetDisplay` are wrapped in a
+  `suppress` guard so they don't self-trigger dirty, and `TD_SetDisplay` skips
+  any box that currently holds keyboard focus so it never stomps the cursor.
+- **Skip reasons:** digit keys `1`–`6` (only when focus is *not* in a number
+  box — there they're digits) skip immediately with that reason code; the bare
+  Skip button / Esc / close give `6` (other). Read via `TD_SkipReason`.
 - **Re-entrancy guard:** `InterlockedCompareExchange` on a static `g_inuse`
-  flag — a second concurrent call returns `0` (deny) immediately without
-  showing a window.
+  flag set in `TD_Open`, cleared in `TD_Close` — a second concurrent `TD_Open`
+  returns `0` without showing a window.
 - **Colour palette** (via the `RGB()` macro, correct COLORREF byte order):
 
   | Field | Colour | Matches |
   |---|---|---|
-  | Entry | `RGB(0,160,0)` green | chart entry H-line |
-  | Stop Loss | `RGB(204,0,0)` red | chart SL H-line |
-  | Take Profit | `RGB(0,0,204)` blue | chart TP H-line |
+  | Entry (edit) | `RGB(0,160,0)` green | chart entry H-line |
+  | Stop Loss (edit) | `RGB(204,0,0)` red | chart SL H-line |
+  | Take Profit (edit) | `RGB(0,0,204)` blue | chart TP H-line |
   | Direction | BUY green / SELL red (same greens/reds as above) | — |
   | Symbol, Strategy, Lots, R:R | `RGB(20,20,20)` near-black (`COL_VALUE`) | neutral |
   | Field captions | `RGB(90,90,90)` grey (`COL_LABEL`) | — |
+  | Edit-box background | `RGB(255,255,255)` white (`COL_EDITBG`) | — |
   | Dialog background | `RGB(248,248,248)` (`COL_BG`) | — |
 
-- **Buttons:** "Yes (approve)" (`ID_YES=100`) and "No (skip)" (`ID_NO=101`).
-  **No is the default-focused button** (`SetFocus(st.hNo)`), so a reflexive
-  Enter skips rather than trades.
-- **Keyboard:** `Y` → approve, `N` or `Esc` → skip, `Enter` → whichever
-  button currently has focus. `[X]`/Alt+F4 (`WM_CLOSE`) → deny.
-- **Return codes:** `1` = approve, `0` = deny (covers deny-click, Esc, N,
-  window-creation failure, and the re-entrancy-guard rejection — deny is
+- **Buttons:** "Accept" (`ID_YES=100`) and "Skip" (`ID_NO=101`). **Skip is the
+  default-focused button** (`SetFocus(g.hNo)`), so a reflexive Enter skips
+  rather than trades. Accept is disabled (`EnableWindow`) whenever the EA
+  reports invalid geometry via `TD_SetDisplay(...,ok=0)`.
+- **Keyboard:** `Enter` → Accept (only when currently valid), `Esc` → Skip.
+  `[X]`/Alt+F4 (`WM_CLOSE`) → Skip. Typing routes to the focused SL/TP box via
+  `IsDialogMessageW`.
+- **`TD_Poll` return codes:** `0` = pending (keep looping), `1` = Accept,
+  `2` = Skip (covers Skip-click, Esc, `[X]`, and the not-open case — Skip is
   always the fail-safe outcome).
 
 ### Build & deploy
@@ -496,7 +596,7 @@ declarations.
 | `InpCleanupOnDeinit` | `bool` | `false` | If `true`, deletes all `InpObjPrefix`-prefixed chart objects on EA removal |
 | `InpObjPrefix` | `string` | `"HFT_"` | Chart-object name prefix (objects are named `HFT_<signal_id>_*`) |
 | `InpUseColoredDialog` | `bool` | `true` | `true` = `TradeDialog.dll` (coloured); `false` = `MessageBoxW` fallback (plain) |
-| `InpAutoApprove` | `enum ENUM_AUTO_APPROVE` (`AA_NONE=0`/`AA_ALL=1`/`AA_SKIP=2`) | `AA_NONE` | **Tester-only.** `AA_NONE` = interactive modal (needs visual mode + DLLs). `AA_ALL` = auto-approve every signal, no modal — exercises the full order/scale-out/journal lifecycle. `AA_SKIP` = auto-deny every signal, no modal — cleanest per-strategy signal counts (no position ever suppresses detection) |
+| `InpAutoApprove` | `enum ENUM_AUTO_APPROVE` (`AA_NONE=0`/`AA_ALL=1`/`AA_SKIP=2`) | `AA_NONE` | **Tester-only.** `AA_NONE` = interactive editable dialog (needs visual mode + DLLs). `AA_ALL` = auto-approve every signal at the detector's original levels, no dialog — exercises the full order/scale-out/journal lifecycle. `AA_SKIP` = auto-deny every signal, no dialog — cleanest per-strategy signal counts (no position ever suppresses detection) |
 | `InpUseSMC` | `bool` | `true` | Enable Strategy 1 (Liquidity Sweep + MSS), priority 1 |
 | `InpUseFib` | `bool` | `true` | Enable Strategy 2 (Deep Fib Retracement), priority 2 |
 | `InpUseEMA` | `bool` | `true` | Enable Strategy 3 (20 EMA Mean Reversion), priority 3 |
@@ -507,6 +607,14 @@ declarations.
 | `InpEmaStretch` | `double` | `2.0` | EMA: minimum close-to-EMA stretch, in ATR, to qualify |
 | `InpEmaAdxCeil` | `double` | `30.0` | EMA: skip if ADX ≥ this (too trendy) |
 | `InpEmaMinRR` | `double` | `1.3` | EMA: minimum blended reward:risk to arm |
+| `InpPendingExpiryBars` | `int` | `3` | Unfilled pending order (edited entry) auto-cancels after this many H4 bars, journalled `expired` |
+| `InpShotOnDecision` | `bool` | `true` | Save a chart screenshot to `MQL5\Files\journal\shots\<stem>_<id>.png` when the dialog opens |
+| `InpShotW` / `InpShotH` | `int` | `1600` / `900` | Screenshot dimensions (px) |
+| `InpForcePendingTest` | `bool` | `false` | **Test-only.** Under `AA_ALL`, place a forced STOP pending instead of a market order — verifies the `OnTradeTransaction` pending-fill binding headlessly (`mt5_verify.sh --force-pending`) |
+
+> Display/overlay inputs (`InpShow*`, `InpFontSize`, `InpLineWidth`, event/
+> imbalance/declutter knobs) are documented in
+> [tester-harness.md](tester-harness.md).
 
 ## Priority arbitration rule
 
@@ -561,17 +669,18 @@ rewritten and `FileFlush`-ed on every signal and every trade-close event
 (`OnTradeTransaction`), so a tester crash never loses more than the
 in-flight write.
 
-**Header line (exact, current schema — 20 columns):**
+**Header line (exact, current schema — 26 columns):**
 
 ```
-signal_id,signal_time,symbol,strategy,direction,entry,sl,tp,tp1,tp2,partial_frac,lots,decision,decision_ms,posid,tp1_done,exit_time,exit_price,pnl,r_multiple
+signal_id,signal_time,symbol,strategy,direction,orig_entry,orig_sl,orig_tp,entry,sl,tp,tp1,tp2,partial_frac,lots,decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,exit_time,exit_price,pnl,r_multiple
 ```
 
-> **Correction vs. `docs/tester-harness.md`:** that doc's journal-column
-> table describes an earlier, simpler schema (no `tp1`/`tp2`/`partial_frac`/
-> `tp1_done`, and a different column order) from before the two-target
-> scale-out was added. The table below is the current, authoritative
-> schema — trust this page.
+> This is the current, authoritative schema — trust this page. The
+> `orig_*`, `skip_reason`, `is_pending` columns and the `approved_pending`/
+> `expired` decision values were added with the editable-entry / coaching
+> work (2026-08-01, `decisions.md`); the same change fixed `tp1_done`, which
+> previously wrote the literal `(non-string passed)`. The five-column
+> `signal_time+strategy` join is what `pipeline/review_session.py` keys on.
 
 | Column | Type/format | Meaning |
 |---|---|---|
@@ -580,21 +689,27 @@ signal_id,signal_time,symbol,strategy,direction,entry,sl,tp,tp1,tp2,partial_frac
 | `symbol` | string | `_Symbol` (the `.dk` custom symbol) |
 | `strategy` | string | `cand.strategy` (`SweepMSS`/`DeepFib`/`EMArev`, or a custom detector's `Name()`) |
 | `direction` | `"BUY"`/`"SELL"` | From `cand.direction` |
-| `entry` | price string | **Realised fill price** if approved+filled (overwritten from the deal), else the proposed `cand.entry` |
+| `orig_entry` | price string | The **detector's proposed** entry, snapshotted before any operator edit (orig-vs-final analysis) |
+| `orig_sl` | price string | Detector's proposed SL |
+| `orig_tp` | price string | Detector's proposed TP (the single/display target) |
+| `entry` | price string | **Realised fill price** if filled (overwritten from the deal — market or pending), else the placed/proposed entry |
 | `sl` | price string | **Original** SL — the risk basis; never overwritten by the breakeven move |
 | `tp` | price string | The TP actually placed on the order — `tp2` (the runner) for a two-target signal, else `cand.tp` |
 | `tp1` | price string or empty | Partial target price (empty if `0`) |
 | `tp2` | price string or empty | Runner target price (empty if `0`) |
-| `partial_frac` | `%.2f` | Fraction banked at `tp1` (`0.00` if single-target, including the min-lot-can't-split fallback case) |
-| `lots` | `%.2f` | Initial order lots (`SizeByRisk` result) |
-| `decision` | `"approved"`/`"denied"` | Human (or auto-approve) decision |
+| `partial_frac` | `%.2f` | Fraction banked at `tp1` (`0.00` if single-target, incl. min-lot fallback and any operator-edited setup) |
+| `lots` | `%.2f` | Initial order lots (`SizeByRisk` on the final risk distance) |
+| `decision` | `"approved"` / `"skipped"` / `"approved_pending"` / `"expired"` | Operator (or auto-approve) decision. `approved_pending` = edited-entry pending order (whether it later filled or not — check `posid`); `expired` = pending cancelled unfilled after `InpPendingExpiryBars` H4 bars |
+| `skip_reason` | int `0`–`6` | Skip-reason code (`0` for non-skips and headless skips): 1 counter-trend, 2 news/event, 3 ugly structure, 4 target obstructed, 5 correlated exposure, 6 gut/other |
+| `edited` | `0`/`1` | `1` if the operator changed any level vs the detector's proposal. **Authoritative** — computed from the committed levels *before* `entry` is overwritten by the fill, so downstream analysis must not infer edits from `orig_entry` vs `entry` (the fill ≈ never equals the proposal) |
+| `is_pending` | `0`/`1` | `1` if the order originated as a pending (entry edited away from market), even after it fills. Doubles as the "realised entry differs from a market fill" signal for edit-delta analysis |
 | `decision_ms` | long | Wall-clock ms taken to decide (`0` for `InpAutoApprove` modes) |
-| `posid` | long | `DEAL_POSITION_ID` of the opening deal (`0` if denied or the order failed) |
+| `posid` | long | `DEAL_POSITION_ID` of the opening deal (`0` if skipped, expired-unfilled, or the order failed) |
 | `tp1_done` | `0`/`1` | Whether the partial has been banked + SL moved to BE (always `1` for a single-target signal, since there's nothing to bank) |
 | `exit_time` | date string or empty | Set once the position is fully closed |
 | `exit_price` | price string or empty | Last closing deal's price |
 | `pnl` | `%.2f` or empty | Accumulated profit + swap + commission across all closing deals |
-| `r_multiple` | `%.2f` or empty | **Blended, volume-weighted R**: `Σ (deal_volume / initial_lots) × (moved / risk_px)` across the (up to two) closing deals, where `risk_px = |entry − original sl|` (the breakeven move never changes the risk basis) |
+| `r_multiple` | `%.2f` or empty | **Blended, volume-weighted R**: `Σ (deal_volume / initial_lots) × (moved / risk_px)` across the (up to two) closing deals, where `risk_px = |fill − original sl|` (recomputed at the realised fill, incl. pending fills; the breakeven move never changes the risk basis) |
 
 A position is considered fully closed (`closed=true`, `exit_*`/`pnl`/
 `r_multiple` finalized) once `closed_vol >= lots - step*0.5` in

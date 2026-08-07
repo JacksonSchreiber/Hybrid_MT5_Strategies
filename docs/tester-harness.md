@@ -12,9 +12,10 @@
 >   Priority when several fire on one bar: **SMC > Fib > EMA**.
 > - Per-strategy params: `InpSmcMinRR`, `InpSmcTpR`, `InpFibImpulseATR`,
 >   `InpFibMinRR`, `InpEmaStretch`, `InpEmaAdxCeil`, `InpEmaMinRR`.
-> - `InpAutoApprove` (**tester-only**): `NONE` = interactive modal (default);
->   `ALL` / `SKIP` = headless auto-approve/skip for automated verification via
->   `pipeline/mt5_verify.sh` (no modal, no DLL).
+> - `InpAutoApprove` (**tester-only**): `NONE` = interactive editable dialog
+>   (default); `ALL` / `SKIP` = headless auto-approve/skip at the detector's
+>   original levels for automated verification via `pipeline/mt5_verify.sh`
+>   (no dialog, no DLL).
 > - Removed: `InpLookback`, `InpRR` (dummy-only).
 >
 > The sections below describe the interactive visual-tester workflow, which is
@@ -54,11 +55,16 @@ buy/sell**) it:
      low"**, capped at the ~6 most recent of each to stay readable. These are
      additive context on top of the setup-specific labels (swept high/low, MSS
      level, etc.).
-2. Pops a **system-modal Yes/No dialog** showing symbol, strategy, direction,
+2. Pops an **editable Accept/Skip dialog** showing symbol, strategy, direction,
    entry/SL/TP, R:R and the risk-sized lot count — with the **entry/SL/TP text
-   colour-matched to the chart lines** (see below).
-3. **Yes** → sizes the position at 1% of equity from the SL distance and
-   places the order. **No** → journals a skip.
+   colour-matched to the chart lines** (see below). **Entry, Stop Loss and Take
+   Profit are all editable and independent** (editing one never moves another);
+   moving the entry away from market makes Accept a **pending order** (shown in
+   the "Order" row). Lots re-size, R:R recomputes live, and the chart lines move
+   before you commit; Accept blocks if R:R falls below the strategy's floor.
+3. **Accept** → sizes the position at 1% of equity from the (possibly edited) SL
+   distance and places a market fill, or a pending order at the edited entry.
+   **Skip** → journals a skip (with a 1–6 reason code).
 4. Appends the signal (and, on close, the outcome) to a CSV journal.
 
 ### Hard safety rule
@@ -69,29 +75,89 @@ optimisation) and the EA prints an explanation and stays **inert** — it invoke
 no dialog DLL and places no trades. (Native MQL5 `MessageBox()` does nothing in
 the tester, which is why a DLL is used at all.)
 
-## The coloured dialog (TradeDialog.dll)
+## The coloured editable dialog (TradeDialog.dll)
 
-`MessageBoxW` cannot colour text, so the coloured dialog is served by a tiny
-Win32 helper DLL, **`mql5/dll/TradeDialog.c`** → **`TradeDialog.dll`**. It
-creates a centred, top-most, system-modal window that **blocks the tester
-thread until answered** (exactly like `MessageBoxW`) and colours each field:
+`MessageBoxW` cannot colour text and cannot be edited, so the dialog is served
+by a tiny Win32 helper DLL, **`mql5/dll/TradeDialog.c`** → **`TradeDialog.dll`**.
+It is **poll-driven, not a blocking modal**: `TD_Open` shows the window and
+returns immediately, then the EA pumps it (`TD_Poll`) from a `while`-loop inside
+`OnTick`. That loop still blocks `OnTick` so the tester stays held on the bar —
+but MQL runs between keystrokes, which is what lets it recompute R:R-locked
+levels, re-size lots, and reposition the chart H-lines **live** as you edit.
+(The chart repaints while `OnTick` is blocked — verified empirically.)
 
-| Field | Dialog colour | Matches chart line |
-|---|---|---|
-| Entry | green `RGB(0,160,0)` | entry H-line |
-| Stop Loss | red `RGB(204,0,0)` | SL H-line |
-| Take Profit | blue `RGB(0,0,204)` | TP H-line |
-| Direction | BUY green / SELL red | — |
-| Symbol / Strategy / Lots / R:R | neutral grey-black | — |
+| Field | Dialog colour | Editable? | Matches chart line |
+|---|---|---|---|
+| Entry | green `RGB(0,160,0)` | **yes** (away from market = pending) | entry H-line |
+| Stop Loss | red `RGB(204,0,0)` | **yes** (white box) | SL H-line |
+| Take Profit | blue `RGB(0,0,204)` | **yes** (white box) | TP H-line |
+| Direction | BUY green / SELL red | — | — |
+| Symbol / Strategy / Lots / R:R | neutral grey-black | — | — |
 
 The chart overlay colours in the EA were set to the **same** RGB values, so the
-dialog and the chart lines are pixel-matched. Buttons: **Yes (approve)** and
-**No (skip)**; **No is the default** (a reflexive Enter skips rather than
-trades). Keyboard: **Y** = approve, **N**/**Esc** = skip, **Enter** = the
-focused button. Returns `1` (approve) / `0` (skip). A re-entrancy guard makes a
-second concurrent call return "skip" immediately.
+dialog and the chart lines are pixel-matched. Buttons: **Accept** and **Skip**;
+**Skip is the default** (a reflexive Enter skips rather than trades), and Accept
+is disabled whenever the current SL/TP geometry is invalid. Keyboard: **Enter** =
+Accept (only when valid), **Esc** = Skip; typing routes to the focused SL/TP box.
+`TD_Poll` returns `0` (pending) / `1` (Accept) / `2` (Skip). A re-entrancy guard
+makes a second concurrent `TD_Open` return failure immediately.
 
-Exported symbol (undecorated, x64 — matches the MQL5 `#import`): **`ShowTradeDialog`**.
+**Editing Entry / SL / TP — independent levels.** Each field edits on its own:
+SL and TP are structural (a prior extreme / swing), so **editing the stop never
+moves the target, and vice-versa**; editing the entry leaves SL/TP put. Every
+edit re-sizes lots to hold 1% risk and **recomputes the live R:R** (it's a
+readout now, not a locked ratio). If your edit drives R:R below the strategy's
+floor (2.0 for SMC/Fib, 1.3 for EMA), the R:R shows **`< MIN 2.0`** and **Accept
+is blocked** until you bring it back. Editing any level collapses a two-target
+(TP1/TP2) plan to a **single target at the edited TP**.
+
+**Entry → pending order.** Leave the entry at market and Accept fills at market
+as before. Move it away and Accept places a **pending order** at that price —
+buy/sell **limit** on the favourable side, **stop** on the breakout side,
+auto-selected and shown in the dialog's **"Order"** row. Moving the entry deeper
+(toward the stop) shrinks risk and *improves* R:R against the fixed target.
+Unfilled pendings auto-cancel after `InpPendingExpiryBars` H4 bars (default 3)
+and journal as `expired`; a fill binds via `OnTradeTransaction` so
+scale-out/breakeven/exit-R all run normally. A resting pending suppresses new
+signals (one setup/symbol).
+
+**Skip with a reason:** press a digit **1–6** while the dialog is up (when you're
+*not* typing in a number box) to skip and record *why* — `1` counter-trend, `2`
+news/event, `3` ugly structure, `4` target obstructed, `5` correlated exposure,
+`6` gut/other. The bare **Skip** button / Esc records `6`. The code lands in the
+journal's `skip_reason` column, which powers the coaching report's skip-precision
+analysis. (Approve rows and headless skips are `0`.)
+
+**Decision screenshot:** when the dialog opens (overlays already drawn), the EA
+saves a PNG of the chart to `MQL5\Files\journal\shots\<stem>_<signal_id>.png`
+(`InpShotOnDecision`, default on; `InpShotW`×`InpShotH`, default 1600×900) — what
+the operator saw at decision time, for a vision-capable coach. Note this is under
+the terminal's `MQL5\Files\` (the only place `ChartScreenShot` can write), *not*
+the `Common\Files` journal folder where the CSVs live.
+
+**Upcoming-events list + Coach mode.** The dialog lists the **notable scheduled
+events** for the pair's currencies over the next `InpEvtListDays` (14) days — the
+economic-calendar context you'd want *before* deciding (ECB/Fed decisions, CPI,
+NFP, GDP, PMIs). It's scheduled info only (time + currency + name); no outcome is
+ever shown, because every listed event is after the decision. The **Coach mode**
+button redacts a screenshot for the AI coach: it blanks the **symbol** (`██████`)
+and switches all dates to **relative** (`in 1d 4h`) so the coach can't reverse-
+identify the historical instance and grade with hindsight. Normal (un-toggled)
+shows the real symbol + absolute `DD MMM HH:MM`.
+
+**Chart event overlay (look-ahead-safe).** The dashed vertical event lines on the
+chart now roll **forward** with the replay: the calendar is cached once and
+redrawn each new bar over `[now − InpEvtPastDays, now + InpEvtLookaheadHours]`
+(default 48h ahead). An event still in the future renders **neutral `[upcoming]`**
+— its bull/bear colour + surprise is revealed only once replay passes it, so no
+outcome is leaked ahead of time. (Previously the overlay drew once at the first
+tick and, in the tester, only ever showed events *before* the test start — so
+forward events never appeared.)
+
+Exported symbols (undecorated, x64 — match the MQL5 `#import`): **`TD_Open`**,
+**`TD_Poll`**, **`TD_SetDisplay`**, **`TD_SkipReason`**, **`TD_SetOrderType`**,
+**`TD_SetEvents`**, **`TD_Close`** (plus a legacy no-op `ShowTradeDialog` stub).
+Full contract in [api-reference.md](api-reference.md#tradedialogdll).
 
 ### Build & deploy the DLL
 
@@ -153,19 +219,24 @@ all `#import` DLLs.
      short enough to finish quickly).
    - Deposit: 25000 USD (matches the FTMO account) is a sensible default.
 3. Press **Start**. The visual chart opens and replays ticks.
-4. When a signal fires the chart draws the lines + zone + label and a Yes/No
-   dialog appears. Read the context, click **Yes** to trade or **No** to skip.
+4. When a signal fires the chart draws the lines + zone + label and the
+   editable dialog appears. Read the context; optionally **edit Entry / Stop
+   Loss / Take Profit** (each is independent — lots re-size, R:R recomputes, the
+   chart lines move live; entry away from market becomes a pending order shown in
+   the "Order" row; Accept blocks if R:R drops below the strategy floor). Then
+   **Accept** to trade, or click **Skip** and pick a reason (or press **1–6**).
 5. Repeat for each signal. When the run ends, check the Journal/Experts tab
    for the summary and the journal-file path.
 
 ### The Pause (VK_PAUSE) trick
 
-The visual tester resumes replaying as soon as you answer the modal. If you
-want to **freeze the chart to study the setup** before/after deciding, press
-the keyboard **Pause** key while the dialog is up (or before answering). The
-tester stays paused after you answer, so you can inspect the overlays; press
-Pause again (or the tester's play button) to resume. Without this, the chart
-keeps moving right after your click.
+While the dialog is up the tester is **held on the bar** (the EA is looping in
+`OnTick`), so you already have unlimited time to study the setup and edit SL/TP.
+The tester resumes replaying as soon as you click **Accept/Skip**. If you want
+the chart to **stay frozen after you decide** (to inspect the overlays post-fill),
+press the keyboard **Pause** key before answering; the tester stays paused after
+your click. Press Pause again (or the tester's play button) to resume. Without
+this, the chart keeps moving right after your click.
 
 ## The journal
 
@@ -185,29 +256,24 @@ During the run it is `..._<start>.part.csv`; at the end it is rewritten to the
 rewritten and `FileFlush`-ed on every signal and every trade close, so a tester
 crash never loses more than the in-flight write.
 
-> **Schema note:** the table below predates the two-target scale-out feature
-> (task #14) and is missing the `tp1`/`tp2`/`partial_frac`/`tp1_done` columns
-> the journal now actually writes, in a different column order. For the
-> current, verified-against-source 20-column schema, see
-> [api-reference.md § Journal CSV schema](api-reference.md#journal-csv-schema).
-> The summary below is still directionally accurate for the base columns.
+The full, verified-against-source **25-column schema** lives in
+[api-reference.md § Journal CSV schema](api-reference.md#journal-csv-schema) —
+trust that page. In brief, each row is one presented signal:
 
-Columns (one row per signal):
+- **context** — `signal_id`, `signal_time`, `symbol`, `strategy`, `direction`
+- **levels** — `orig_entry/orig_sl/orig_tp` (detector's proposal) vs
+  `entry/sl/tp` (what was actually placed, so operator edits are analysable),
+  plus `tp1`/`tp2`/`partial_frac`/`lots`
+- **decision** — `approved` / `skipped` / `approved_pending` / `expired`,
+  `skip_reason` (1–6, see below), `edited` (operator changed a level — the
+  authoritative flag, not inferred from prices), `is_pending`, `decision_ms`,
+  `posid`, `tp1_done`
+- **outcome** — `exit_time`, `exit_price`, `pnl`, `r_multiple` (blended,
+  volume-weighted R, filled when the position fully closes)
 
-| Column | Meaning |
-|---|---|
-| `signal_id` | running counter |
-| `signal_time` | signal bar time (UTC) |
-| `symbol`, `strategy`, `direction` | context |
-| `entry`, `sl`, `tp`, `lots` | proposed trade + risk-sized volume |
-| `decision` | `approved` / `denied` |
-| `decision_ms` | wall-clock ms the human took to answer |
-| `posid` | position id (0 if denied/failed) |
-| `exit_time`, `exit_price`, `pnl`, `r_multiple` | filled when the position closes |
-
-`r_multiple` = realised move ÷ initial risk (entry→SL) distance; as of the
-two-target scale-out, this is a blended, volume-weighted figure across up to
-two closing deals — see the api-reference link above.
+`r_multiple` = realised move ÷ initial risk (fill→SL) distance, blended across
+up to two closing deals. These journals are the input to
+[`review_session.py`](tools-guide.md) (the AI-coaching report card).
 
 ## Risk sizing
 
@@ -223,7 +289,7 @@ representative until the harness runs on the real FTMO terminal.
 The harness talks only to the `ISignalDetector` interface and the
 `SignalCandidate` struct (`mql5/include/Hybrid/Signal.mqh`). The three real
 strategies are wired in (task #14) by implementing `ISignalDetector`; the
-harness builds them in `OnInit` per the `InpUse*` flags — the overlays, modal,
+harness builds them in `OnInit` per the `InpUse*` flags — the overlays, dialog,
 sizing, execution and journal are strategy-agnostic.
 
 ```
@@ -246,16 +312,23 @@ ISignalDetector (interface)
 - The DLL guard (`MQL_TESTER && MQL_VISUAL_MODE && MQL_DLLS_ALLOWED`) means the
   DLL is never called outside the visual tester.
 
+**Confirmed empirically (probe `mql5/experts/LineAnimProbe.mq5`, since removed):**
+- **The chart repaints while `OnTick` is blocked.** A probe that moved an
+  `OBJ_HLINE` + `ChartRedraw(0)` in a loop inside one held tick showed the line
+  sliding smoothly in the visual tester. This is what makes the live-updating
+  editable dialog possible: the EA holds the bar in a `while`-loop and MQL
+  repositions the entry/SL/TP lines between keystrokes.
+
 **Needs the live demo to confirm (report back after the first run):**
-- **Overlays visible *while the modal is up*.** The whole point of drawing
-  before the modal is that the user sees context while the tester is frozen.
-  Objects created in `OnTick` normally repaint only after the handler returns,
-  and `MessageBoxW` blocks inside the handler — a system-modal runs its own
-  Windows message pump that *should* service the chart's paint, but this can
-  only be confirmed visually. **Check: are the entry/SL/TP lines and the zone
-  box visible behind the dialog?** If they appear only after you answer, that
-  is a known tester-repaint limitation — note it and we adjust.
+- **Keystrokes land in the SL/TP edit boxes.** The editable dialog is pumped by
+  `TD_Poll` (`PeekMessage`/`IsDialogMessageW` burst) rather than a blocking
+  `GetMessage` loop. Chart repaint under a blocked `OnTick` is proven; keyboard
+  delivery to a child `EDIT` control through the burst pump is not. **Check: can
+  you type into the Stop Loss / Take Profit boxes and does the number change?**
+  If not, the fix is a `GetMessage`-based first-drain in `TD_Poll`.
+- That editing SL / TP / entry moves only that line, re-sizes lots + recomputes
+  R:R live, and that Accept greys out on bad geometry or R:R below the floor.
 - Exact placement of the tester's per-run "Allow DLL imports" control varies by
   MT5 build — confirm where it is on this terminal.
-- That the modal genuinely halts tick replay until answered (expected, but
+- That the dialog genuinely halts tick replay until answered (expected, but
   worth eyeballing on the first signal).

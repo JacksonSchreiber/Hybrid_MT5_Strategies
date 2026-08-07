@@ -24,7 +24,7 @@ INI_WSL="$MT5_DATA/hft_verify.ini"
 INI_WIN="$MT5_DATA_WIN\\hft_verify.ini"
 
 MODE=ALL; STRAT="SMC,Fib,EMA"; SYMBOL="EURUSD.dk"
-FROM="2023.01.01"; TO="2024.12.31"; MODEL=1; TIMEOUT=1800
+FROM="2023.01.01"; TO="2024.12.31"; MODEL=1; TIMEOUT=1800; FORCE_PENDING=false; FORCE_PTS=0
 log(){ printf '%s\n' "$*" >&2; }
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -36,6 +36,8 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --to) TO="$2"; shift 2;;
   --model) MODEL="$2"; shift 2;;
   --timeout) TIMEOUT="$2"; shift 2;;
+  --force-pending) FORCE_PENDING=true; shift;;  # AA_ALL: place forced STOP pendings (verify fill-binding)
+  --force-pending-pts) FORCE_PTS="$2"; shift 2;; # >0 stop (fills), <0 far limit (expires)
   -h|--help) sed -n '3,17p' "$0"; exit 0;;
   *) die "unknown flag: $1";;
 esac; done
@@ -58,8 +60,10 @@ mkdir -p "$SETDIR"
   echo "InpUseSMC=$USE_SMC"
   echo "InpUseFib=$USE_FIB"
   echo "InpUseEMA=$USE_EMA"
+  $FORCE_PENDING && echo "InpForcePendingTest=true"
+  $FORCE_PENDING && echo "InpForcePendingPts=$FORCE_PTS"
 } > "$SETDIR/hft_verify.set"
-log ".set -> AutoApprove=$AA SMC=$USE_SMC Fib=$USE_FIB EMA=$USE_EMA"
+log ".set -> AutoApprove=$AA SMC=$USE_SMC Fib=$USE_FIB EMA=$USE_EMA force_pending=$FORCE_PENDING"
 
 # --- [Tester] config ini ---------------------------------------------------
 {
