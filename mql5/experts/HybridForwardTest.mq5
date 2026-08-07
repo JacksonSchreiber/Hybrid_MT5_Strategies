@@ -33,7 +33,7 @@
 //--- lines live, until the user clicks Accept(1)/Skip(2). See TradeDialog.c.
 #import "TradeDialog.dll"
 int  TD_Open(string title,string symbol,string strategy,string direction,
-             string entry,string sl,string tp,string tp2,string lots,string rr);
+             string sigtime,string entry,string sl,string tp,string tp2,string lots,string rr);
 int  TD_Poll(double &entry,double &sl,double &tp,double &tp2,int &dirty);
 void TD_SetDisplay(string entry,string sl,string tp,string tp2,string lots,string rr,int ok);
 void TD_Close(void);
@@ -782,7 +782,12 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
    double lots0=SizeByRisk(ce,cs);
    int ok0=(( scaleout? ValidScale(dir,ce,cs,c1,c2,ts) : ValidGeom(dir,ce,cs,c1) )
             && runnerR>=floor && MathAbs(ce-cs)>=minstop)?1:0;
-   if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),
+   //--- signal fire time: day-of-week + HH:MM only (no date -> coach-safe),
+   //--- labelled UTC (.dk symbols are Dukascopy UTC data; econ overlay confirms).
+   MqlDateTime sdt; TimeToStruct(cand.zone_to,sdt);
+   string dows[]={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+   string sigtime=StringFormat("%s  %s UTC",dows[sdt.day_of_week],TimeToString(cand.zone_to,TIME_MINUTES));
+   if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),sigtime,
               DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),tp2str,
               LotsLine(lots0,ce,cs,atr),rrs)!=1)
      {

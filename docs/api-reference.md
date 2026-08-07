@@ -324,6 +324,7 @@ dialog shows one editable TP or two (TP1 bank + TP2 runner) for scale-out.
 // editable TP row (scale-out). Returns 1 = shown OK, 0 = failure (fail-closed).
 int  TD_Open(const wchar_t *title,   const wchar_t *symbol,
              const wchar_t *strategy, const wchar_t *direction,   // "BUY"/"SELL"
+             const wchar_t *sigtime,                              // "HH:MM UTC" (time-only, coach-safe)
              const wchar_t *entry,   const wchar_t *sl,
              const wchar_t *tp,      const wchar_t *tp2,          // tp2="" => single TP
              const wchar_t *lots,    const wchar_t *rr);

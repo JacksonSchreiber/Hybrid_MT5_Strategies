@@ -366,9 +366,10 @@ static HWND make_value_static(HWND parent, const wchar_t *txt, int x, int y,
 __declspec(dllexport)
 int TD_Open(const wchar_t *title,   const wchar_t *symbol,
             const wchar_t *strategy, const wchar_t *direction,
-            const wchar_t *entry,   const wchar_t *sl,
-            const wchar_t *tp,      const wchar_t *tp2,
-            const wchar_t *lots,    const wchar_t *rr)
+            const wchar_t *sigtime, const wchar_t *entry,
+            const wchar_t *sl,      const wchar_t *tp,
+            const wchar_t *tp2,     const wchar_t *lots,
+            const wchar_t *rr)
 {
     if (InterlockedCompareExchange(&g_inuse, 1, 0) != 0) {
         OutputDebugStringW(L"[TradeDialog] TD_Open while busy -> ignored\n");
@@ -440,6 +441,7 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     CAP(L"Strategy");  make_value_static(hwnd, strategy, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fNormal);          r += ROWH;
     CAP(L"Direction"); make_value_static(hwnd, direction, vx, r, VALUEW, ROWH - 6,
                        g.isBuy ? COL_BUY : COL_SELL, g.fBold);                                                   r += ROWH;
+    CAP(L"Time");      make_value_static(hwnd, sigtime, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fNormal);          r += ROWH;
 
     /* Entry / SL / TP(s) are ALL editable + independent. Green/red/blue tie each
        to its chart line. Scale-out strategies split TP into TP1 (bank) + TP2. */
