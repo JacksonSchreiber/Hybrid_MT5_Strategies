@@ -25,3 +25,4 @@ playbook/books_ingested/
 playbook/.snapshots/
 **/journal/shots/
 logs/assistant/
+playbook/incoming/
