@@ -14,3 +14,14 @@ mql5/dll/*.dll
 mql5/dll/*.lib
 mql5/dll/*.pdb
 mql5/dll/*.exp
+
+# secrets — never commit (defense in depth; real tokens live outside the repo)
+*.token
+*oauth*token*
+.env
+.env.*
+playbook/books_inbox/
+playbook/books_ingested/
+playbook/.snapshots/
+**/journal/shots/
+logs/assistant/

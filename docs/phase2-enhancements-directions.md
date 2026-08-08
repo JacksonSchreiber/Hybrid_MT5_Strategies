@@ -135,6 +135,15 @@ Python, stdlib-only preferred (csv/argparse), consistent with existing pipeline 
 This report is the primary input to the operator's AI coaching loop, so keep the
 format stable once shipped.
 
+## F2. Blindness leak: calendar date in overlay signal labels (small — found 2026-08-07)
+
+The training workflow includes a "blind advisor" that judges cropped screenshots with no
+symbol/date knowledge. The detector's signal label prints the calendar date onto the chart
+itself (e.g. `@ 2023.03.27` on a DeepFib label), which leaks timing straight through any
+crop. Add an input (`InpBlindLabels`, default false) that suppresses dates in all
+overlay-drawn label text (signal labels, and check econ-event line labels too) — bar-relative
+or time-of-day-only text is fine. Logged in `training/advisor/notes.md` contamination log.
+
 ## F. Deferred (do not build now)
 
 In-EA shadow tracking of skipped signals (virtual fills recording what a skip would have
