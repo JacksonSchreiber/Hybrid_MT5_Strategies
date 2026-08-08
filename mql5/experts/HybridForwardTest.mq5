@@ -113,6 +113,7 @@ input bool   InpShowAux     = true;           // draw aux level lines + labels
 input bool   InpShowFib     = true;           // draw the native Fib grid
 input bool   InpFibRay      = true;           // extend fib levels right across the chart
 input int    InpFontSize    = 10;             // overlay label font size (bigger = more readable)
+input bool   InpBlindLabels = false;          // F2: overlay signal labels carry NO date (time-of-day only) — blind-advisor screenshots
 input int    InpLineWidth   = 2;              // overlay line width (thicker = more readable)
 //--- coaching / decision-capture (Phase-2 enhancements)
 input bool   InpShotOnDecision = true;        // save a chart screenshot when the dialog opens
@@ -1333,8 +1334,13 @@ void DrawOverlays(int id,SignalCandidate &c)
    double anchor=(c.direction>0 ? c.zone_hi : c.zone_lo);
    if(ObjectCreate(0,tx,OBJ_TEXT,0,c.zone_to,anchor))
      {
+      //--- F2 blindness: with InpBlindLabels the label carries NO calendar date
+      //--- (time-of-day + UTC only), so a cropped screenshot handed to the blind
+      //--- advisor can't leak timing. Off by default (coaching/debug want dates).
+      string when=(InpBlindLabels? TimeToString(c.zone_to,TIME_MINUTES)+" UTC"
+                                 : TimeToString(c.zone_to,TIME_DATE|TIME_MINUTES));
       string txt=StringFormat("#%d %s %s%s @ %s",id,c.strategy,DirStr(c.direction),
-                              (c.d1_context?" [D1]":""),TimeToString(c.zone_to,TIME_DATE|TIME_MINUTES));
+                              (c.d1_context?" [D1]":""),when);
       if(c.comment!="") txt+="  ("+c.comment+")";
       ObjectSetString (0,tx,OBJPROP_TEXT,txt);
       ObjectSetInteger(0,tx,OBJPROP_COLOR,clrWhite);
