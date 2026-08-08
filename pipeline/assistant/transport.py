@@ -38,6 +38,26 @@ class ModelReply:
         return int(self.usage.get("cache_creation_input_tokens") or 0)
 
 
+def _downscale(b64: str, max_px: int) -> str:
+    """Shrink a PNG so its long edge ≤ max_px (spec §4: fewer image tokens →
+    lower latency/cost). Returns the original on any failure."""
+    try:
+        import base64 as _b64
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(_b64.b64decode(b64)))
+        w, h = im.size
+        if max(w, h) <= max_px:
+            return b64
+        s = max_px / max(w, h)
+        im = im.convert("RGB").resize((max(1, int(w * s)), max(1, int(h * s))))
+        out = io.BytesIO()
+        im.save(out, "PNG")
+        return _b64.b64encode(out.getvalue()).decode()
+    except Exception:
+        return b64
+
+
 def _img_block(b64: str) -> dict:
     return {"type": "image",
             "source": {"type": "base64", "media_type": "image/png", "data": b64}}
@@ -72,7 +92,8 @@ class AgentSdkTransport:
         else:
             kw["effort"] = "medium"
         opts = ClaudeAgentOptions(**kw)
-        content = [_img_block(b) for b in images_b64]
+        px = 1568 if tier == "tier1" else 2576
+        content = [_img_block(_downscale(b, px)) for b in images_b64]
         content.append({"type": "text", "text": user_text})
 
         async def gen():
@@ -116,7 +137,8 @@ class ApiTransport:
               tier: str, timeout: float = 180.0) -> ModelReply:
         import anthropic
         client = anthropic.Anthropic()
-        content = [_img_block(b) for b in images_b64]
+        px = 1568 if tier == "tier1" else 2576
+        content = [_img_block(_downscale(b, px)) for b in images_b64]
         content.append({"type": "text", "text": user_text})
         kwargs = dict(
             model=self.ids[tier],
