@@ -98,10 +98,47 @@ def _selftest(cfg: Config, transport, runs: int):
     print(f"\nJSONL log: {cfg.log_path}")
 
 
+def _test_tier2(cfg: Config, transport):
+    """Force an escalation to exercise the Tier 2 (Fable) review path."""
+    d1, h4 = _chart("d1"), _chart("h4")
+    meta = {"strategy": "DeepFib", "direction": 1, "session": "London",
+            "day_of_week": "Wednesday", "entry": 1.2100, "sl": 1.2050,
+            "tp1": 1.2200, "tp2": 1.2280, "sl_r": 1.0, "tp1_r": 2.0, "tp2_r": 3.6,
+            "cluster_exposure": "none reported"}
+    cal = {"high_impact_ahead": False, "hours_until": None, "affects": "none",
+           "recent_event_bias": "none"}
+    draft = {"verdict": "ADJUST", "confidence": "medium",
+             "why": "pullback depth is borderline between corrective and impulsive",
+             "changes_my_mind": "if the leg is climactic rather than organic",
+             "adjust": {"level": "sl", "direction": "widen",
+                        "to_structure": "below the 88.6% line", "reason": "trap below the zone"},
+             "escalate": True, "regime": "trend",
+             "detected_patterns": ["counter-trend-daily", "fast-pullback"],
+             "open_questions": ["is the pullback corrective or impulsive?",
+                                "does the leg look organic or climactic?"]}
+    audit = {"signal_id": "tier2-test", "symbol": "EURUSD.dk",
+             "signal_time": "2021-01-20 08:00 UTC"}
+    print("\n=== Tier 2 (Fable) review of a forced escalation ===")
+    out = app._escalate(draft=draft, meta=meta,
+                        user_text=app.render_context(meta, cal),
+                        images_b64=[d1, h4], cfg=cfg, transport=transport, audit=audit)
+    u = out.get("_usage", {})
+    print(f"tier2 verdict={out.get('verdict')} confidence={out.get('confidence')} "
+          f"tier={out.get('tier')}{' DEGRADED' if out.get('degraded') else ''}")
+    print(f"  why: {str(out.get('why'))[:220]}")
+    print(f"  usage: cache_read={u.get('cache_read')} cache_creation={u.get('cache_creation')} "
+          f"in={u.get('input')} out={u.get('output')}"
+          + (f"  [err: {out.get('_transport_error')}]" if out.get('_transport_error') else ""))
+    print(f"  t1_draft preserved for coach: {bool(out.get('t1_draft'))}")
+    print(f"\nJSONL log: {cfg.log_path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Blind advisory service launcher.")
     ap.add_argument("--selftest", action="store_true",
                     help="run the synthetic Tier 0 → Tier 1 end-to-end check")
+    ap.add_argument("--test-tier2", action="store_true",
+                    help="force an escalation to exercise the Tier 2 (Fable) path")
     ap.add_argument("--transport", choices=("agent_sdk", "api"), default=None,
                     help="override ASSISTANT_TRANSPORT (default agent_sdk = subscription)")
     ap.add_argument("--runs", type=int, default=2, help="self-test repeat count")
@@ -116,7 +153,9 @@ def main():
 
     transport = make_transport(cfg.transport, MODEL_ALIAS, MODEL_API_ID)
 
-    if a.selftest:
+    if a.test_tier2:
+        _test_tier2(cfg, transport)
+    elif a.selftest:
         _selftest(cfg, transport, max(1, a.runs))
     else:
         print("nothing to do — pass --selftest (or wire a real signal source).",
