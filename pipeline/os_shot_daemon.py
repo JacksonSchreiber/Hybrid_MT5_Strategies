@@ -51,19 +51,31 @@ from pipeline.inbox_bridge import (              # noqa: E402
 PENDING_DIR = JOURNAL_DIR / "pending"
 
 
-def find_pending(symbol: str, stamp: str, sid: int):
-    """The EA's pre-dialog sidecar row for this signal, or None if not yet written."""
-    p = PENDING_DIR / f"{symbol}_{stamp}_{sid}.csv"
-    if not p.exists():
-        return None
-    try:
-        with open(p, newline="", encoding="utf-8", errors="replace") as fh:
-            for r in csv.DictReader(fh):
-                if (r.get("signal_id") or "").strip() == str(sid):
-                    return r
-    except OSError:
-        return None
-    return None
+def find_pending(symbol: str, sid: int):
+    """Newest pre-dialog sidecar for (symbol, id), across ANY test-start stamp.
+    Returns (row, stamp) or (None, None). The stamp comes from the sidecar FILENAME
+    — never the visual-window title, whose 'from <date>' is the test RANGE start and
+    differs from the EA's g_start_time (first traded bar) when the range opens on a
+    non-trading day (L2 range 2022.01.01 but first bar 2022.01.02 → daemon looked for
+    _20220101_ while the EA wrote _20220102_)."""
+    cands = sorted(PENDING_DIR.glob(f"{symbol}_*_{sid}.csv"),
+                   key=lambda p: p.stat().st_mtime)
+    for p in reversed(cands):
+        try:
+            base, sidpart = p.stem.rsplit("_", 1)   # EURUSD.dk_20220102_3 → (…_20220102, 3)
+            _sym, stamp = base.rsplit("_", 1)        # EURUSD.dk_20220102 → (EURUSD.dk, 20220102)
+        except ValueError:
+            continue
+        if sidpart != str(sid):
+            continue
+        try:
+            with open(p, newline="", encoding="utf-8", errors="replace") as fh:
+                for r in csv.DictReader(fh):
+                    if (r.get("signal_id") or "").strip() == str(sid):
+                        return r, stamp
+        except OSError:
+            continue
+    return None, None
 
 # --- Windows-side scratch (PowerShell can't -File a \\wsl.localhost path) --------
 WIN_TMP = Path("/mnt/c/Users/jacks/AppData/Local/Temp")
@@ -180,9 +192,12 @@ def watch(interval: float):
                     print(f"  Signal #{sid}: PrintWindow capture FAILED")
             # 2) complete bundles as soon as the numbers exist. The EA's pre-dialog
             #    sidecar is written at signal-fire → delivery is real-time (popup
-            #    still up); the post-decision journal row is the fallback.
-            for sid, (raw, sym, stamp) in list(captured.items()):
-                row = find_pending(sym, stamp, sid) or find_journal_row(sym, stamp, sid)
+            #    still up); the post-decision journal row is the fallback. The real
+            #    test-start stamp comes from the sidecar, not the title (see above).
+            for sid, (raw, sym, title_stamp) in list(captured.items()):
+                row, stamp = find_pending(sym, sid)
+                if not row:
+                    row, stamp = find_journal_row(sym, title_stamp, sid), title_stamp
                 if row:
                     d1 = build_bundle(sid, stamp, sym, raw, row)
                     print(f"  Signal #{sid} {sym}: bundle delivered "
