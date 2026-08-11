@@ -18,8 +18,12 @@ ready-to-judge bundle in the advisor's inbox — no pasting, no manual capture:
   training/advisor/inbox/_archive/<stamp>_<id>/  same three, kept per signal (L0/L1 dataset)
 
 Modes:
-  --backfill   process every existing shot (build the dataset from a finished replay)
-  --watch      poll the shots dir; process new shots as they appear during a replay
+  --backfill   process every existing shot (build the dataset from a finished replay).
+               USE THIS FOR TESTER RUNS: the Strategy Tester commits sandbox file
+               writes only when the test thread ends, so shots appear all at once
+               after you close the tester — --watch sees nothing mid-run.
+  --watch      poll the shots dir; process new shots as they appear (LIVE trading,
+               where MQL5\\Files writes are immediate — not the tester).
   (default)    process only the newest shot → inbox
 
 Why the D1 is rendered, not screenshotted: MT5 can't open a 2nd chart inside the
@@ -47,8 +51,32 @@ from pipeline import export_d1_stats as d1s       # noqa: E402
 # --- paths (terminal-specific; override with flags if the terminal id differs) --
 TERMINAL = Path("/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal")
 TERMINAL_ID = "EE0304F13905552AE0B5EAEFB04866EB"
-SHOTS_DIR = TERMINAL / TERMINAL_ID / "MQL5" / "Files" / "journal" / "shots"
-JOURNAL_DIR = TERMINAL / "Common" / "Files" / "journal"
+TESTER_ROOT = TERMINAL.parent / "Tester"          # sibling of Terminal/
+JOURNAL_DIR = TERMINAL / "Common" / "Files" / "journal"   # FILE_COMMON → shared, live
+
+
+def _default_shots_dir() -> Path:
+    """Where ChartScreenShot actually writes.
+
+    In the STRATEGY TESTER, MQL5\\Files is sandboxed under the tester *agent*
+    (MetaQuotes\\Tester\\<id>\\Agent-<ip>-<port>\\MQL5\\Files), NOT the terminal —
+    and the port suffix isn't stable across machines, so glob Agent-* and take the
+    newest. Fall back to the terminal path for LIVE trading (no agent sandbox).
+    NOTE: the tester commits sandbox file writes when the test thread finishes, so
+    PNGs appear only after the run ends — use --backfill after closing the tester,
+    not --watch (which is for live trading)."""
+    shots = sorted(TESTER_ROOT.glob(f"{TERMINAL_ID}/Agent-*/MQL5/Files/journal/shots"),
+                   key=lambda p: p.stat().st_mtime)
+    if shots:
+        return shots[-1]
+    agents = sorted(TESTER_ROOT.glob(f"{TERMINAL_ID}/Agent-*"),
+                    key=lambda p: p.stat().st_mtime)
+    if agents:
+        return agents[-1] / "MQL5" / "Files" / "journal" / "shots"
+    return TERMINAL / TERMINAL_ID / "MQL5" / "Files" / "journal" / "shots"
+
+
+SHOTS_DIR = _default_shots_dir()
 INBOX = Path("/mnt/c/Users/jacks/OneDrive/Trading/hybrid_project/training/advisor/inbox")
 ARCHIVE = INBOX / "_archive"
 
@@ -260,7 +288,13 @@ def main():
 
     SHOTS_DIR = Path(a.shots_dir)
     if not SHOTS_DIR.exists():
-        sys.exit(f"shots dir not found: {SHOTS_DIR}")
+        if a.watch:
+            # The EA only FolderCreate's journal\shots on the FIRST screenshot, so
+            # when the bridge is booted at launch the dir isn't there yet. In watch
+            # mode, create it and wait for shots rather than dying on the race.
+            SHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        else:
+            sys.exit(f"shots dir not found: {SHOTS_DIR}")
 
     if a.backfill:
         pngs = sorted(SHOTS_DIR.glob("*.png"), key=lambda p: p.stat().st_mtime)

@@ -191,18 +191,143 @@ def replay(journal_path, limit, cfg: Config, transport):
     print(f"\nJSONL log: {cfg.log_path}")
 
 
+# --- REAL-bundle validation: score the exact overlay screenshots the advisor got ---
+def _png_b64(path):
+    import base64 as _b64
+    try:
+        return _b64.b64encode(path.read_bytes()).decode()
+    except OSError:
+        return None
+
+
+def _parse_sig_time(s: str):
+    for fmt in ("%Y.%m.%d %H:%M:%S", "%Y.%m.%d %H:%M"):
+        try:
+            return datetime.strptime((s or "").strip(), fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def _baseline_index(path):
+    """(signal_time, strategy, direction) -> graded r_multiple, from an AA_ALL run."""
+    idx = {}
+    with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+        for r in csv.DictReader(fh):
+            rm = (r.get("r_multiple") or "").strip()
+            dt = _parse_sig_time(r.get("signal_time") or "")
+            if rm in ("", None) or dt is None:
+                continue
+            d = 1 if (r.get("direction") or "").strip().upper() == "BUY" else -1
+            idx[(dt, (r.get("strategy") or "").strip(), d)] = float(rm)
+    return idx
+
+
+def replay_bundles(archive_dir, baseline_path, symbol, limit, cfg: Config, transport):
+    """For each blind bundle the inbox bridge delivered (REAL cropped overlay H4 +
+    rendered D1), find the setup's graded outcome in the AA_ALL baseline by
+    (signal_time, strategy, direction) — robust to id divergence from the EA's
+    one-setup-at-a-time suppression — run the full decision, tally vs graded R."""
+    from pathlib import Path
+    from pipeline.inbox_bridge import find_journal_row
+
+    base = _baseline_index(baseline_path)
+    bundles = sorted(p for p in Path(archive_dir).glob("*") if p.is_dir())
+    print(f"replay-bundles: {len(bundles)} bundles in {archive_dir}\n"
+          f"  baseline: {baseline_path} ({len(base)} graded setups)\n"
+          f"  transport={cfg.transport}  symbol={symbol}\n")
+
+    tally = {"good_skip": 0, "bad_skip": 0, "good_act": 0, "bad_act": 0,
+             "t0": 0, "unmatched": 0, "no_img": 0}
+    scored = 0
+    for bd in bundles:
+        try:
+            stamp, sid = bd.name.rsplit("_", 1)
+            sid = int(sid)
+        except ValueError:
+            continue
+        row = find_journal_row(symbol, stamp, sid)
+        if not row:
+            print(f"  {bd.name}: no interactive journal row — skipped")
+            continue
+        meta, signal, sig_dt, sym = _meta_and_signal(row)
+        strat = meta["strategy"]
+        r_real = base.get((sig_dt, strat, meta["direction"])) if sig_dt else None
+        if r_real is None:
+            tally["unmatched"] += 1
+            print(f"  · {bd.name} {strat:<8} "
+                  f"{'BUY ' if meta['direction']>0 else 'SELL'}  "
+                  f"UNMATCHED (AA_ALL suppressed this bar — no graded outcome)")
+            continue
+        h4 = _png_b64(bd / "h4.png")
+        d1 = _png_b64(bd / "d1.png")
+        imgs = [x for x in (d1, h4) if x]
+        if not h4:
+            tally["no_img"] += 1
+            print(f"  ? {bd.name}: h4.png missing — skipped")
+            continue
+        audit = {"bundle": bd.name, "symbol": sym,
+                 "signal_time": row.get("signal_time"), "baseline_r": r_real}
+        out = app.evaluate(signal=signal, audit=audit, images_b64=imgs,
+                           meta=meta, cfg=cfg, transport=transport)
+        v = out.get("verdict"); tier = out.get("tier")
+        acted = v in ("TAKE", "ADJUST")
+        if tier == 0:
+            tally["t0"] += 1
+        if v == "SKIP":
+            tally["good_skip" if r_real < 0 else "bad_skip"] += 1
+        elif acted:
+            tally["good_act" if r_real > 0 else "bad_act"] += 1
+        mark = ("✓" if (v == "SKIP" and r_real < 0) or (acted and r_real > 0)
+                else "✗")
+        scored += 1
+        print(f"  {mark} {bd.name} {strat:<8} "
+              f"{'BUY ' if meta['direction']>0 else 'SELL'}  "
+              f"verdict={v}/{out.get('confidence')} (tier {tier})  "
+              f"baseline={r_real:+.2f}R")
+        print(f"       why: {str(out.get('why'))[:150]}")
+        if limit and scored >= limit:
+            break
+
+    print("\n=== validation tally (REAL overlay bundles vs graded R) ===")
+    print(f"  good SKIP (skipped a loser):  {tally['good_skip']}")
+    print(f"  bad  SKIP (skipped a winner): {tally['bad_skip']}")
+    print(f"  good ACT  (took a winner):    {tally['good_act']}")
+    print(f"  bad  ACT  (took a loser):     {tally['bad_act']}")
+    print(f"  unmatched (no AA_ALL outcome): {tally['unmatched']}")
+    good = tally["good_skip"] + tally["good_act"]
+    if scored:
+        print(f"  agreement with graded outcome: {good}/{scored} = "
+              f"{100*good/scored:.0f}%  (small sample — {scored} setups)")
+    else:
+        print("  no matched setups scored.")
+    print(f"\nJSONL log: {cfg.log_path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Advisory front-end / real-chart validation.")
-    ap.add_argument("--replay", required=True, help="AA_ALL baseline journal CSV")
+    ap.add_argument("--replay", help="AA_ALL baseline CSV (re-render bare candles)")
+    ap.add_argument("--replay-bundles", dest="bundles",
+                    help="inbox _archive dir of REAL overlay bundles to score")
+    ap.add_argument("--baseline", help="AA_ALL baseline CSV (graded R for --replay-bundles)")
+    ap.add_argument("--symbol", default="EURUSD.dk",
+                    help="symbol for journal lookup (--replay-bundles)")
     ap.add_argument("--limit", type=int, default=0, help="cap signals (each is a real call)")
     ap.add_argument("--transport", choices=("agent_sdk", "api"), default=None)
     a = ap.parse_args()
+    if not a.replay and not a.bundles:
+        ap.error("one of --replay or --replay-bundles is required")
+    if a.bundles and not a.baseline:
+        ap.error("--replay-bundles requires --baseline")
     cfg = load_config()
     if a.transport:
         cfg.transport = a.transport
     setup_auth(cfg.transport)
     transport = make_transport(cfg.transport, MODEL_ALIAS, MODEL_API_ID)
-    replay(a.replay, a.limit, cfg, transport)
+    if a.bundles:
+        replay_bundles(a.bundles, a.baseline, a.symbol, a.limit, cfg, transport)
+    else:
+        replay(a.replay, a.limit, cfg, transport)
 
 
 if __name__ == "__main__":
