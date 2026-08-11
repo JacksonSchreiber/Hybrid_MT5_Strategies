@@ -278,8 +278,11 @@ void OnTick()
    if(!g_active) return;
 
    //--- econ-event lines: parse the calendar once, then redraw on each new bar
-   //--- (below) so the forward window rolls with the replay.
-   if(InpShowEvents && !g_ev_loaded) { LoadEconEvents(); DrawEconEvents(); }
+   //--- (below) so the forward window rolls with the replay. ALWAYS load (the
+   //--- approval popup's upcoming-events list needs g_ev_loaded, and the popup
+   //--- goes to the operator, not the blind advisor) — InpShowEvents gates only
+   //--- the on-CHART lines, which would leak event names into the advisor shot.
+   if(!g_ev_loaded) { LoadEconEvents(); if(InpShowEvents) DrawEconEvents(); }
 
    if(!g_started)
      {
