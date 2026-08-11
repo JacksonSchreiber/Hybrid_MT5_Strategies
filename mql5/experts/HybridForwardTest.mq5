@@ -486,6 +486,12 @@ void HandleSignal(SignalCandidate &cand)
 
    DrawOverlays(id,cand);
    PruneOverlays(id);
+   //--- scroll the chart HARD RIGHT to the latest bar before the dialog opens, so
+   //--- the advisor's decision-time screenshot always shows the most recent bars
+   //--- (incl. the trigger). Autoscroll can lag in the visual tester and leave the
+   //--- last few bars off the right edge; CHART_END forces the current bar into view.
+   ChartSetInteger(0,CHART_AUTOSCROLL,true);
+   ChartNavigate(0,CHART_END,0);
    ChartRedraw(0);
 
    //--- snapshot the detector's PROPOSED levels BEFORE the dialog can edit them
