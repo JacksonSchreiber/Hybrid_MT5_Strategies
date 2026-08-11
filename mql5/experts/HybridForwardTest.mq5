@@ -489,6 +489,11 @@ void HandleSignal(SignalCandidate &cand)
    double orig_entry=cand.entry, orig_sl=cand.sl, orig_tp=cand.tp;
    double orig_tp1=cand.tp1, orig_tp2=cand.tp2;
 
+   //--- real-time advisor delivery: write the blind numbers NOW (before the
+   //--- dialog) so the OS-capture daemon can deliver the setup while the popup is
+   //--- up, not only after the decision writes the main journal row.
+   WritePendingSetup(id,cand,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2);
+
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
    long decision_ms=0; int skip_reason=0; bool entry_edited=false;
    bool approved=AskApproval(id,cand,lots,caption,decision_ms,skip_reason,entry_edited);
@@ -966,6 +971,38 @@ void DecisionScreenshot(int id)
    string f=StringFormat("journal\\shots\\%s_%s_%d.png",_Symbol,StampCompact(g_start_time),id);
    if(!ChartScreenShot(0,f,InpShotW,InpShotH,ALIGN_RIGHT))
       Print("Signal #",id," screenshot failed err=",GetLastError());
+  }
+
+//+------------------------------------------------------------------+
+//| Real-time advisor sidecar: the setup's blind numbers for signal  |
+//| `id`, written to a FILE_COMMON CSV the INSTANT the signal fires   |
+//| (before the approval dialog). The OS-capture daemon reads this to |
+//| deliver the blind setup to the advisor WHILE the popup is up — the |
+//| main journal row isn't written until the operator decides, so     |
+//| without this the bundle can't complete until after the click.     |
+//| orig_* are the detector's PROPOSED levels (pre-edit) — exactly    |
+//| what the blind advisor should judge. Gated by InpShotOnDecision    |
+//| (the "this is an advisor-capture run" switch). common_flag on     |
+//| FolderCreate/FileOpen -> Common\Files so it's visible live (the    |
+//| tester sandbox is not).                                           |
+//+------------------------------------------------------------------+
+void WritePendingSetup(int id,SignalCandidate &cand,
+                       double oe,double osl,double ot,double ot1,double ot2)
+  {
+   if(!InpShotOnDecision) return;
+   FolderCreate("journal\\pending",FILE_COMMON);
+   string f=StringFormat("journal\\pending\\%s_%s_%d.csv",_Symbol,StampCompact(g_start_time),id);
+   int h=FileOpen(f,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE)
+     { Print("Signal #",id," pending sidecar open failed err=",GetLastError()); return; }
+   FileWriteString(h,"signal_id,signal_time,symbol,strategy,direction,"
+                     "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2\r\n");
+   FileWriteString(h,StringFormat("%d,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
+      id,TimeToString(cand.zone_to,TIME_DATE|TIME_MINUTES),_Symbol,cand.strategy,
+      (cand.direction>0?"BUY":"SELL"),
+      DoubleToString(oe,_Digits),DoubleToString(osl,_Digits),DoubleToString(ot,_Digits),
+      DoubleToString(ot1,_Digits),DoubleToString(ot2,_Digits)));
+   FileClose(h);
   }
 
 //--- R:R readout. Single-target => "1 : R". Scale-out => per-target R1/R2 plus

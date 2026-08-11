@@ -31,6 +31,7 @@ stdlib + Pillow; drives powershell.exe (win_capture.ps1) for the capture primiti
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import shutil
 import subprocess
@@ -41,7 +42,28 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO.parent))
 from pipeline.inbox_bridge import (              # noqa: E402
-    find_journal_row, blind_setup_md, render_d1, INBOX, ARCHIVE)
+    find_journal_row, blind_setup_md, render_d1, INBOX, ARCHIVE, JOURNAL_DIR)
+
+# The EA writes a per-signal sidecar here the INSTANT the signal fires (before the
+# dialog) — the blind numbers, FILE_COMMON so they're visible live. Reading this
+# (rather than the post-decision journal row) is what makes delivery real-time:
+# the bundle lands while the approval popup is still up.
+PENDING_DIR = JOURNAL_DIR / "pending"
+
+
+def find_pending(symbol: str, stamp: str, sid: int):
+    """The EA's pre-dialog sidecar row for this signal, or None if not yet written."""
+    p = PENDING_DIR / f"{symbol}_{stamp}_{sid}.csv"
+    if not p.exists():
+        return None
+    try:
+        with open(p, newline="", encoding="utf-8", errors="replace") as fh:
+            for r in csv.DictReader(fh):
+                if (r.get("signal_id") or "").strip() == str(sid):
+                    return r
+    except OSError:
+        return None
+    return None
 
 # --- Windows-side scratch (PowerShell can't -File a \\wsl.localhost path) --------
 WIN_TMP = Path("/mnt/c/Users/jacks/AppData/Local/Temp")
@@ -153,12 +175,14 @@ def watch(interval: float):
                 raw = WIN_TMP / f"hft_raw_{stamp}_{sid}.png"
                 if capture_visual(raw):
                     captured[sid] = (raw, sym, stamp)
-                    print(f"  Signal #{sid} {sym}: chart captured, awaiting journal row")
+                    print(f"  Signal #{sid} {sym}: chart captured")
                 else:
                     print(f"  Signal #{sid}: PrintWindow capture FAILED")
-            # 2) complete bundles whose journal row now exists (post-decision)
+            # 2) complete bundles as soon as the numbers exist. The EA's pre-dialog
+            #    sidecar is written at signal-fire → delivery is real-time (popup
+            #    still up); the post-decision journal row is the fallback.
             for sid, (raw, sym, stamp) in list(captured.items()):
-                row = find_journal_row(sym, stamp, sid)
+                row = find_pending(sym, stamp, sid) or find_journal_row(sym, stamp, sid)
                 if row:
                     d1 = build_bundle(sid, stamp, sym, raw, row)
                     print(f"  Signal #{sid} {sym}: bundle delivered "
