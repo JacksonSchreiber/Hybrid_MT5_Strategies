@@ -81,6 +81,8 @@ def find_pending(symbol: str, sid: int):
 WIN_TMP = Path("/mnt/c/Users/jacks/AppData/Local/Temp")
 PS_SRC = REPO / "win_capture.ps1"
 PS_WIN_WSL = WIN_TMP / "win_capture.ps1"          # copy lives here (real C: path)
+PS_SCROLL_SRC = REPO / "win_scroll_end.ps1"
+PS_SCROLL_WIN_WSL = WIN_TMP / "win_scroll_end.ps1"
 
 VISUAL_MATCH = "Strategy Tester Visualization"
 POPUP_RE = re.compile(r"^Signal #(\d+)\b")
@@ -129,6 +131,18 @@ def capture_visual(dst: Path) -> bool:
     return out.startswith("OK") and dst.exists()
 
 
+def scroll_chart_end():
+    """Send the visual chart an End keystroke (jump-to-latest) before capture — the
+    tester's autoscroll lags one bar at the popup pause and MT5 only honors End with
+    real focus. Best-effort; briefly steals focus then restores it (see the .ps1)."""
+    try:
+        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                        "-File", _winpath(PS_SCROLL_WIN_WSL)],
+                       capture_output=True, text=True, timeout=30)
+    except Exception:
+        pass
+
+
 def blind_crop(raw: Path, dst: Path):
     from PIL import Image
     im = Image.open(raw).convert("RGB")
@@ -165,7 +179,8 @@ def build_bundle(sid: int, stamp: str, sym: str, raw: Path, row) -> bool:
 
 
 def watch(interval: float):
-    shutil.copyfile(PS_SRC, PS_WIN_WSL)           # ensure the C: copy is current
+    shutil.copyfile(PS_SRC, PS_WIN_WSL)
+    shutil.copyfile(PS_SCROLL_SRC, PS_SCROLL_WIN_WSL)           # ensure the C: copy is current
     print(f"os_shot_daemon watching for approval popups (every {interval}s) — "
           "Ctrl-C to stop")
     captured: dict[int, tuple] = {}               # id -> (raw_path, sym, stamp), awaiting row
@@ -191,6 +206,8 @@ def watch(interval: float):
                     print(f"  Signal #{sid}: could not parse visual title — skip")
                     continue
                 time.sleep(SETTLE_S)   # let the chart settle on the latest bar first
+                scroll_chart_end()     # then force it to the latest bar (repaint-lag fix)
+                time.sleep(0.3)
                 raw = WIN_TMP / f"hft_raw_{stamp}_{sid}.png"
                 if capture_visual(raw):
                     captured[sid] = (raw, sym, stamp)
@@ -223,6 +240,7 @@ def test_capture():
     """One-shot: capture the visual window now + blind-crop it, print paths.
     For calibration — verify the crop is blind on a real capture."""
     shutil.copyfile(PS_SRC, PS_WIN_WSL)
+    shutil.copyfile(PS_SCROLL_SRC, PS_SCROLL_WIN_WSL)
     wins = list_windows()
     visual = next((w for w in wins if VISUAL_MATCH in w["title"]), None)
     if not visual:
