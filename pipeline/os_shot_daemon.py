@@ -84,6 +84,12 @@ PS_WIN_WSL = WIN_TMP / "win_capture.ps1"          # copy lives here (real C: pat
 
 VISUAL_MATCH = "Strategy Tester Visualization"
 POPUP_RE = re.compile(r"^Signal #(\d+)\b")
+
+# Grab the chart this long AFTER the popup first appears. The EA scrolls to
+# CHART_END at signal-fire, but the visual chart keeps settling for a moment after
+# the popup opens (the latest bar finishes rendering at the right edge) — capturing
+# on the first poll grabs it one bar early. Tunable if it's still off.
+SETTLE_S = 2.0
 # leading space + strict symbol charset so " on " doesn't match inside
 # "Visualizati·on·"; symbol is like EURUSD.dk, followed by ",H4 from <date>"
 VISUAL_RE = re.compile(r" on ([A-Za-z0-9.]+),\S+ from (\d{4})\.(\d{2})\.(\d{2})")
@@ -184,6 +190,7 @@ def watch(interval: float):
                 if not sym:
                     print(f"  Signal #{sid}: could not parse visual title — skip")
                     continue
+                time.sleep(SETTLE_S)   # let the chart settle on the latest bar first
                 raw = WIN_TMP / f"hft_raw_{stamp}_{sid}.png"
                 if capture_visual(raw):
                     captured[sid] = (raw, sym, stamp)
