@@ -137,6 +137,9 @@ bool            g_events_drawn = false;      // econ-event lines drawn once (fir
 //--- THIS symbol's base/quote ccy). Redrawn each new bar so upcoming events appear
 //--- as replay advances; bias/actual is revealed ONLY once an event has passed.
 bool            g_ev_loaded = false;
+int             g_coach     = 0;             // 1 = coach mode on: hide event lines from the
+                                             // chart so the blind-advisor screenshot carries no
+                                             // event names (toggled live in the approval popup)
 datetime        g_ev_t[];                    // event time (UTC)
 string          g_ev_ccy[];                  // event currency (base or quote of _Symbol)
 string          g_ev_name[];                 // event name
@@ -1126,11 +1129,17 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
       double e=ce, s=cs, t1=c1, t2=c2; int dirty=0;
       r=TD_Poll(e,s,t1,t2,dirty);
       if(r!=0) { if(r==2) skip_reason=TD_SkipReason(); break; }
-      //--- coach mode: scrub/unscrub the CHART corner label to match the dialog
-      //--- (only if we actually captured a label - never blank it)
+      //--- coach mode: scrub the CHART corner label AND hide the econ-event lines
+      //--- (event labels carry currency+name -> would leak into the advisor shot),
+      //--- both toggling live to match the dialog checkbox.
       int cnow=TD_Coach();
-      if(cnow!=coach && lblFull!="")
-        { coach=cnow; ObjectSetString(0,p+"label",OBJPROP_TEXT,coach?lblScrub:lblFull); ChartRedraw(0); }
+      if(cnow!=coach)
+        {
+         coach=cnow; g_coach=cnow;
+         if(lblFull!="") ObjectSetString(0,p+"label",OBJPROP_TEXT,coach?lblScrub:lblFull);
+         if(InpShowEvents) DrawEconEvents();   // redraw (coach on -> cleared; off -> shown)
+         ChartRedraw(0);
+        }
       if(!dirty) { UiSpin(12); continue; }
 
       //--- which of the up-to-4 fields changed (tolerance kills sub-tick jitter)
@@ -1619,6 +1628,7 @@ void DrawEconEvents()
   {
    if(!g_ev_loaded) return;
    ObjectsDeleteAll(0,InpObjPrefix+"EVT");   // clear EVT_* and EVTL_* from last redraw
+   if(g_coach) return;                        // coach mode: keep the chart blind (no event names)
    string base,quote; SymbolCcy(base,quote);
    datetime now=iTime(_Symbol,g_tf,0);
    datetime tmin=now-(datetime)((long)InpEvtPastDays*86400);

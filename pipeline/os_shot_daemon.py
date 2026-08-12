@@ -87,11 +87,10 @@ PS_SCROLL_WIN_WSL = WIN_TMP / "win_scroll_end.ps1"
 VISUAL_MATCH = "Strategy Tester Visualization"
 POPUP_RE = re.compile(r"^Signal #(\d+)\b")
 
-# Grab the chart this long AFTER the popup first appears. The EA scrolls to
-# CHART_END at signal-fire, but the visual chart keeps settling for a moment after
-# the popup opens (the latest bar finishes rendering at the right edge) — capturing
-# on the first poll grabs it one bar early. Tunable if it's still off.
-SETTLE_S = 2.0
+# Small pause after the popup appears before we nudge+grab. The End-key nudge does
+# the actual positioning to the latest bar, so this only needs to let the popup/
+# chart reach a stable paused state — keep it short.
+SETTLE_S = 0.4
 # leading space + strict symbol charset so " on " doesn't match inside
 # "Visualizati·on·"; symbol is like EURUSD.dk, followed by ",H4 from <date>"
 VISUAL_RE = re.compile(r" on ([A-Za-z0-9.]+),\S+ from (\d{4})\.(\d{2})\.(\d{2})")
