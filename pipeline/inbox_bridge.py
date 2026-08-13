@@ -177,7 +177,7 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
 
     lines = [
         f"# BLIND SETUP — {strat} {dstr}",
-        "_No symbol, no date. For the blind advisor. Judge from the charts + the playbook only._",
+        "_No symbol, no date. For the blind advisor. Judge from the charts + the library only._",
         "",
         f"- **Session / day-of-week:** {sess} / {dow}",
         f"- **Proposed levels (chart-visible prices):** entry {entry}, SL {sl}, "
@@ -201,13 +201,19 @@ def crop_blind(src: Path, dst: Path, top=CROP_TOP, bottom=CROP_BOTTOM):
     im.crop((0, top, w, max(top + 1, h - bottom))).save(dst, "PNG")
 
 
-def render_d1(symbol: str, asof: datetime, dst: Path) -> bool:
-    """Blind D1 candlestick from M1→D1 truncated at asof. Returns False if no data."""
+def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None) -> bool:
+    """Blind D1 candlestick truncated at asof. Returns False if no data.
+
+    Prefers `d1_csv` — the EA-dumped daily series written at signal-fire, which
+    exists for EVERY symbol and whose final (partial) bar ends AT the signal (no
+    post-decision price leak). Falls back to aggregating the on-disk M1 CSV (only
+    EURUSD survives on disk; used for offline backfill). Both share the same
+    columns, so the per-day aggregator is a no-op on the already-daily EA file."""
     from PIL import Image, ImageDraw
-    m1 = d1s._find_m1(symbol)
-    if not m1:
+    src = d1_csv if (d1_csv and d1_csv.exists()) else d1s._find_m1(symbol)
+    if not src:
         return False
-    bars = d1s._aggregate_d1(m1, asof)
+    bars = d1s._aggregate_d1(src, asof)
     if len(bars) < 20:
         return False
     seg = bars[-D1_RENDER_BARS:]

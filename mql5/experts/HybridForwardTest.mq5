@@ -500,7 +500,10 @@ void HandleSignal(SignalCandidate &cand)
 
    //--- real-time advisor delivery: write the blind numbers NOW (before the
    //--- dialog) so the OS-capture daemon can deliver the setup while the popup is
-   //--- up, not only after the decision writes the main journal row.
+   //--- up, not only after the decision writes the main journal row. The D1
+   //--- daily-context series is dumped FIRST so that whenever the pending sidecar
+   //--- exists (what the daemon waits on) the matching D1 file is already there.
+   WriteD1Series(id);
    WritePendingSetup(id,cand,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2);
 
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
@@ -995,6 +998,42 @@ void DecisionScreenshot(int id)
 //| FolderCreate/FileOpen -> Common\Files so it's visible live (the    |
 //| tester sandbox is not).                                           |
 //+------------------------------------------------------------------+
+//--- Dump the symbol's recent DAILY bars (up to the signal instant) so the blind
+//--- advisor gets a correct daily-context render for ANY symbol - not just the
+//--- one EURUSD M1 CSV that still lives on disk. Truncation is automatic:
+//--- CopyRates(...,0,N) in the tester returns bars only up to the current modelled
+//--- time, so the last (partial) bar ends AT the signal - no post-decision leak.
+//--- Rows are written OLDEST->NEWEST (ArraySetAsSeries false) because the Python
+//--- aggregator assumes chronological-ascending input; newest-first would silently
+//--- render a time-mirrored chart. Called BEFORE WritePendingSetup so that
+//--- "pending sidecar exists" always implies "D1 sidecar exists" (the daemon
+//--- completes a bundle the moment the pending row appears).
+void WriteD1Series(int id)
+  {
+   if(!InpShotOnDecision) return;
+   MqlRates r[];
+   ArraySetAsSeries(r,false);                       // index 0 = OLDEST -> ascending
+   int n=CopyRates(_Symbol,PERIOD_D1,0,200,r);
+   if(n<=0){ Print("Signal #",id," D1 series copy failed err=",GetLastError()); return; }
+   FolderCreate("journal\\d1",FILE_COMMON);
+   string f=StringFormat("journal\\d1\\%s_%s_%d.csv",_Symbol,StampCompact(g_start_time),id);
+   int h=FileOpen(f,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE)
+     { Print("Signal #",id," D1 sidecar open failed err=",GetLastError()); return; }
+   FileWriteString(h,"Date,Time,Open,High,Low,Close,Volume\r\n");
+   MqlDateTime dt;
+   for(int i=0;i<n;i++)
+     {
+      TimeToStruct(r[i].time,dt);
+      FileWriteString(h,StringFormat("%04d%02d%02d,%02d%02d%02d,%s,%s,%s,%s,%d\r\n",
+         dt.year,dt.mon,dt.day,dt.hour,dt.min,dt.sec,
+         DoubleToString(r[i].open,_Digits),DoubleToString(r[i].high,_Digits),
+         DoubleToString(r[i].low,_Digits),DoubleToString(r[i].close,_Digits),
+         (int)r[i].tick_volume));
+     }
+   FileClose(h);
+  }
+
 void WritePendingSetup(int id,SignalCandidate &cand,
                        double oe,double osl,double ot,double ot1,double ot2)
   {

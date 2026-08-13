@@ -24,7 +24,7 @@ FLOW (poll loop, ~2s):
 
 For LIVE trading, ChartScreenShot works and inbox_bridge --watch is the right tool;
 this daemon is specifically for tester replays. Reuses inbox_bridge helpers so the
-bundle format is identical → pipeline.assistant.frontend --replay-bundles scores it.
+delivered bundle (h4.png + d1.png + setup.md) is exactly what the advisor expects.
 
 stdlib + Pillow; drives powershell.exe (win_capture.ps1) for the capture primitive.
 """
@@ -49,6 +49,10 @@ from pipeline.inbox_bridge import (              # noqa: E402
 # (rather than the post-decision journal row) is what makes delivery real-time:
 # the bundle lands while the approval popup is still up.
 PENDING_DIR = JOURNAL_DIR / "pending"
+# The EA also dumps a per-signal DAILY-bar series here (written just before the
+# pending sidecar), so render_d1 has correct daily context for ANY symbol — not
+# only the one EURUSD M1 CSV that still lives on disk.
+D1_DIR = JOURNAL_DIR / "d1"
 
 
 def find_pending(symbol: str, sid: int):
@@ -162,17 +166,28 @@ def parse_visual(title: str):
 
 def build_bundle(sid: int, stamp: str, sym: str, raw: Path, row) -> bool:
     md, sig_dt = blind_setup_md(row)
-    arch = ARCHIVE / f"{stamp}_{sid}"
+    # Symbol in the archive key: alt-window levels share a (stamp, id) with their
+    # primary (e.g. GBPUSD and EURUSD both stamp 20220102/#1), so a bare key made
+    # them collide — the second symbol's bundle overwrote the first's.
+    arch = ARCHIVE / f"{sym}_{stamp}_{sid}"
     arch.mkdir(parents=True, exist_ok=True)
     blind_crop(raw, arch / "h4.png")
-    d1_ok = render_d1(sym, sig_dt, arch / "d1.png") if sig_dt else False
+    d1_csv = D1_DIR / f"{sym}_{stamp}_{sid}.csv"     # EA-dumped daily series (any symbol)
+    d1_ok = render_d1(sym, sig_dt, arch / "d1.png", d1_csv) if sig_dt else False
     if not d1_ok:
         md += "\n_(D1 render unavailable for this symbol — use the H4 + numbers.)_\n"
+        # Never leave a stale D1 from a previous setup/symbol: a wrong-symbol daily
+        # chart is worse than none. Delete any leftover d1.png in both locations.
+        for p in (arch / "d1.png", INBOX / "d1.png"):
+            try:
+                p.unlink()
+            except FileNotFoundError:
+                pass
     (arch / "setup.md").write_text(md, encoding="utf-8")
     INBOX.mkdir(parents=True, exist_ok=True)
     blind_crop(raw, INBOX / "h4.png")
     if d1_ok:
-        render_d1(sym, sig_dt, INBOX / "d1.png")
+        render_d1(sym, sig_dt, INBOX / "d1.png", d1_csv)
     (INBOX / "setup.md").write_text(md, encoding="utf-8")
     return d1_ok
 
