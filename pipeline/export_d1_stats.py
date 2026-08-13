@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """export_d1_stats.py — cutoff-truncated D1 market stats for HISTORICAL market
-briefs (docs/assistant-app-implementation.md §4b; consumed by the `market-brief`
-skill's historical mode, .claude/skills/market-brief/SKILL.md).
+briefs (consumed by the `market-brief` skill's historical mode,
+.claude/skills/market-brief/SKILL.md). Also provides the M1→D1 aggregation the
+advisor's D1 chart render reuses (pipeline/inbox_bridge.py).
 
     ./pipeline/export_d1_stats.py --symbol EURUSD --asof 2022-06-15
 

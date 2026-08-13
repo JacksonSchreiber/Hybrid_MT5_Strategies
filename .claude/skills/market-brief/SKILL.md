@@ -46,9 +46,8 @@ periods are written with hindsight. Both are lookahead contamination of the trad
 training.
 
 Therefore, historical briefs are **computed, not written**:
-1. Run `./pipeline/export_d1_stats.py --symbol <S> --asof <end-date>` (engineer
-   deliverable — see `docs/assistant-app-implementation.md` §4b). It returns JSON stats
-   computed ONLY from data at or before the cutoff.
+1. Run `./pipeline/export_d1_stats.py --symbol <S> --asof <end-date>`. It returns JSON
+   stats computed ONLY from data at or before the cutoff.
 2. Fill the template below mechanically from that JSON. Every sentence must trace to a
    JSON field. Add nothing — no color, no interpretation, no "notably", nothing you
    know about the era. Macro-backdrop and quirk sections are OMITTED in historical mode
