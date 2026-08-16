@@ -85,6 +85,7 @@
 #define ID_EVENTS   213   /* read-only multiline EDIT: upcoming-events list */
 #define ID_REDACT   214   /* BUTTON: toggle coach-mode redaction */
 #define ID_EVTOGGLE 215   /* BUTTON: collapse/expand the events list */
+#define ID_SHOT     216   /* BUTTON: manually re-take the H4 blind screenshot */
 #define ID_REASON1  300   /* 6 reason buttons: ID_REASON1 + (code-1), code 1..6 */
 
 /* ---- management-panel control ids (separate window, separate thread) ------ */
@@ -137,6 +138,8 @@ typedef struct {
     HWND   hRedact;              /* coach-mode toggle button */
     HWND   hHint;
     HWND   hYes,   hNo;
+    HWND   hShot;               /* "Retake H4 screenshot" button */
+    int    shot_req;            /* 1 = operator asked to re-take the H4 screenshot */
     HWND   hWhy;                /* "Why skip?" prompt (reason-picker mode) */
     HWND   hReason[6];          /* labelled reason buttons (codes 1..6) */
     HWND   hBack;               /* back out of the reason picker */
@@ -303,8 +306,13 @@ static void relayout(void)
         MoveWindow(g.hYes, bx, btnTop, L_BTNW, L_BTNH, TRUE);
         MoveWindow(g.hNo,  bx + L_BTNW + L_BTNGAP, btnTop, L_BTNW, L_BTNH, TRUE);
         y = btnTop + L_BTNH;
+        /* full-width "Retake H4 screenshot" row under Accept/Skip */
+        ShowWindow(g.hShot, SW_SHOW);
+        MoveWindow(g.hShot, bx, y + L_RGAP, L_BTNW * 2 + L_BTNGAP, L_RBTNH, TRUE);
+        y += L_RGAP + L_RBTNH;
     } else {
         ShowWindow(g.hYes, SW_HIDE); ShowWindow(g.hNo, SW_HIDE);
+        ShowWindow(g.hShot, SW_HIDE);
         ShowWindow(g.hWhy, SW_SHOW); ShowWindow(g.hBack, SW_SHOW);
         MoveWindow(g.hWhy, L_PADX, btnTop + 4, W - 2 * L_PADX, 20, TRUE);
         int rTop1 = btnTop + 28;
@@ -378,6 +386,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (id == ID_BACK){ show_reason_picker(0); return 0; }   /* cancel the picker */
         if (id == ID_REDACT){ g.redact ^= 1; apply_redact(); return 0; }
         if (id == ID_EVTOGGLE){ g.events_open ^= 1; relayout(); return 0; }
+        if (id == ID_SHOT){ g.shot_req = 1;
+            SetWindowTextW(g.hHint, L"Retaking the H4 screenshot - it will overwrite the "
+                                    L"advisor's h4.png in a moment."); return 0; }
         if (id >= ID_REASON1 && id < ID_REASON1 + 6) {
             g.result = 2; g.skip_reason = id - ID_REASON1 + 1; return 0;
         }
@@ -552,6 +563,15 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     SendMessageW(g.hYes, WM_SETFONT, (WPARAM)g.fNormal, TRUE);
     SendMessageW(g.hNo,  WM_SETFONT, (WPARAM)g.fNormal, TRUE);
 
+    /* manual re-screenshot: overwrites the advisor's h4.png for THIS setup. The
+       OS-capture daemon watches for the EA-written trigger and re-grabs the
+       tester window. Handy if the auto-capture came out wrong. */
+    g.shot_req = 0;
+    g.hShot = CreateWindowExW(0, L"BUTTON", L"Retake H4 screenshot",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, L_BTNW, L_RBTNH, hwnd, (HMENU)(INT_PTR)ID_SHOT, g_hinst, NULL);
+    SendMessageW(g.hShot, WM_SETFONT, (WPARAM)g.fHint, TRUE);
+
     /* --- reason picker (hidden until Skip is clicked) --- */
     g.hWhy = CreateWindowExW(0, L"STATIC", L"Why skip this setup?  (or press 1-6)",
         WS_CHILD | SS_CENTER, 0, 0, 10, 20, hwnd, (HMENU)(INT_PTR)ID_WHY, g_hinst, NULL);
@@ -671,6 +691,13 @@ int TD_SkipReason(void) { return g.skip_reason; }
    DLL toggle alone can't touch it).                                          */
 __declspec(dllexport)
 int TD_Coach(void) { return g.redact; }
+
+/* ------------------------------------------------------------------------ */
+/* 1 (once) if the operator clicked "Retake H4 screenshot" since the last    */
+/* poll - the EA then writes the recapture trigger the OS-capture daemon     */
+/* watches. Read-and-clear so each click fires exactly one re-shot.          */
+__declspec(dllexport)
+int TD_TakeShotRequested(void) { int r = g.shot_req; g.shot_req = 0; return r; }
 
 /* ------------------------------------------------------------------------ */
 /* Set the "Order" row text ("MARKET" or e.g. "BUY LIMIT @ 1.08200"). The EA */

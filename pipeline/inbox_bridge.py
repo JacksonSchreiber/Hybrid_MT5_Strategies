@@ -136,6 +136,15 @@ def _session(hour: int) -> str:
     return "Asia"
 
 
+def setup_levels(row) -> tuple:
+    """(entry, sl, tp1, tp2) from a journal row — the proposed (orig_*) prices,
+    same source blind_setup_md quotes, for drawing the setup lines on the D1 chart."""
+    return (_f(row, "orig_entry", "entry"),
+            _f(row, "orig_sl", "sl"),
+            _f(row, "orig_tp1", "tp1", "orig_tp", "tp"),
+            _f(row, "orig_tp2", "tp2"))
+
+
 def blind_setup_md(row) -> tuple[str, datetime | None]:
     """Build the blind setup.md (no symbol, no date) + return the signal datetime
     (used for the D1 render). Numbers come from the journal row."""
@@ -201,7 +210,8 @@ def crop_blind(src: Path, dst: Path, top=CROP_TOP, bottom=CROP_BOTTOM):
     im.crop((0, top, w, max(top + 1, h - bottom))).save(dst, "PNG")
 
 
-def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None) -> bool:
+def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None,
+              levels: tuple | None = None) -> bool:
     """Blind D1 candlestick truncated at asof. Returns False if no data.
 
     Prefers `d1_csv` — the EA-dumped daily series written at signal-fire, which
@@ -221,6 +231,13 @@ def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None
     ema = d1s._ema(closes, 20)
     hi = max(b[2] for b in seg)
     lo = min(b[3] for b in seg)
+    # widen the price range so the setup levels (entry/SL/TP) stay on-screen even
+    # when a target sits beyond the daily high/low of the rendered window.
+    lv = [p for p in (levels or ()) if p is not None]
+    if lv:
+        span = (hi - lo) or 1e-9
+        hi = max(hi, max(lv)) + 0.02 * span
+        lo = min(lo, min(lv)) - 0.02 * span
     rng = (hi - lo) or 1e-9
     W, H, pad = 900, 460, 24
     im = Image.new("RGB", (W, H), (13, 17, 23))
@@ -241,6 +258,22 @@ def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None
     pts = [(pad + i * ((W - 2 * pad) // n) + cw // 2, yv(ema[i])) for i in range(n)]
     if len(pts) > 1:
         d.line(pts, fill=(210, 153, 34), width=2)
+    # setup levels: dashed entry (green) / SL (red) / TP1·TP2 (blue), matching the
+    # H4 chart's colours — gives the advisor the daily context WITH the trade plan.
+    if lv:
+        entry, sl, tp1, tp2 = (list(levels) + [None] * 4)[:4]
+        for price, col, lab in ((entry, (63, 185, 80), "entry"),
+                                (sl,    (248, 81, 73), "SL"),
+                                (tp1,   (88, 166, 255), "TP1"),
+                                (tp2,   (88, 166, 255), "TP2")):
+            if price is None:
+                continue
+            y = yv(price)
+            if y < pad or y > H - pad:
+                continue
+            for xs in range(pad, W - pad, 12):        # dashed line
+                d.line([(xs, y), (min(xs + 6, W - pad), y)], fill=col)
+            d.text((W - pad - 26, max(0, y - 11)), lab, fill=col)
     im.save(dst, "PNG")
     return True
 
@@ -258,10 +291,11 @@ def process(png: Path, *, to_inbox: bool, verbose=True) -> bool:
         return False
 
     md, sig_dt = blind_setup_md(row)
+    lv = setup_levels(row)
     arch = ARCHIVE / f"{stamp}_{sig_id}"
     arch.mkdir(parents=True, exist_ok=True)
     crop_blind(png, arch / "h4.png")
-    d1_ok = render_d1(symbol, sig_dt, arch / "d1.png") if sig_dt else False
+    d1_ok = render_d1(symbol, sig_dt, arch / "d1.png", levels=lv) if sig_dt else False
     if not d1_ok:
         md += "\n_(D1 render unavailable for this symbol — use the H4 + numbers.)_\n"
     (arch / "setup.md").write_text(md, encoding="utf-8")
@@ -270,7 +304,7 @@ def process(png: Path, *, to_inbox: bool, verbose=True) -> bool:
         INBOX.mkdir(parents=True, exist_ok=True)
         crop_blind(png, INBOX / "h4.png")
         if d1_ok:
-            render_d1(symbol, sig_dt, INBOX / "d1.png")
+            render_d1(symbol, sig_dt, INBOX / "d1.png", levels=lv)
         (INBOX / "setup.md").write_text(md, encoding="utf-8")
     if verbose:
         print(f"  {png.name} → {arch.name}/  (d1={'yes' if d1_ok else 'no'}"

@@ -42,7 +42,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO.parent))
 from pipeline.inbox_bridge import (              # noqa: E402
-    find_journal_row, blind_setup_md, render_d1, INBOX, ARCHIVE, JOURNAL_DIR)
+    find_journal_row, blind_setup_md, setup_levels, render_d1,
+    INBOX, ARCHIVE, JOURNAL_DIR)
 
 # The EA writes a per-signal sidecar here the INSTANT the signal fires (before the
 # dialog) — the blind numbers, FILE_COMMON so they're visible live. Reading this
@@ -53,6 +54,9 @@ PENDING_DIR = JOURNAL_DIR / "pending"
 # pending sidecar), so render_d1 has correct daily context for ANY symbol — not
 # only the one EURUSD M1 CSV that still lives on disk.
 D1_DIR = JOURNAL_DIR / "d1"
+# The EA writes this (FILE_COMMON) when the operator clicks "Retake H4 screenshot"
+# on the approval dialog. We re-grab the tester window and overwrite inbox/h4.png.
+RECAPTURE_REQ = JOURNAL_DIR / "recapture.req"
 
 
 def find_pending(symbol: str, sid: int):
@@ -172,8 +176,9 @@ def build_bundle(sid: int, stamp: str, sym: str, raw: Path, row) -> bool:
     arch = ARCHIVE / f"{sym}_{stamp}_{sid}"
     arch.mkdir(parents=True, exist_ok=True)
     blind_crop(raw, arch / "h4.png")
+    lv = setup_levels(row)                            # entry/SL/TP lines for the D1 render
     d1_csv = D1_DIR / f"{sym}_{stamp}_{sid}.csv"     # EA-dumped daily series (any symbol)
-    d1_ok = render_d1(sym, sig_dt, arch / "d1.png", d1_csv) if sig_dt else False
+    d1_ok = render_d1(sym, sig_dt, arch / "d1.png", d1_csv, levels=lv) if sig_dt else False
     if not d1_ok:
         md += "\n_(D1 render unavailable for this symbol — use the H4 + numbers.)_\n"
         # Never leave a stale D1 from a previous setup/symbol: a wrong-symbol daily
@@ -187,9 +192,43 @@ def build_bundle(sid: int, stamp: str, sym: str, raw: Path, row) -> bool:
     INBOX.mkdir(parents=True, exist_ok=True)
     blind_crop(raw, INBOX / "h4.png")
     if d1_ok:
-        render_d1(sym, sig_dt, INBOX / "d1.png", d1_csv)
+        render_d1(sym, sig_dt, INBOX / "d1.png", d1_csv, levels=lv)
     (INBOX / "setup.md").write_text(md, encoding="utf-8")
     return d1_ok
+
+
+def handle_recapture(wins: list[dict]):
+    """Operator clicked 'Retake H4 screenshot': focus the tester window, re-grab it,
+    and OVERWRITE the advisor's h4.png (inbox + the current archive copy). Reuses the
+    same settle→End-focus→PrintWindow→blind-crop path as the automatic capture."""
+    def _clear():
+        try:
+            RECAPTURE_REQ.unlink()
+        except FileNotFoundError:
+            pass
+    visual = next((w for w in wins if VISUAL_MATCH in w["title"]), None)
+    if not visual:
+        print("  recapture requested but no visual-tester window found — ignoring")
+        _clear(); return
+    sym, title_stamp = parse_visual(visual["title"])
+    popup = next((w for w in wins if POPUP_RE.match(w["title"])), None)
+    sid = int(POPUP_RE.match(popup["title"]).group(1)) if popup else None
+    time.sleep(SETTLE_S)
+    scroll_chart_end()          # focus the tester window + jump to the latest bar
+    time.sleep(0.3)
+    raw = WIN_TMP / "hft_recap_raw.png"
+    if not capture_visual(raw):
+        print("  manual recapture: PrintWindow FAILED"); _clear(); return
+    INBOX.mkdir(parents=True, exist_ok=True)
+    blind_crop(raw, INBOX / "h4.png")
+    extra = ""
+    if sym and sid is not None:                 # also refresh the archived copy
+        _row, st = find_pending(sym, sid)
+        arch = ARCHIVE / f"{sym}_{st or title_stamp}_{sid}"
+        if arch.exists():
+            blind_crop(raw, arch / "h4.png"); extra = f" (+archive {sym}_{sid})"
+    print(f"  manual recapture: overwrote inbox/h4.png{extra}")
+    _clear()
 
 
 def watch(interval: float):
@@ -202,6 +241,8 @@ def watch(interval: float):
     while True:
         try:
             wins = list_windows()
+            if RECAPTURE_REQ.exists():          # operator asked for a manual re-shot
+                handle_recapture(wins)
             visual = next((w for w in wins if VISUAL_MATCH in w["title"]), None)
             # 1) new popups → capture the chart image now (overlays are live)
             for w in wins:
