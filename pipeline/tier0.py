@@ -35,7 +35,11 @@ HIGH_IMPACT_KEYS = (
     "federal funds", "fomc", "rate decision", "official bank rate",
     "main refinancing", "cash rate", "interest rate", "rate statement",
     "bank rate", "monetary policy", "press conference", "ecb press",
-    "non-farm", "nonfarm", "cpi", "gdp",
+    "non-farm", "nonfarm", "cpi", "gdp", "pce",
+    # Tier B (2026-08-15): remaining red-folder reds. member-country sub-releases
+    # are already dropped by _SKIP_COUNTRY above, so these stay US/EZ/UK headline.
+    "unemployment rate", "average hourly earnings", "average earnings",
+    "retail sales", "claimant count", "pmi",
 )
 # member-country sub-releases the EA drops (only headline US/EZ/UK prints matter)
 _SKIP_COUNTRY = ("german", "french", "spanish", "italian", "chinese",

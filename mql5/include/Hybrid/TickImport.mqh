@@ -210,8 +210,21 @@ bool TI_SetupSymbol(const string csvpath)
       if(!is_custom) { Print("  [",g_ti_base,"] FATAL: '",g_ti_sym,"' exists as a non-custom symbol."); return false; }
       if(!g_ti_deleteIfExists) { Print("  [",g_ti_base,"] FATAL: '",g_ti_sym,"' exists and deleteIfExists=false."); return false; }
       Print("  [",g_ti_base,"] existing custom symbol - deleting to reload fresh.");
-      SymbolSelect(g_ti_sym,false);
-      if(!CustomSymbolDelete(g_ti_sym))
+      // Free the symbol before deleting, else CustomSymbolDelete returns err=5306
+      // (symbol is selected in Market Watch and/or has an open chart - e.g. when
+      // the terminal restored the operator's profile with a chart on this symbol).
+      // Deselect + close its charts, then retry (both ops are async, so Sleep+loop).
+      bool deleted=false;
+      for(int attempt=0; attempt<10 && !deleted; attempt++)
+        {
+         SymbolSelect(g_ti_sym,false);
+         long cid=ChartFirst();
+         while(cid>=0)
+           { long nx=ChartNext(cid); if(ChartSymbol(cid)==g_ti_sym) ChartClose(cid); cid=nx; }
+         Sleep(300);
+         deleted=CustomSymbolDelete(g_ti_sym);
+        }
+      if(!deleted)
         { Print("  [",g_ti_base,"] FATAL: CustomSymbolDelete failed err=",GetLastError()); return false; }
      }
 

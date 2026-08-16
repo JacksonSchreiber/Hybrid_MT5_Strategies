@@ -41,6 +41,7 @@ int  TD_SkipReason(void);   // 1-6 skip-reason code from the last skip (0 none)
 void TD_SetOrderType(string s); // set the "Order" row (MARKET / BUY LIMIT @ x)
 void TD_SetEvents(string abs_dates,string rel_dates); // upcoming-events list (both forms)
 int  TD_Coach(void);        // 1 = coach mode on (scrub chart label to match)
+int  TD_TakeShotRequested(void); // 1 (once) if operator clicked "Retake H4 screenshot"
 //--- mid-trade MANAGEMENT PANEL (separate, non-modal window on its OWN thread,
 //--- so it stays live + clickable while the visual tester is PAUSED - which is
 //--- exactly when the operator decides at bar close). The EA only pushes state
@@ -1004,6 +1005,19 @@ void DecisionScreenshot(int id)
 //--- CopyRates(...,0,N) in the tester returns bars only up to the current modelled
 //--- time, so the last (partial) bar ends AT the signal - no post-decision leak.
 //--- Rows are written OLDEST->NEWEST (ArraySetAsSeries false) because the Python
+//--- Drop a re-capture request the OS-capture daemon watches for: the operator
+//--- clicked "Retake H4 screenshot" on the dialog (TD_TakeShotRequested), so we
+//--- write journal\recapture.req (FILE_COMMON) with the current symbol+id. The
+//--- daemon re-grabs the tester window and overwrites the advisor's h4.png.
+void WriteRecaptureReq(int id)
+  {
+   int h=FileOpen("journal\\recapture.req",FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE){ Print("Signal #",id," recapture.req write failed err=",GetLastError()); return; }
+   FileWriteString(h,StringFormat("%s %d\r\n",_Symbol,id));
+   FileClose(h);
+   Print("Signal #",id," manual H4 re-capture requested");
+  }
+
 //--- aggregator assumes chronological-ascending input; newest-first would silently
 //--- render a time-mirrored chart. Called BEFORE WritePendingSetup so that
 //--- "pending sidecar exists" always implies "D1 sidecar exists" (the daemon
@@ -1170,6 +1184,8 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
       int cnow=TD_Coach();
       if(cnow!=coach && lblFull!="")
         { coach=cnow; ObjectSetString(0,p+"label",OBJPROP_TEXT,coach?lblScrub:lblFull); ChartRedraw(0); }
+      //--- operator asked to re-take the H4 screenshot: signal the OS-capture daemon
+      if(TD_TakeShotRequested()) WriteRecaptureReq(id);
       if(!dirty) { UiSpin(12); continue; }
 
       //--- which of the up-to-4 fields changed (tolerance kills sub-tick jitter)
@@ -1576,9 +1592,10 @@ bool IsTopTierEvent(string ev)
    for(int i=0;i<ArraySize(skip);i++) if(StringFind(e,skip[i])>=0) return false;
    string keys[]={"federal funds","fomc","rate decision","official bank rate",
                   "main refinancing","cash rate","cpi","non-farm","nonfarm",
-                  "gdp","pmi","unemployment rate","ecb press",
+                  "gdp","pce","pmi","unemployment rate","ecb press",
                   "monetary policy","press conference","interest rate",
-                  "rate statement","bank rate"};
+                  "rate statement","bank rate","average hourly earnings",
+                  "average earnings","retail sales","claimant count"};
    for(int i=0;i<ArraySize(keys);i++) if(StringFind(e,keys[i])>=0) return true;
    return false;
   }
@@ -1596,7 +1613,9 @@ int EventSignificance(string ev)
    string hi[]={"federal funds","fomc","rate decision","official bank rate",
                 "main refinancing","cash rate","interest rate","rate statement",
                 "bank rate","monetary policy","press conference","ecb press",
-                "non-farm","nonfarm","cpi","gdp"};
+                "non-farm","nonfarm","cpi","gdp","pce",
+                "unemployment rate","average hourly earnings","average earnings",
+                "retail sales","claimant count","pmi"};
    for(int i=0;i<ArraySize(hi);i++) if(StringFind(e,hi[i])>=0) return 2;
    string md[]={"pmi","unemployment","retail sales","ppi","employment change",
                 "jobless","confidence","durable goods","ism","trade balance",
@@ -1689,10 +1708,14 @@ void DrawEconEvents()
       if(py>0.0)
         {
          string tn=StringFormat("%sEVTL_%d",InpObjPrefix,i);
-         //--- BLINDNESS: drop the currency prefix (g_ev_ccy would reveal the pair);
-         //--- keep the event name + bias tag only. The advisor already has impact/
-         //--- timing/affects/bias via Tier-0, so the visible line adds no leak.
-         string txt=StringFormat(" %s%s",g_ev_name[i],tag);
+         //--- BLINDNESS: the event NAME leaks the economy/currency (e.g. "Non-Farm
+         //--- Payrolls" -> USD leg), so under InpBlindLabels (the blind-capture runs)
+         //--- print a generic "high-impact" marker instead of the name. The LINE
+         //--- (timing) + bias tag (BULL/BEAR/upcoming) stay visible and add no leak
+         //--- beyond what the advisor already gets from Tier-0. Non-blind runs (the
+         //--- operator's own analysis) keep the full name.
+         string txt=(InpBlindLabels? StringFormat(" high-impact%s",tag)
+                                   : StringFormat(" %s%s",g_ev_name[i],tag));
          if(ObjectCreate(0,tn,OBJ_TEXT,0,t,py))
            {
             ObjectSetString (0,tn,OBJPROP_TEXT,txt);
