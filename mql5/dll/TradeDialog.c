@@ -56,6 +56,10 @@
 #include <windows.h>
 #include <wchar.h>
 #include <stdlib.h>
+#include <richedit.h>      /* events list is a RichEdit so <=12h items can be red+bold */
+#ifndef MSFTEDIT_CLASS
+#define MSFTEDIT_CLASS L"RICHEDIT50W"
+#endif
 
 /* ---- colour palette ----------------------------------------------------- */
 #define COL_ENTRY   RGB(0,160,0)      /* green  */
@@ -119,6 +123,7 @@
 #define L_TGLH     24     /* events collapse toggle button height */
 
 static HINSTANCE g_hinst = NULL;
+static HMODULE   g_riched = NULL;    /* Msftedit.dll, loaded once for the RichEdit class */
 static LONG      g_inuse = 0;
 static ATOM      g_cls   = 0;
 static HBRUSH    g_bg    = NULL;   /* process-global; outlives every call */
@@ -248,12 +253,44 @@ static void set_edit(HWND h, const wchar_t *txt, HWND focus)
 /* coach mode: hide the symbol + switch the events list to relative dates, so a
    screenshot given to the training advisor can't be reverse-identified to a
    historical instance (and thus can't be "graded" with hindsight).            */
+/* Fill the events list, painting anything due in <=12h RED + BOLD. Imminence
+   comes from the RELATIVE form ("in Xd Yh") which is line-for-line aligned with
+   whichever form is shown (abs/rel). Each line is appended under its own char
+   format, so it's robust to how RichEdit stores line breaks. */
+static void set_events_text(void)
+{
+    if (!g.hEvents) return;
+    const wchar_t *dp = g.redact ? g.evRel : g.evAbs;   /* displayed text  */
+    const wchar_t *rp = g.evRel;                          /* imminence source */
+    SendMessageW(g.hEvents, EM_SETREADONLY, FALSE, 0);
+    SetWindowTextW(g.hEvents, L"");
+    CHARFORMAT2W cf; ZeroMemory(&cf, sizeof(cf)); cf.cbSize = sizeof(cf);
+    while (dp && *dp) {
+        int dlen = 0; while (dp[dlen] && dp[dlen] != L'\r' && dp[dlen] != L'\n') dlen++;
+        int rlen = 0; while (rp[rlen] && rp[rlen] != L'\r' && rp[rlen] != L'\n') rlen++;
+        int dd = -1, hh = -1;
+        int imm = (swscanf(rp, L"in %dd %dh", &dd, &hh) == 2 && dd == 0 && hh <= 12);
+        cf.dwMask     = CFM_COLOR | CFM_BOLD;
+        cf.crTextColor = imm ? COL_SL : COL_VALUE;
+        cf.dwEffects  = imm ? CFE_BOLD : 0;
+        SendMessageW(g.hEvents, EM_SETSEL, 0x7fffffff, 0x7fffffff);   /* caret -> end */
+        SendMessageW(g.hEvents, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+        wchar_t buf[512]; int n = dlen < 500 ? dlen : 500;
+        wcsncpy(buf, dp, n); buf[n] = 0; wcscat(buf, L"\r\n");
+        SendMessageW(g.hEvents, EM_REPLACESEL, FALSE, (LPARAM)buf);
+        dp += dlen; while (*dp == L'\r' || *dp == L'\n') dp++;
+        rp += rlen; while (*rp == L'\r' || *rp == L'\n') rp++;
+    }
+    SendMessageW(g.hEvents, EM_SETREADONLY, TRUE, 0);
+    SendMessageW(g.hEvents, EM_SETSEL, 0, 0);
+    SendMessageW(g.hEvents, WM_VSCROLL, SB_TOP, 0);
+}
+
 static void apply_redact(void)
 {
     if (g.hSymbol)
         SetWindowTextW(g.hSymbol, g.redact ? L"██████" : g.sym);
-    if (g.hEvents)
-        SetWindowTextW(g.hEvents, g.redact ? g.evRel : g.evAbs);
+    set_events_text();
     if (g.hRedact)
         SetWindowTextW(g.hRedact, g.redact
             ? L"Coach mode: ON  (symbol + dates hidden)"
@@ -496,7 +533,9 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     CAP(L"Strategy");  make_value_static(hwnd, strategy, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fNormal);          r += ROWH;
     CAP(L"Direction"); make_value_static(hwnd, direction, vx, r, VALUEW, ROWH - 6,
                        g.isBuy ? COL_BUY : COL_SELL, g.fBold);                                                   r += ROWH;
-    CAP(L"Time");      make_value_static(hwnd, sigtime, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fNormal);          r += ROWH;
+    int is_fri = (sigtime && wcsstr(sigtime, L"Friday") != NULL);   /* Friday -> red + bold */
+    CAP(L"Time");      make_value_static(hwnd, sigtime, vx, r, VALUEW, ROWH - 6,
+                       is_fri ? COL_SL : COL_VALUE, is_fri ? g.fBold : g.fNormal);                                r += ROWH;
 
     /* Entry / SL / TP(s) are ALL editable + independent. Green/red/blue tie each
        to its chart line. Scale-out strategies split TP into TP1 (bank) + TP2. */
@@ -537,11 +576,18 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 10, L_TGLH, hwnd, (HMENU)(INT_PTR)ID_EVTOGGLE, g_hinst, NULL);
     SendMessageW(g.hEvToggle, WM_SETFONT, (WPARAM)g.fHint, TRUE);
-    g.hEvents = CreateWindowExW(0, L"EDIT", L"(loading...)",
+    if (!g_riched) g_riched = LoadLibraryW(L"Msftedit.dll");   /* RichEdit class */
+    g.hEvents = CreateWindowExW(0, MSFTEDIT_CLASS, L"(loading...)",
         WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
         ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_LEFT,
         0, 0, 10, L_EVH, hwnd, (HMENU)(INT_PTR)ID_EVENTS, g_hinst, NULL);
+    if (!g.hEvents)     /* fallback: plain EDIT (list works, no <=12h highlight) */
+        g.hEvents = CreateWindowExW(0, L"EDIT", L"(loading...)",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
+            ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_LEFT,
+            0, 0, 10, L_EVH, hwnd, (HMENU)(INT_PTR)ID_EVENTS, g_hinst, NULL);
     SendMessageW(g.hEvents, WM_SETFONT, (WPARAM)g.fHint, TRUE);
+    SendMessageW(g.hEvents, EM_SETBKGNDCOLOR, 0, (LPARAM)COL_EDITBG);   /* RichEdit bg */
     g.hRedact = CreateWindowExW(0, L"BUTTON", L"Coach mode: OFF  (real symbol + dates)",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 300, L_REDH, hwnd, (HMENU)(INT_PTR)ID_REDACT, g_hinst, NULL);
@@ -717,7 +763,7 @@ void TD_SetEvents(const wchar_t *abs_dates, const wchar_t *rel_dates)
 {
     wcsncpy(g.evAbs, abs_dates ? abs_dates : L"", 4095); g.evAbs[4095] = 0;
     wcsncpy(g.evRel, rel_dates ? rel_dates : L"", 4095); g.evRel[4095] = 0;
-    if (g.hEvents) SetWindowTextW(g.hEvents, g.redact ? g.evRel : g.evAbs);
+    set_events_text();
 }
 
 /* ==========================================================================
