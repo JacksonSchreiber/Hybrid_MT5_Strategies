@@ -111,8 +111,11 @@ log "tester finished in ${ELAPSED}s"
 
 # --- locate + summarise the journal ---------------------------------------
 AFTER=$(ls -1 "$COMMON_JOURNAL" 2>/dev/null | sort || true)
-NEWJ=$(comm -13 <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | grep -i "^${SYMBOL}_" | tail -1 || true)
-[[ -z "$NEWJ" ]] && NEWJ=$(ls -t "$COMMON_JOURNAL"/${SYMBOL}_*.csv 2>/dev/null | head -1 | xargs -r basename)
+# §3.8: the EA prefixes AA-mode (headless) journals with "AA_" so they never collide
+# with the trader's interactive journal for the same symbol. Locate by that prefix.
+JPFX=""; [[ "$AA" != 0 ]] && JPFX="AA_"
+NEWJ=$(comm -13 <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | grep -i "^${JPFX}${SYMBOL}_" | tail -1 || true)
+[[ -z "$NEWJ" ]] && NEWJ=$(ls -t "$COMMON_JOURNAL"/${JPFX}${SYMBOL}_*.csv 2>/dev/null | head -1 | xargs -r basename)
 [[ -n "$NEWJ" ]] || { log "NO journal produced - check tester ran (algo-trading enabled?)."; exit 1; }
 JPATH="$COMMON_JOURNAL/$NEWJ"
 log "journal: $JPATH"

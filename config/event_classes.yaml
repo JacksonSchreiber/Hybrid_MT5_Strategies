@@ -1,0 +1,92 @@
+
+# event_classes.yaml — the ONE source of truth for economic-calendar classification.
+#
+# Issued against docs/calendar-gap-coverage-spec.md (coach, 2026-08-25). Root-cause
+# fix for defect #5: three keyword lists (tier0.HIGH_IMPACT_KEYS, EA EventSignificance
+# hi[], EA IsTopTierEvent keys[]) drifted apart. Now there is ONE table. normalize_econ
+# reads it and BAKES a `class` column into econ_events.csv; tier0.py and the EA read
+# that column. Adding an event type is a one-line edit here + a feed regenerate — no
+# code change, no recompile of the classifier logic.
+#
+# Classes (docs spec §1):
+#   V  violation      — approve inside ~12h = rule violation (rate decisions, CPI, NFP,
+#                       GDP, Core PCE, unemployment, Fed Chair testimony, Jackson Hole).
+#   W  weekend-hold   — any position open Fri-close -> Mon-open with one of these in the
+#                       window = automatic skip / close-before-Friday (elections,
+#                       referendums, confidence/treaty votes, funding/debt deadlines,
+#                       announced tariff/summit weekends, sovereign rating reviews).
+#   C  caution        — demand an A-grade setup (retail sales, ISM, PMI, FOMC minutes,
+#                       ECB accounts, PPI, JOLTS, confidence, member speeches).
+#   H  holiday        — thin liquidity, stops not guaranteed (bank holidays, year-end,
+#                       Golden Week, Easter, Thanksgiving, Lunar New Year).
+#   (no match)        — unclassified; not flagged to the advisor.
+#
+# MATCHING: each rule's `re` is a case-insensitive regex searched (not anchored) against
+# the event NAME. FIRST match wins, so order matters — put the C-overrides (FOMC minutes)
+# ABOVE the generic V rate rules, and the specific Fed-Chair testimony V ABOVE the
+# generic testimony C.
+#
+# FLAGS:
+#   political: true  — row NAMES a country legitimately (an election), so it is EXEMPT
+#                      from the country-skip filter below. Non-political rows starting
+#                      with a member-country word ("German CPI") are member sub-releases
+#                      and get dropped (only the headline US/EZ/UK print matters).
+#   all_ccy:   true  — event has no single currency (ccy="All", e.g. Jackson Hole);
+#                      consumers treat it as affecting every symbol.
+
+rules:
+  # --- C overrides that must beat the generic V rate rules (order-sensitive) --------
+  - {re: 'fomc minutes|meeting minutes|monetary policy meeting accounts|ecb.*account', class: C}
+
+  # --- V: violation-class -----------------------------------------------------------
+  # Fed Chair semiannual testimony (Humphrey-Hawkins). Must precede the generic
+  # testimony->C rule. "man"/"woman" optional so it matches "Fed Chairman ... Testifies"
+  # and "Fed Chair Powell Testifies" alike; \b keeps it from over-reaching.
+  - {re: 'fed chair(man|woman)?\b.*testif', class: V}
+  - {re: 'jackson hole', class: V, all_ccy: true}
+  # rate decisions + statements + press conferences (the symbol's two ccys only)
+  - {re: 'federal funds|fomc|rate decision|official bank rate|main refinancing|cash rate|rate statement|bank rate|monetary policy|press conference|ecb press|interest rate', class: V}
+  # the biggest surprise-movers
+  - {re: 'non.?farm|nonfarm|\bnfp\b', class: V}
+  - {re: '\bcpi\b|consumer price index', class: V}
+  - {re: '\bgdp\b|gross domestic product', class: V}
+  - {re: '\bpce\b', class: V}
+  - {re: 'unemployment rate', class: V}
+  - {re: 'average (hourly )?earnings|claimant count', class: V}
+
+  # --- W: weekend-hold class --------------------------------------------------------
+  # Elections / referendums / plebiscites — political, so country-skip-exempt.
+  - {re: '\belection|\breferendum|\bplebiscite', class: W, political: true}
+  # Confidence / leadership / treaty / "meaningful" votes with a published date.
+  - {re: 'no.?confidence|confidence vote|meaningful vote|leadership (ballot|election|contest)|motion of no confidence|vote of no confidence', class: W, political: true}
+  # Government funding / shutdown / debt-ceiling deadlines; announced fiscal set-pieces.
+  - {re: 'government shutdown|funding deadline|shutdown deadline|debt ceiling|debt limit|autumn statement|spring statement|budget statement|mini.?budget', class: W}
+  # Scheduled summits that can end in a communiqe (G7/G20/EU Council/NATO/OPEC).
+  - {re: '\bg7\b|\bg-7\b|\bg20\b|\bg-20\b|european council|\beu summit\b|\bopec\b', class: W}
+  # Sovereign rating review dates (published each December; all fall on Fridays).
+  - {re: 'sovereign.*rating|rating review|credit rating (review|decision)', class: W}
+
+  # --- C: caution-class -------------------------------------------------------------
+  - {re: 'retail sales', class: C}
+  - {re: '\bism\b|\bpmi\b|purchasing managers', class: C}
+  - {re: '\bppi\b|producer price', class: C}
+  - {re: '\bjolts\b|job openings', class: C}
+  - {re: 'consumer confidence|consumer sentiment|consumer climate', class: C}
+  - {re: 'testif|\bspeaks\b|\bspeech\b|member.*speak', class: C}
+
+  # --- H: holiday-liquidity class ---------------------------------------------------
+  - {re: 'bank holiday|\bholiday\b|non-economic|christmas|new year|good friday|easter|thanksgiving|golden week|lunar new year|boxing day', class: H}
+
+# Member-country sub-releases the classifier drops UNLESS the row is political (an
+# election legitimately names its country). Applied AFTER the class lookup.
+country_skip:
+  - german
+  - french
+  - spanish
+  - italian
+  - chinese
+  - japanese
+  - swiss
+  - canadian
+  - australian
+  - new zealand

@@ -1,0 +1,16 @@
+date_utc_start,date_utc_end,ccy,event,class,source,round
+# Hand-curated political / fiscal layer (docs/calendar-gap-coverage-spec.md §3.7).
+# Merged into econ_events.csv by normalize_econ_tzfix.py: the row is placed at
+# date_utc_start with class=W, and tier0 expands it into the weekend-hold window.
+# This is the drop-in point for the deferred Wikipedia electoral / MNI ratings layers
+# (§2) — add rows here, regenerate the feed, no code change. Keep it git-tracked.
+#
+# Seeded with the two acceptance-test triggers the ForexFactory feed does NOT carry
+# (§4 tests #4 and #8) plus two well-known fiscal weekends FF tags weakly.
+2016.12.03 00:00,2016.12.05 06:00,EUR,Italian Constitutional Referendum,W,spec-gap-table,1
+2019.10.19 00:00,2019.10.21 06:00,GBP,UK Parliament Saturday Sitting (Letwin / Brexit vote),W,spec-gap-table,1
+2018.01.20 00:00,2018.01.22 06:00,USD,US Government Shutdown (funding deadline),W,spec-gap-table,1
+2016.06.23 00:00,2016.06.24 12:00,GBP,EU Membership Referendum (Brexit),W,spec-gap-table,1
+# Jackson Hole 2017 is missing from the ForexFactory archive (other years present at
+# 12:30/All). Backfilled at the archive convention: symposium open (Thu). class V.
+2017.08.24 12:30,2017.08.26 23:59,All,Jackson Hole Symposium,V,spec-gap-table,1

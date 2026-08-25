@@ -143,6 +143,7 @@ string          g_ev_ccy[];                  // event currency (base or quote of
 string          g_ev_name[];                 // event name
 int             g_ev_cb[];                   // ccy_bias (surprise sign for the event's ccy)
 bool            g_ev_top[];                  // passes the top-tier (notable) filter
+string          g_ev_cls[];                  // class letter V/W/C/H (baked by normalize_econ)
 int             g_sig_ids[];                 // ids of setups with overlays on chart (for pruning)
 bool           g_active     = false;
 bool           g_started    = false;
@@ -289,8 +290,11 @@ void OnTick()
      {
       g_started=true;
       g_start_time=TimeCurrent(); g_last_time=g_start_time;
-      g_journal_part=StringFormat("journal\\%s_%s.part.csv",_Symbol,StampCompact(g_start_time));
-      g_actions_part=StringFormat("journal\\%s_%s.actions.part.csv",_Symbol,StampCompact(g_start_time));
+      // §3.8: headless AA-mode journals get an "AA_" prefix so mt5_verify --mode ALL
+      // can never overwrite the trader's own interactive journal for the same symbol.
+      string jpfx=(InpAutoApprove!=AA_NONE ? "AA_" : "");
+      g_journal_part=StringFormat("journal\\%s%s_%s.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
+      g_actions_part=StringFormat("journal\\%s%s_%s.actions.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
       WriteJournal(g_journal_part);
       if(InpShowSwings) DrawSwingMarkers();   // first draw (new-bar gate skips tick 1)
      }
@@ -1186,6 +1190,9 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
         { coach=cnow; ObjectSetString(0,p+"label",OBJPROP_TEXT,coach?lblScrub:lblFull); ChartRedraw(0); }
       //--- operator asked to re-take the H4 screenshot: signal the OS-capture daemon
       if(TD_TakeShotRequested()) WriteRecaptureReq(id);
+      //--- keep the D1-tab (and any other symbol chart) entry/SL/TP in sync with edits,
+      //--- and catch a chart opened mid-decision (idempotent; redraws only on change).
+      MirrorLevels(e,s,t1,(scaleout? t2 : 0.0));
       if(!dirty) { UiSpin(12); continue; }
 
       //--- which of the up-to-4 fields changed (tolerance kills sub-tick jitter)
@@ -1369,6 +1376,8 @@ void DrawOverlays(int id,SignalCandidate &c)
    //--- TP line = TP1 (bank) for scale-out, else the single target; a dashed
    //--- runner line marks TP2 so the two editable TP fields map to the chart.
    DrawHLine(p+"tp",   (c_scaleout? c.tp1 : c.tp), C'0,0,204');
+   //--- mirror entry/SL/TP onto any OTHER open chart of this symbol (D1 tab etc.)
+   MirrorLevels(c.entry,c.sl,(c_scaleout? c.tp1 : c.tp),(c_scaleout? c.tp2 : 0.0));
    if(c_scaleout)
      {
       string t2n=p+"tp2";
@@ -1475,6 +1484,73 @@ void DrawHLine(string name,double price,color clr)
       ObjectSetInteger(0,name,OBJPROP_WIDTH,InpLineWidth);
       ObjectSetInteger(0,name,OBJPROP_STYLE,STYLE_SOLID);
       ObjectSetInteger(0,name,OBJPROP_BACK,false);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Mirror the entry/SL/TP lines onto EVERY other open chart of this  |
+//| symbol (e.g. a D1 tab the operator opened) - the EA draws overlays |
+//| only on chart 0, so a separate chart would otherwise be bare.      |
+//| Idempotent (create-if-missing, else move) so it can be called live |
+//| in the dialog loop: a D1 chart opened mid-decision still gets them,|
+//| and edits track. Prefix HFT_MIRROR_ so cleanup is trivial.         |
+//+------------------------------------------------------------------+
+bool MirrorHLine(long cid,string name,double price,color clr,int style)
+  {
+   if(price<=0.0)                                   // no such level: remove if present
+     { if(ObjectFind(cid,name)>=0){ ObjectDelete(cid,name); return true; } return false; }
+   if(ObjectFind(cid,name)<0)                       // first time on this chart -> create
+     {
+      ObjectCreate(cid,name,OBJ_HLINE,0,0,price);
+      ObjectSetInteger(cid,name,OBJPROP_COLOR,clr);
+      ObjectSetInteger(cid,name,OBJPROP_WIDTH,InpLineWidth);
+      ObjectSetInteger(cid,name,OBJPROP_STYLE,style);
+      ObjectSetInteger(cid,name,OBJPROP_BACK,false);
+      ObjectSetInteger(cid,name,OBJPROP_SELECTABLE,false);
+      ObjectSetDouble(cid,name,OBJPROP_PRICE,price);
+      return true;
+     }
+   if(MathAbs(ObjectGetDouble(cid,name,OBJPROP_PRICE)-price)>1e-10)   // moved (edit)
+     { ObjectSetDouble(cid,name,OBJPROP_PRICE,price); return true; }
+   return false;                                    // unchanged -> no redraw needed
+  }
+
+void MirrorLevels(double entry,double sl,double tp,double tp2)
+  {
+   long self=ChartID();
+   int total=0,others=0;
+   long cid=ChartFirst();
+   while(cid>=0)
+     {
+      total++;
+      if(cid!=self && ChartSymbol(cid)==_Symbol)
+        {
+         others++;
+         bool ch=false;
+         ch|=MirrorHLine(cid,"HFT_MIRROR_entry",entry,C'0,160,0',STYLE_SOLID);
+         ch|=MirrorHLine(cid,"HFT_MIRROR_sl",   sl,   C'204,0,0',STYLE_SOLID);
+         ch|=MirrorHLine(cid,"HFT_MIRROR_tp",   tp,   C'0,0,204',STYLE_SOLID);
+         ch|=MirrorHLine(cid,"HFT_MIRROR_tp2",  tp2,  C'0,0,204',STYLE_DASH);
+         if(ch) ChartRedraw(cid);                   // redraw only when something changed
+        }
+      cid=ChartNext(cid);
+     }
+   //--- DIAGNOSTIC: how many charts does the tester expose to this EA? Logged once
+   //--- per (total,others) change so it doesn't spam. If total==1 the tester is
+   //--- isolating the EA to its own chart (mirror to a D1 tab impossible there).
+   static int lt=-1, lo=-1;
+   if(total!=lt || others!=lo)
+     { lt=total; lo=others; Print("MirrorLevels diag: ",total," chart(s) visible to EA, ",
+                                   others," other ",_Symbol," chart(s) to mirror onto"); }
+  }
+
+void MirrorClear()
+  {
+   long cid=ChartFirst();
+   while(cid>=0)
+     {
+      if(cid!=0 && ChartSymbol(cid)==_Symbol) ObjectsDeleteAll(cid,"HFT_MIRROR_");
+      cid=ChartNext(cid);
      }
   }
 
@@ -1624,6 +1700,15 @@ int EventSignificance(string ev)
    return 0;
   }
 string SigTag(int s){ return (s>=2 ? "[HIGH]" : (s==1 ? "[MED]" : "[LOW]")); }
+//--- significance from the baked class column (V/W=HIGH, C=MED), falling back to the
+//--- keyword rule for a legacy feed with no class. One source of truth = the feed.
+int ClassSig(string cls,string ev)
+  {
+   if(cls=="V" || cls=="W") return 2;   // violation / weekend-hold -> HIGH
+   if(cls=="C")             return 1;    // caution -> MED
+   if(cls=="")              return EventSignificance(ev);  // legacy feed: keyword fallback
+   return 0;                             // H (holiday) -> LOW
+  }
 //+------------------------------------------------------------------+
 //| Display-only high-impact economic-event lines from              |
 //| Common\Files\econ_events.csv (datetime_utc,ccy,event,actual,     |
@@ -1640,11 +1725,17 @@ void LoadEconEvents()
    g_ev_loaded=true;                 // set even on failure so we don't retry each bar
    ArrayResize(g_ev_t,0); ArrayResize(g_ev_ccy,0);
    ArrayResize(g_ev_name,0); ArrayResize(g_ev_cb,0); ArrayResize(g_ev_top,0);
+   ArrayResize(g_ev_cls,0);
    int h=FileOpen("econ_events.csv",FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON,',');
    if(h==INVALID_HANDLE)
      { Print("econ_events.csv not in Common\\Files - no event lines (err ",GetLastError(),")"); return; }
    string base,quote; SymbolCcy(base,quote);
-   for(int k=0;k<6 && !FileIsEnding(h);k++) FileReadString(h);   // skip header
+   //--- detect the class column by reading the header row (7 cols with 'class', else 6)
+   string hdr[]; int ncol=0;
+   for(int k=0;k<8 && !FileIsEnding(h);k++)
+     { string f=FileReadString(h); ArrayResize(hdr,k+1); hdr[k]=f; ncol++;
+       if(FileIsLineEnding(h)) break; }
+   bool has_class=(ncol>=7);   // datetime,ccy,event,actual,forecast,ccy_bias,class
    int n=0;
    while(!FileIsEnding(h))
      {
@@ -1655,14 +1746,20 @@ void LoadEconEvents()
       FileReadString(h);             // actual  (not cached - never shown before release)
       FileReadString(h);             // forecast
       int    cb =(int)StringToInteger(FileReadString(h));
-      if(ccy!=base && ccy!=quote) continue;      // only THIS pair's currencies
+      string cls=(has_class? FileReadString(h) : "");   // class column (V/W/C/H)
+      StringToUpper(cls);
+      // this pair's two currencies, plus all-ccy events (ccy=All: Jackson Hole, G20...)
+      if(ccy!=base && ccy!=quote && ccy!="All") continue;
       datetime t=StringToTime(sdt);
       if(t<=0) continue;
       int m=ArraySize(g_ev_t);
       ArrayResize(g_ev_t,m+1); ArrayResize(g_ev_ccy,m+1); ArrayResize(g_ev_name,m+1);
-      ArrayResize(g_ev_cb,m+1); ArrayResize(g_ev_top,m+1);
-      g_ev_t[m]=t; g_ev_ccy[m]=ccy; g_ev_name[m]=ev; g_ev_cb[m]=cb;
-      g_ev_top[m]=IsTopTierEvent(ev);
+      ArrayResize(g_ev_cb,m+1); ArrayResize(g_ev_top,m+1); ArrayResize(g_ev_cls,m+1);
+      g_ev_t[m]=t; g_ev_ccy[m]=ccy; g_ev_name[m]=ev; g_ev_cb[m]=cb; g_ev_cls[m]=cls;
+      // shown on the popup/lines = any classified event (V/W=HIGH, C=MED). Keeps the
+      // caution prints (retail sales, PMI...) the trader asked to see, now tagged MED
+      // rather than HIGH. Legacy feed (no class) falls back to the keyword rule.
+      g_ev_top[m]=(cls=="V" || cls=="W" || cls=="C") || (cls=="" && IsTopTierEvent(ev));
       n++;
      }
    FileClose(h);
@@ -1688,7 +1785,7 @@ void DrawEconEvents()
       datetime t=g_ev_t[i];
       if(t<tmin || t>tmax) continue;
       if(InpEventTopTierOnly && !g_ev_top[i]) continue;
-      int rel=(g_ev_ccy[i]==base?1:(g_ev_ccy[i]==quote?-1:0));
+      int rel=(g_ev_ccy[i]==base?1:(g_ev_ccy[i]==quote?-1:(g_ev_ccy[i]=="All"?1:0)));
       if(rel==0) continue;
       bool released=(t<=now);
       int tb=(released? g_ev_cb[i]*rel : 0);   // no bias before the event fires
@@ -1755,10 +1852,16 @@ void BuildEventBlocks(datetime sig,string &absb,string &relb)
       datetime t=g_ev_t[i];
       if(t<sig || t>tmax) continue;          // strictly the forward window
       if(!g_ev_top[i]) continue;             // notable only
-      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote) continue;
-      long ds=(long)(t-sig);
+      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote && g_ev_ccy[i]!="All") continue;
+      // W-class rows carry a placeholder time (12:30 on the vote day, 00:00 for a
+      // political row); measure imminence to the weekend-window START (that day's
+      // midnight) so the popup's "in Xd Yh" matches what the blind advisor is told.
+      datetime rt=t;
+      if(g_ev_cls[i]=="W")
+        { MqlDateTime mt; TimeToStruct(t,mt); mt.hour=0; mt.min=0; mt.sec=0; rt=StructToTime(mt); }
+      long ds=(long)(rt-sig); if(ds<0) ds=0;
       int dd=(int)(ds/86400), hh=(int)((ds%86400)/3600);
-      string nm=StringFormat("%s %s  %s",g_ev_ccy[i],g_ev_name[i],SigTag(EventSignificance(g_ev_name[i])));
+      string nm=StringFormat("%s %s  %s",g_ev_ccy[i],g_ev_name[i],SigTag(ClassSig(g_ev_cls[i],g_ev_name[i])));
       absb+=StringFormat("%s  %s\r\n",FmtAbsDate(t),nm);
       relb+=StringFormat("in %dd %dh  %s\r\n",dd,hh,nm);
       if(++cnt>=InpEvtListMax){ absb+="(+ more)\r\n"; relb+="(+ more)\r\n"; break; }
@@ -2078,18 +2181,22 @@ void OnDeinit(const int reason)
    //--- tear the management panel down first (joins its thread) so nothing
    //--- outlives the test run.
    if(g_panel_open){ TDM_Close(); g_panel_open=false; }
+   MirrorClear();   //--- remove mirrored entry/SL/TP lines from other symbol charts
    if(g_active && g_started)
      {
-      string finalp=StringFormat("journal\\%s_%s_%s.csv",
-                                 _Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+      // §3.8: AA-mode (headless) journals carry the "AA_" prefix so mt5_verify's
+      // baseline can never overwrite the trader's own journal for the same window.
+      string jpfx=(InpAutoApprove!=AA_NONE ? "AA_" : "");
+      string finalp=StringFormat("journal\\%s%s_%s_%s.csv",
+                                 jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
       WriteJournal(finalp);
       if(g_journal_part!="" && g_journal_part!=finalp) FileDelete(g_journal_part,FILE_COMMON);
       Print("Journal finalised: <Terminal>\\Common\\Files\\",finalp," (",ArraySize(g_rows)," signals)");
       //--- finalise the manual-actions log alongside the journal (if any fired)
       if(ArraySize(g_actions)>0)
         {
-         string af=StringFormat("journal\\%s_%s_%s.actions.csv",
-                                _Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+         string af=StringFormat("journal\\%s%s_%s_%s.actions.csv",
+                                jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
          WriteActions(af);
          if(g_actions_part!="" && g_actions_part!=af) FileDelete(g_actions_part,FILE_COMMON);
          Print("Manual-actions log finalised: <Terminal>\\Common\\Files\\",af," (",ArraySize(g_actions)," actions)");

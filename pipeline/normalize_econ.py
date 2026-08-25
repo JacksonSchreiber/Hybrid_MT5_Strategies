@@ -18,6 +18,11 @@ import csv, re, sys
 from collections import Counter
 from datetime import datetime, timezone
 
+from event_classes import classify   # single classifier (config/event_classes.yaml)
+# NOTE: normalize_econ_tzfix.py is CANONICAL for the ehsanrs2 archive — it repairs the
+# date-only (local-midnight) rows this plain version mis-converts. This file is kept for
+# sources that already carry real intraday times; it writes the same 7-column schema.
+
 INVERSE = ("unemployment rate", "jobless claim", "unemployment claim",
            "continuing claim", "initial jobless", "misery index")
 
@@ -58,18 +63,22 @@ def main():
             fc  = (x.get("Forecast") or "").strip()
             if not ccy or not ev:
                 continue
-            rows.append((d, ccy, ev, act, fc, bias(ev, act, fc)))
+            cls, _ = classify(ev, ccy)
+            rows.append((d.strftime("%Y.%m.%d %H:%M"), ccy, ev, act, fc, bias(ev, act, fc), cls))
+    # political / fiscal layer (shared with tzfix normalizer)
+    from normalize_econ_tzfix import load_political
+    rows.extend(load_political())
     rows.sort(key=lambda t: t[0])
     seen, outrows = set(), []
-    for d, ccy, ev, act, fc, b in rows:
-        k = (d, ccy, ev)
+    for dt_s, ccy, ev, act, fc, b, cls in rows:
+        k = (dt_s, ccy, ev)
         if k in seen:
             continue
         seen.add(k)
-        outrows.append((d.strftime("%Y.%m.%d %H:%M"), ccy, ev, act, fc, str(b)))
+        outrows.append((dt_s, ccy, ev, act, fc, str(b), cls))
     with open(out, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["datetime_utc", "ccy", "event", "actual", "forecast", "ccy_bias"])
+        w.writerow(["datetime_utc", "ccy", "event", "actual", "forecast", "ccy_bias", "class"])
         w.writerows(outrows)
     yrs = Counter(r[0][:4] for r in outrows)
     print(f"wrote {len(outrows)} events -> {out}")

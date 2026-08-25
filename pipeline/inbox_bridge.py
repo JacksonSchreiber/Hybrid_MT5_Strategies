@@ -172,15 +172,18 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
             pass
     dow = sig_dt.strftime("%A") if sig_dt else "?"
     sess = _session(sig_dt.hour) if sig_dt else "?"
+    tod = f"{sig_dt.strftime('%H:%M')} UTC" if sig_dt else "?"   # time of day only, no date
 
     # blind calendar via Tier 0 (no names/dates)
     cal = {"high_impact_ahead": None, "hours_until": None, "affects": "?",
-           "recent_event_bias": "?"}
+           "recent_event_bias": "?", "weekend_event": None, "weekend_class": None,
+           "weekend_hours_until": None, "weekend_affects": "?"}
     if sig_dt:
         sig = tier0.Signal(symbol=(row.get("symbol") or "").strip(),
                            direction=direction, entry_time=sig_dt, strategy=strat)
         try:
-            cal = tier0.blind_calendar(sig, tier0._load_events(), horizon_h=12.0)
+            # swing=True: these are all swing holds, so W-class weekend events count
+            cal = tier0.blind_calendar(sig, tier0._load_events(), swing=True)
         except Exception:
             pass
 
@@ -188,7 +191,7 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
         f"# BLIND SETUP — {strat} {dstr}",
         "_No symbol, no date. For the blind advisor. Judge from the charts + the library only._",
         "",
-        f"- **Session / day-of-week:** {sess} / {dow}",
+        f"- **Session / day / time:** {sess} / {dow} / {tod}",
         f"- **Proposed levels (chart-visible prices):** entry {entry}, SL {sl}, "
         f"TP1 {tp1}, TP2 {tp2}",
         f"- **Risk geometry:** SL {rmult(sl)} · TP1 {rmult(tp1)} · TP2 {rmult(tp2)} "
@@ -196,6 +199,10 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
         f"- **Calendar (blind):** high_impact_ahead={cal['high_impact_ahead']}, "
         f"hours_until={cal['hours_until']}, affects={cal['affects']}, "
         f"recent_event_bias={cal['recent_event_bias']}",
+        f"- **Weekend hold (blind):** weekend_event={cal.get('weekend_event')}, "
+        f"class={cal.get('weekend_class')}, hours_until={cal.get('weekend_hours_until')}, "
+        f"affects={cal.get('weekend_affects')} "
+        "(a scheduled event this position would be open across Fri→Mon; class W = weekend-hold)",
         "",
         "Images: `d1.png` (daily context) · `h4.png` (H4 setup, with overlays).",
     ]
