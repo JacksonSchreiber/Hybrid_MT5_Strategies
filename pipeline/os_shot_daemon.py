@@ -116,10 +116,14 @@ def _winpath(p: Path) -> str:
 
 
 def _ps(*args) -> str:
+    # errors="replace": a window title can carry a non-UTF-8 byte (e.g. a Windows-1252
+    # 0xfa 'u') which would otherwise raise UnicodeDecodeError and kill the daemon. The
+    # titles are only ASCII-substring-matched, so replacing a stray byte is harmless.
     return subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
          "-File", _winpath(PS_WIN_WSL), *args],
-        capture_output=True, text=True, timeout=60).stdout
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60).stdout
 
 
 def list_windows() -> list[dict]:
