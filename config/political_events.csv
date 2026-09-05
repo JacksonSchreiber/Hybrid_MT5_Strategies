@@ -14,3 +14,16 @@ date_utc_start,date_utc_end,ccy,event,class,source,round
 # Jackson Hole 2017 is missing from the ForexFactory archive (other years present at
 # 12:30/All). Backfilled at the archive convention: symposium open (Thu). class V.
 2017.08.24 12:30,2017.08.26 23:59,All,Jackson Hole Symposium,V,spec-gap-table,1
+# L1 fourth-attempt window GBPUSD 2013-07 -> 2014-12 (coach, 2026-08-25). FF has no shutdown/X-date
+# rows and its 2014-11-04 "Congressional Elections" row is Medium impact and did not reach the feed.
+2013.09.30 00:00,2013.10.01 12:00,USD,US Government Shutdown (funding deadline; shutdown ran Oct 1-16),W,coach-2026-08-25,1
+2013.10.16 00:00,2013.10.17 12:00,USD,US Debt Ceiling X-date (Oct 17),W,coach-2026-08-25,1
+2014.11.04 00:00,2014.11.05 12:00,USD,US Midterm Congressional Elections,W,coach-2026-08-25,1
+# L2 window GBPUSD 2018 + 2015-H1 (coach, 2026-08-26). FF carries the 2018 macro set (BOE/GDP/CPI all V),
+# the US midterms and the Italian election, but none of the dated Brexit political set-pieces. All three
+# below had public dates before the preceding Friday's close (the spec's schedulability test). The
+# 2018-12-12 Conservative no-confidence vote was same-day news -> class U, coach-only, deliberately NOT added.
+# 2015-H1 needs nothing: the 05-07 UK Parliamentary Elections and Greek rows are already in the FF layer.
+2018.07.06 00:00,2018.07.09 06:00,GBP,Chequers Cabinet Brexit Summit (Fri; Davis/Johnson resignations followed Sun-Mon),W,coach-2026-08-26,1
+2018.11.24 00:00,2018.11.26 06:00,GBP,EU Special Summit on Brexit Withdrawal Agreement (Sun Nov 25),W,coach-2026-08-26,1
+2018.12.10 00:00,2018.12.11 23:59,GBP,UK Commons Meaningful Vote on Brexit deal (scheduled Dec 11; pulled Dec 10),W,coach-2026-08-26,1

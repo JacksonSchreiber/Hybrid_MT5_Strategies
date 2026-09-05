@@ -57,6 +57,11 @@ rules:
   # --- W: weekend-hold class --------------------------------------------------------
   # Elections / referendums / plebiscites — political, so country-skip-exempt.
   - {re: '\belection|\breferendum|\bplebiscite', class: W, political: true}
+  # Referendums ForexFactory names as "... Vote" (Scottish Independence Vote 2014, EU Membership Vote
+  # 2016, Greek Bailout Vote, Italian Constitution Amendment Vote, Irish Lisbon/Stability Treaty Vote,
+  # Swiss Basic Income / Gold Asset Vote). Deliberately NOT a bare 'vote': BoE "Official Bank Rate
+  # Votes" would become W. Added by coach 2026-08-25 (L1 fourth-attempt pre-launch gate).
+  - {re: '(independence|membership|bailout|brexit|treaty|constitution\w*|basic income|gold asset) vote', class: W, political: true}
   # Confidence / leadership / treaty / "meaningful" votes with a published date.
   - {re: 'no.?confidence|confidence vote|meaningful vote|leadership (ballot|election|contest)|motion of no confidence|vote of no confidence', class: W, political: true}
   # Government funding / shutdown / debt-ceiling deadlines; announced fiscal set-pieces.
