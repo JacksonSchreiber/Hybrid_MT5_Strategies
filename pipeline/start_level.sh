@@ -37,11 +37,13 @@ GUIDE_WIN='C:\Users\jacks\OneDrive\Trading\hybrid_project\training\quick-referen
 log(){ printf '%s\n' "$*" >&2; }
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-LEVEL=""; ALT=false; SKIP_BASELINE=false; DRYRUN=false
+LEVEL=""; ALT=false; SKIP_BASELINE=false; DRYRUN=false; INVERSE=true  # INVERSE option ON by default
 while [[ $# -gt 0 ]]; do case "$1" in
   --alt) ALT=true; shift;;
   --skip-baseline) SKIP_BASELINE=true; shift;;
   --dry-run) DRYRUN=true; shift;;
+  --inverse) INVERSE=true; shift;;      # (default) offer the ungraded EMArev INVERSE option
+  --no-inverse) INVERSE=false; shift;;  # opt out of the INVERSE option for this session
   -h|--help) sed -n '3,20p' "$0"; exit 0;;
   *) LEVEL="$1"; shift;;
 esac; done
@@ -51,10 +53,10 @@ esac; done
 # Keep in sync with training/training-program.html level cards.
 case "$LEVEL" in
   0)  P=(EURUSD.dk 2021.07.01 2021.12.31); A=(EURUSD.dk 2020.07.01 2020.12.31);;
-  1)  P=(EURUSD.dk 2016.07.26 2017.12.31); A=();;                                  # L1 RE-RETRY (2026-08-15): 2019 burned by the failed retry; window promoted from the L2 slate (freq-checked ~32 signals across 2016-H2+2017; 2016.07.26 = earliest extended tick data). No alt - a fail needs a fresh coach ruling.
-  2)  P=(EURUSD.dk 2022.01.01 2022.12.31); A=(GBPUSD.dk 2022.01.01 2022.12.31);;   # alt reassigned to GBPUSD 2022 (2023-H2 went to the L1 retry); same freight-train regime
+  1)  P=(GBPUSD.dk 2013.07.01 2014.12.31); A=();;                                  # L1 FOURTH ATTEMPT (ruled 2026-08-25): EURUSD exhausted after three violations-only fails; fresh uncorrelated symbol+era (nothing burned before 2016-07 on any pair). Freq-checked: AA runs 2013-H2 = 10 + 2014 = 21 signals (~31). First run on the class-driven calendar + weekend_event (commit 799d231). No alt - a fail needs a fresh coach ruling. Window was L3's proposed retry; a PASS here also credits L3 (clean new symbol).
+  2)  P=(GBPUSD.dk 2015.07.01 2016.06.10); A=();;   # L2 RETRY ruled 2026-08-28 (2018 + 2015-H1 burned by the graded FAIL): one continuous ~11.4-month window, ends 2016-06-10 to stay clear of the Brexit-referendum final fortnight (poll-shock whipsaw + famous outcome). Doctrine unchanged for this window; the event-horizon re-exam applies only to LATER windows. No alt - a fail needs a fresh coach ruling.
   3)  P=(GBPUSD.dk 2023.01.01 2023.12.31); A=(GBPUSD.dk 2024.01.01 2024.12.31);;   # alt was GBPUSD 2021: contained L0's studied 2021-H2 on a ~0.9-correlated pair (amended 2026-08-07)
-  4)  P=(USDJPY.dk 2024.01.01 2024.12.31); A=(USDJPY.dk 2022.01.01 2022.12.31);;
+  4)  P=(USDJPY.dk 2024.01.01 2024.12.31); A=(XAUUSD.dk 2022.01.01 2022.12.31);;   # alt re-ruled 2026-08-28: USDJPY 2022 degraded by the 2022 studies; L4 retry takes the L5 alt (XAU 2022, decorrelated leg, news-heavy year) under the amended Option-A doctrine. L5 loses its alt.
   5)  P=(XAUUSD.dk 2023.01.01 2023.12.31); A=(XAUUSD.dk 2022.01.01 2022.12.31);;
   6)  P=(US100.dk  2022.01.01 2022.12.31); A=(US500.dk  2022.01.01 2022.12.31);;
   7a) P=(EURUSD.dk 2025.07.01 2026.06.30); A=();;   # was 2025 full year: 2025-H1 sits inside the interactively-traded 2024-01→2025-06 window (amended 2026-08-07; engineer must verify .dk tick coverage into 2026 before this runs)
@@ -113,6 +115,9 @@ mkdir -p "$SETDIR"
   echo "InpUseSMC=true"
   echo "InpUseFib=true"
   echo "InpUseEMA=true"
+  echo "InpUseShock=false"        # Strategy 4 candidate stays OFF in the interactive/training path
+  echo "InpUseEmaRevInv=false"    # EMArev-Inverse backtest detector stays OFF in the training path
+  echo "InpOfferInverse=$($INVERSE && echo true || echo false)"  # EMArev INVERSE dialog option (default ON; --no-inverse to disable)
   echo "InpShotOnDecision=true"   # capture the H4 chart (with overlays) on each signal
   echo "InpBlindLabels=true"      # on-chart label carries no date -> blind screenshots
   echo "InpShowEvents=true"       # event lines ON (operator wants to see upcoming news). Blindness

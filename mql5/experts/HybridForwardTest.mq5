@@ -25,6 +25,8 @@
 #include <Hybrid\detectors\SmcDetector.mqh>
 #include <Hybrid\detectors\FibDetector.mqh>
 #include <Hybrid\detectors\EmaDetector.mqh>
+#include <Hybrid\detectors\ShockDetector.mqh>   // Strategy 4 CANDIDATE, backtest-only (default OFF)
+#include <Hybrid\detectors\EmaRevInvDetector.mqh> // EMArev-Inverse SIGNAL LOGGER, backtest-only (default OFF)
 
 //--- coloured EDITABLE dialog (poll-driven) + plain fallback (early-bound)
 //--- TD_Open shows the window (Entry/SL/TP as edit boxes) and returns at once;
@@ -42,14 +44,16 @@ void TD_SetOrderType(string s); // set the "Order" row (MARKET / BUY LIMIT @ x)
 void TD_SetEvents(string abs_dates,string rel_dates); // upcoming-events list (both forms)
 int  TD_Coach(void);        // 1 = coach mode on (scrub chart label to match)
 int  TD_TakeShotRequested(void); // 1 (once) if operator clicked "Retake H4 screenshot"
+void TD_OfferInverse(int on);    // show the INVERSE button (EMArev + gate ok) for this dialog
 //--- mid-trade MANAGEMENT PANEL (separate, non-modal window on its OWN thread,
 //--- so it stays live + clickable while the visual tester is PAUSED - which is
 //--- exactly when the operator decides at bar close). The EA only pushes state
 //--- and drains a latched button action; all trading stays on the MQL thread.
 int  TDM_Open(string title);                       // spawn panel; 1=up
 void TDM_Update(string state_text,double lots,int be_enabled); // push live state
-int  TDM_Poll(void);        // 0 none, 1 close, 2 close50, 3 SL->BE (one-shot)
+int  TDM_Poll(void);        // 0 none, 1 close, 2 close50, 3 SL->BE, 4 EXTEND (one-shot)
 void TDM_Close(void);       // tear down + join the panel thread
+void TDM_ShowExtend(int on);// show EXTEND button (only while managing an inverse position)
 #import
 #import "user32.dll"
 int MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType);
@@ -69,7 +73,12 @@ input double InpRiskPct     = 0.01;     // risk per trade (fraction of equity)
 input double InpMinStopATR  = 0.5;      // reject signal if SL distance < this * ATR(14)
 input double InpMinStopSpreads = 2.0;   // ...also require SL distance >= this * current spread
 input double InpMaxMarginPct = 0.50;    // hard cap: one position may use <= this fraction of free margin
-input long   InpMagic       = 990217;   // magic number
+input long   InpMagic       = 990217;   // magic number (graded stream)
+//--- EMArev INVERSE live option (interactive tester only; ungraded, isolated cohort).
+//--- default OFF; start_level.sh sets InpOfferInverse=true only with --inverse.
+input bool   InpOfferInverse  = true;    // offer INVERSE on EMArev alerts (a 3rd dialog choice; default ON)
+input long   InpInverseMagic  = 990218;  // SEPARATE magic for inverse trades (isolates them)
+input bool   InpTestInverse   = false;   // TEST-ONLY: under AA_ALL, auto-take INVERSE on EMArev (headless lifecycle check)
 input int    InpDeviation   = 50;       // max slippage (points)
 input bool   InpCleanupOnDeinit = false;// delete overlay objects on EA removal
 input string InpObjPrefix   = "HFT_";   // chart-object name prefix
@@ -89,6 +98,19 @@ input double InpFibMinRR    = 2.0;
 input double InpEmaStretch  = 2.0;
 input double InpEmaAdxCeil  = 30.0;
 input double InpEmaMinRR    = 1.3;
+//--- Strategy 4 CANDIDATE: Shock Continuation. BACKTEST-ONLY, default OFF so the
+//--- three live detectors + interactive tester stay frozen. Enable only headless.
+input bool   InpUseShock    = false;    // Strategy 4 (candidate): shock continuation
+input double InpShockAtr    = 1.8;      // shock bar: range >= this * ATR_D1  (grid 1.5/1.8/2.2)
+input double InpShockPullAtr= 0.8;      // pullback depth >= this * ATR_H4     (grid 0.5/0.8/1.2)
+input double InpShockTpMult = 0.75;     // TP = entry + this * shock range     (grid 0.5/0.75/1.0)
+input double InpShockMinRR  = 2.0;      // do not arm below this R:R
+input int    InpShockTrig   = 0;        // 0 = resume_close, 1 = reversal_candle
+input bool   InpShockCalGate= true;     // forward V <=6h -> do not arm (else log only)
+//--- EMArev-Inverse ("ride the stretch") SIGNAL LOGGER. BACKTEST-ONLY, default OFF.
+//--- Wraps the frozen EMArev; logs inverted-continuation setups (no trades); the 6
+//--- entry x exit cells are simulated in Python. Uses the live EMArev config below.
+input bool   InpUseEmaRevInv = false;   // EMArev-Inverse candidate: log EMArev signals inverted
 //--- imbalance highlights (display-only; NEVER affect trade/entry logic)
 input bool   InpShowImbal   = true;           // draw FVG / price-gap / tick-volume imbalances
 input color  InpImbColor    = clrMediumPurple;// one shared colour for all three imbalance types
@@ -130,7 +152,7 @@ input double InpBEPadPips     = 1.0;           // SL->break-even padding (pips i
 
 //--- globals
 CTrade         g_trade;
-ISignalDetector *g_detectors[3];           // priority order: [0]=SMC,[1]=Fib,[2]=EMA
+ISignalDetector *g_detectors[5];           // [0]=SMC,[1]=Fib,[2]=EMA,[3]=Shock,[4]=EmaRevInv (both candidates, default off)
 int            g_ndet       = 0;
 ENUM_TIMEFRAMES g_tf        = PERIOD_H4;
 bool            g_events_drawn = false;      // econ-event lines drawn once (first tick) [legacy, unused]
@@ -215,6 +237,19 @@ struct ManualAction
 ManualAction g_actions[];
 string       g_actions_part = "";
 
+//--- EMArev INVERSE cohort: fully isolated from the graded stream (separate journal,
+//--- separate magic, own state; never enters g_rows[]/HasOpenPosition's InpMagic filter,
+//--- so it holds no one-setup lock). Max ONE inverse open at a time (hard).
+JournalRow   g_inv_rows[];               // parallel journal -> <journal>.inv.csv (EMArevINV)
+ManualAction g_inv_actions[];            // parallel actions -> <journal>.inv.actions.csv
+string       g_inv_journal_part = "";
+string       g_inv_actions_part = "";
+bool         g_inv_open = false;         // an inverse position is currently open
+int          g_inv_open_idx = -1;        // index into g_inv_rows of the open inverse (-1 none)
+long         g_inv_posid = 0;            // its position id
+datetime     g_inv_entry_bar = 0;        // H4 bar time at entry (12-bar auto-close clock)
+bool         g_inv_extended = false;     // trader hit EXTEND -> auto-close cancelled
+
 //+------------------------------------------------------------------+
 string DirStr(int d) { return (d>0 ? "BUY" : "SELL"); }
 string StampCompact(datetime t)
@@ -248,6 +283,8 @@ int OnInit()
    if(InpUseSMC) g_detectors[g_ndet++]=new CLiquiditySweepMSS(InpSmcMinRR,InpSmcTpR,InpRiskPct);
    if(InpUseFib) g_detectors[g_ndet++]=new CDeepFibRetrace(InpFibImpulseATR,InpFibMinRR,InpRiskPct);
    if(InpUseEMA) g_detectors[g_ndet++]=new CEma20MeanRev(InpEmaStretch,InpEmaAdxCeil,InpEmaMinRR,InpRiskPct);
+   if(InpUseShock) g_detectors[g_ndet++]=new CShockContinuation(InpShockAtr,InpShockPullAtr,InpShockTpMult,InpShockMinRR,InpRiskPct,InpShockTrig,InpShockCalGate);
+   if(InpUseEmaRevInv) g_detectors[g_ndet++]=new CEmaRevInverse(InpEmaStretch,InpEmaAdxCeil,InpEmaMinRR,InpRiskPct);
    if(g_ndet==0) Print("WARNING: no detectors enabled.");
 
    g_trade.SetExpertMagicNumber(InpMagic);
@@ -295,6 +332,9 @@ void OnTick()
       string jpfx=(InpAutoApprove!=AA_NONE ? "AA_" : "");
       g_journal_part=StringFormat("journal\\%s%s_%s.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
       g_actions_part=StringFormat("journal\\%s%s_%s.actions.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
+      //--- isolated inverse-cohort journals (never mixed with the graded stream)
+      g_inv_journal_part=StringFormat("journal\\%s%s_%s.inv.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
+      g_inv_actions_part=StringFormat("journal\\%s%s_%s.inv.actions.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
       WriteJournal(g_journal_part);
       if(InpShowSwings) DrawSwingMarkers();   // first draw (new-bar gate skips tick 1)
      }
@@ -315,6 +355,13 @@ void OnTick()
    datetime bar0=iTime(_Symbol,g_tf,0);
    if(bar0==g_last_bar) return;
    g_last_bar=bar0;
+
+   //--- INVERSE time exit: auto-close at 12 H4 bars unless the trader hit EXTEND.
+   if(g_inv_open && !g_inv_extended)
+     {
+      int ibars=(int)((bar0-g_inv_entry_bar)/PeriodSeconds(g_tf));
+      if(ibars>=12) CloseInverse("AUTO12");
+     }
 
    //--- roll the econ-event overlay forward with the replay (reveals upcoming
    //--- events within the lookahead; bias stays hidden until each one fires)
@@ -512,8 +559,11 @@ void HandleSignal(SignalCandidate &cand)
    WritePendingSetup(id,cand,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2);
 
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
-   long decision_ms=0; int skip_reason=0; bool entry_edited=false;
-   bool approved=AskApproval(id,cand,lots,caption,decision_ms,skip_reason,entry_edited);
+   long decision_ms=0; int skip_reason=0; bool entry_edited=false; bool want_inv=false;
+   //--- offer INVERSE only for EMArev, past the fwd-V<=6h gate, when none is open (max 1)
+   bool offer_inv=(InpOfferInverse && cand.strategy=="EMArev" && !g_inv_open
+                   && InverseFwdVClear(cand.zone_to));
+   bool approved=AskApproval(id,cand,lots,caption,decision_ms,skip_reason,entry_edited,offer_inv,want_inv);
    //--- the dialog may have retuned Entry/SL/TP (R:R held) - re-size on the
    //--- final risk distance so the placed order + journal use edited levels.
    lots=SizeByRisk(cand.entry,cand.sl);
@@ -548,6 +598,17 @@ void HandleSignal(SignalCandidate &cand)
    g_rows[n].posid=0; g_rows[n].closed=false;
    g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
 
+   if(want_inv)
+     {
+      //--- trader chose INVERSE: the graded stream records a plain SKIP (reason 7 =
+      //--- took-inverse); the inverse trade lives ONLY in the isolated .inv journal.
+      //--- No graded position -> no one-setup lock, no graded R. Schema byte-identical.
+      g_rows[n].decision="skip"; g_rows[n].skip_reason=7;
+      WriteJournal(g_journal_part);
+      PlaceInverse(id,cand);
+      return;
+     }
+
    if(approved)
      {
       g_rows[n].decision="approved";
@@ -565,7 +626,9 @@ void HandleSignal(SignalCandidate &cand)
          double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(ts<=0.0) ts=_Point;
          double gate=MathMax(ts,(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point);
          double pend_price=cand.entry;
-         bool want_pending=(entry_edited && MathAbs(cand.entry-mkt)>gate);
+         //--- a detector can request a breakout STOP entry (cand.stop_entry) so the
+         //--- setup only fills on resumption and cancels if unfilled (ShockCont).
+         bool want_pending=((entry_edited || cand.stop_entry) && MathAbs(cand.entry-mkt)>gate);
          //--- TEST-ONLY headless probe (AA_ALL): force a pending so the
          //--- OnTradeTransaction fill-binding + expiry paths can be verified.
          //--- InpForcePendingPts > 0 => STOP just past market (fills fast);
@@ -770,6 +833,191 @@ void WriteActions(string path)
    FileFlush(h); FileClose(h);
   }
 
+//==================================================================================
+//  EMArev INVERSE cohort — fully isolated from the graded stream (own journal, own
+//  magic, own state). None of this ever writes g_rows[] or the graded journal.
+//==================================================================================
+//--- calendar gates (reuse the EA's loaded econ cache g_ev_*; class strings V/W/C).
+bool InverseFwdVClear(datetime sigtime)   // false => a forward V within 6h -> no arm
+  {
+   for(int i=0;i<ArraySize(g_ev_t);i++)
+      if(g_ev_cls[i]=="V" && g_ev_t[i]>sigtime && g_ev_t[i]<=sigtime+6*3600) return false;
+   return true;
+  }
+bool InverseWInHold(datetime sigtime)     // a W-class event in the next ~3 days
+  {
+   for(int i=0;i<ArraySize(g_ev_t);i++)
+      if(g_ev_cls[i]=="W" && g_ev_t[i]>sigtime && g_ev_t[i]<=sigtime+3*86400) return true;
+   return false;
+  }
+//--- isolated journal writer (same 28-col schema, over g_inv_rows[]).
+void WriteInvJournal(string path)
+  {
+   if(path=="") return;
+   int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE){ Print("WARNING: cannot open inv journal '",path,"' err=",GetLastError()); return; }
+   FileWriteString(h,
+      "signal_id,signal_time,symbol,strategy,direction,"
+      "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
+      "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
+      "exit_time,exit_price,pnl,r_multiple\n");
+   for(int i=0;i<ArraySize(g_inv_rows);i++)
+     {
+      JournalRow r=g_inv_rows[i];
+      FileWriteString(h,StringFormat(
+         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s\n",
+         r.id,TimeToString(r.time,TIME_DATE|TIME_SECONDS),r.symbol,r.strategy,DirStr(r.direction),
+         DoubleToString(r.orig_entry,_Digits),DoubleToString(r.orig_sl,_Digits),DoubleToString(r.orig_tp,_Digits),
+         "","",DoubleToString(r.entry,_Digits),DoubleToString(r.sl,_Digits),DoubleToString(r.tp,_Digits),"","",
+         r.partial_frac,DoubleToString(r.lots,2),
+         r.decision,r.skip_reason,(r.edited?1:0),(r.is_pending?1:0),r.decision_ms,r.posid,(r.tp1_done?1:0),
+         (r.closed?TimeToString(r.exit_time,TIME_DATE|TIME_SECONDS):""),
+         (r.closed?DoubleToString(r.exit_price,_Digits):""),
+         (r.closed?DoubleToString(r.pnl,2):""),
+         (r.closed?DoubleToString(r.r_multiple,2):"")));
+     }
+   FileFlush(h); FileClose(h);
+  }
+void WriteInvActions(string path)
+  {
+   if(path=="") return;
+   int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE) return;
+   FileWriteString(h,"signal_id,posid,bar_time,action,price,lots_before,lots_after,sl_after,banked_r,open_r\n");
+   for(int i=0;i<ArraySize(g_inv_actions);i++)
+     {
+      ManualAction a=g_inv_actions[i];
+      FileWriteString(h,StringFormat("%d,%d,%s,%s,%s,%s,%s,%s,%.2f,%.2f\n",
+         a.id,a.posid,TimeToString(a.bar_time,TIME_DATE|TIME_SECONDS),a.action,
+         DoubleToString(a.price,_Digits),DoubleToString(a.lots_before,2),
+         DoubleToString(a.lots_after,2),DoubleToString(a.sl_after,_Digits),a.banked_r,a.open_r));
+     }
+   FileFlush(h); FileClose(h);
+  }
+double InvOpenR()   // unrealised R on the open inverse
+  {
+   if(!g_inv_open || g_inv_open_idx<0) return 0.0;
+   int k=g_inv_open_idx;
+   if(!PositionSelectByTicket((ulong)g_inv_posid)) return 0.0;
+   double px=(g_inv_rows[k].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   double moved=(g_inv_rows[k].direction>0? px-g_inv_rows[k].entry : g_inv_rows[k].entry-px);
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   double wf=(g_inv_rows[k].lots>0? vol/g_inv_rows[k].lots:1.0);
+   return (g_inv_rows[k].risk_px>0? wf*moved/g_inv_rows[k].risk_px : 0.0);
+  }
+void LogInvAction(string what,double price,double lb,double la,double sl)
+  {
+   if(g_inv_open_idx<0) return;
+   int n=ArraySize(g_inv_actions); ArrayResize(g_inv_actions,n+1);
+   g_inv_actions[n].id=g_inv_rows[g_inv_open_idx].id; g_inv_actions[n].posid=g_inv_posid;
+   g_inv_actions[n].bar_time=iTime(_Symbol,g_tf,0); g_inv_actions[n].action=what;
+   g_inv_actions[n].price=price; g_inv_actions[n].lots_before=lb; g_inv_actions[n].lots_after=la;
+   g_inv_actions[n].sl_after=sl; g_inv_actions[n].banked_r=g_inv_rows[g_inv_open_idx].r_multiple;
+   g_inv_actions[n].open_r=InvOpenR();
+   WriteInvActions(g_inv_actions_part);
+  }
+//--- open a market inverse (E1 entry, EMA-stop, no TP; auto-close 12 H4 bars).
+void PlaceInverse(int id,SignalCandidate &cand)
+  {
+   if(g_inv_open){ Print("Inverse: one already open - refused (max 1)."); return; }
+   int inv_dir=-cand.direction;
+   double ema=cand.tp1;                                  // frozen EMA20 (mean) from EMArev
+   double atr=(InpEmaStretch>0.0? (cand.zone_hi-cand.zone_lo)/InpEmaStretch : 0.0);
+   if(atr<=0.0){ double a[]; ArraySetAsSeries(a,true); int hA=iATR(_Symbol,g_tf,14);
+                 if(hA!=INVALID_HANDLE && CopyBuffer(hA,0,1,1,a)>0) atr=a[0]; }
+   if(atr<=0.0){ Print("Inverse #",id," no ATR - refused."); return; }
+   double spread=SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID); if(spread<0)spread=0;
+   double buf=MathMax(0.10*atr,spread);
+   double entry=(inv_dir>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID));
+   double ema_dist=MathAbs(entry-ema);
+   double risk=(ema_dist<1.0*atr ? 1.0*atr : MathMin(ema_dist+buf,2.5*atr));   // cap 2.5, floor 1.0
+   double sl=(inv_dir>0? entry-risk : entry+risk);
+   double lots=SizeByRisk(entry,sl);
+   if(lots<=0.0){ Print("Inverse #",id," lots<=0 - not placing."); return; }
+   bool w_warn=InverseWInHold(cand.zone_to);
+   g_trade.SetExpertMagicNumber(InpInverseMagic);        // ISOLATE: separate magic
+   string cap=StringFormat("EMArevINV #%d",id);
+   bool ok=(inv_dir>0? g_trade.Buy(lots,_Symbol,0.0,sl,0.0,cap) : g_trade.Sell(lots,_Symbol,0.0,sl,0.0,cap));
+   g_trade.SetExpertMagicNumber(InpMagic);               // restore graded magic immediately
+   if(!ok){ Print("Inverse #",id," order FAILED: ",g_trade.ResultRetcode()," ",g_trade.ResultRetcodeDescription()); return; }
+   long posid=0; double fill=entry; ulong deal=g_trade.ResultDeal();
+   if(deal>0 && HistoryDealSelect(deal)){ posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+       double f=HistoryDealGetDouble(deal,DEAL_PRICE); if(f>0) fill=f; }
+   int n=ArraySize(g_inv_rows); ArrayResize(g_inv_rows,n+1);
+   g_inv_rows[n].id=id; g_inv_rows[n].time=cand.zone_to; g_inv_rows[n].symbol=_Symbol;
+   g_inv_rows[n].strategy="EMArevINV"; g_inv_rows[n].direction=inv_dir;
+   g_inv_rows[n].orig_entry=entry; g_inv_rows[n].orig_sl=sl; g_inv_rows[n].orig_tp=0;
+   g_inv_rows[n].orig_tp1=0; g_inv_rows[n].orig_tp2=0;
+   g_inv_rows[n].entry=fill; g_inv_rows[n].sl=sl; g_inv_rows[n].tp=0;
+   g_inv_rows[n].tp1=0; g_inv_rows[n].tp2=0; g_inv_rows[n].partial_frac=0;
+   g_inv_rows[n].lots=lots; g_inv_rows[n].risk_px=MathAbs(fill-sl);
+   g_inv_rows[n].tp1_done=true; g_inv_rows[n].closed_vol=0;
+   g_inv_rows[n].decision="approved_inverse"; g_inv_rows[n].decision_ms=0; g_inv_rows[n].skip_reason=0;
+   g_inv_rows[n].edited=false; g_inv_rows[n].is_pending=false; g_inv_rows[n].order_ticket=0;
+   g_inv_rows[n].placed_time=TimeCurrent(); g_inv_rows[n].posid=posid; g_inv_rows[n].closed=false;
+   g_inv_rows[n].exit_time=0; g_inv_rows[n].exit_price=0; g_inv_rows[n].pnl=0; g_inv_rows[n].r_multiple=0;
+   g_inv_open=true; g_inv_open_idx=n; g_inv_posid=posid;
+   g_inv_entry_bar=iTime(_Symbol,g_tf,0); g_inv_extended=false;
+   WriteInvJournal(g_inv_journal_part);
+   Print("Signal #",id," INVERSE ",DirStr(inv_dir)," ",DoubleToString(lots,2)," lots @ ",
+         DoubleToString(fill,_Digits)," SL ",DoubleToString(sl,_Digits)," (EMA-stop; auto-close 12 H4 bars)",
+         (w_warn?"  [WARN: W event in projected hold - ungraded, trader proceeded]":""));
+   if(w_warn) LogInvAction("W_WARN",fill,lots,lots,sl);
+  }
+//--- inverse management (mirror the graded manual ops on g_inv_posid; full-close
+//--- finalization + g_inv_open clearing happen in OnTradeTransaction).
+void CloseInverse(string reason)
+  {
+   if(!g_inv_open || !PositionSelectByTicket((ulong)g_inv_posid)){ return; }
+   double vol=PositionGetDouble(POSITION_VOLUME), sl=PositionGetDouble(POSITION_SL);
+   double px=(g_inv_rows[g_inv_open_idx].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   LogInvAction(reason,px,vol,0.0,sl);
+   if(g_trade.PositionClose((ulong)g_inv_posid))
+      Print("INVERSE #",g_inv_rows[g_inv_open_idx].id," ",reason," ",DoubleToString(vol,2)," lots @ ",DoubleToString(px,_Digits));
+  }
+void Close50Inverse()
+  {
+   if(!g_inv_open || !PositionSelectByTicket((ulong)g_inv_posid)) return;
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0)step=0.01;
+   double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0)vmin=0.01;
+   double vol=PositionGetDouble(POSITION_VOLUME), sl=PositionGetDouble(POSITION_SL);
+   double pv=MathFloor((vol*0.5)/step)*step;
+   if(pv<vmin || (vol-pv)<vmin){ Print("INVERSE 50%: too small to split."); return; }
+   double px=(g_inv_rows[g_inv_open_idx].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   LogInvAction("CLOSE50",px,vol,vol-pv,sl);
+   if(g_trade.PositionClosePartial((ulong)g_inv_posid,pv))
+      Print("INVERSE #",g_inv_rows[g_inv_open_idx].id," CLOSE50 banked ",DoubleToString(pv,2)," lots");
+  }
+void BEInverse()
+  {
+   if(!g_inv_open || !PositionSelectByTicket((ulong)g_inv_posid)) return;
+   double be=NormPrice(g_inv_rows[g_inv_open_idx].entry);   // BE = entry (no pad; simple)
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   if(g_trade.PositionModify((ulong)g_inv_posid,be,0.0))
+     { LogInvAction("SL_BE",be,vol,vol,be); Print("INVERSE SL->BE @ ",DoubleToString(be,_Digits)); }
+  }
+void ExtendInverse()
+  {
+   if(!g_inv_open) return;
+   g_inv_extended=true;                                    // cancels the 12-bar auto-close
+   LogInvAction("EXTEND",g_inv_rows[g_inv_open_idx].entry,0,0,0);
+   Print("INVERSE #",g_inv_rows[g_inv_open_idx].id," EXTEND: 12-bar auto-close cancelled.");
+  }
+string InvPanelStateText()
+  {
+   if(!g_inv_open || !PositionSelectByTicket((ulong)g_inv_posid)) return "inverse closed";
+   int k=g_inv_open_idx;
+   double vol=PositionGetDouble(POSITION_VOLUME), psl=PositionGetDouble(POSITION_SL);
+   int bars=(int)((iTime(_Symbol,g_tf,0)-g_inv_entry_bar)/PeriodSeconds(g_tf));
+   string s=StringFormat("INVERSE  %s   #%d\r\n",DirStr(g_inv_rows[k].direction),g_inv_rows[k].id);
+   s+=StringFormat("Lots: %s  Entry: %s\r\n",DoubleToString(vol,2),DoubleToString(g_inv_rows[k].entry,_Digits));
+   s+=StringFormat("EMA-stop: %s\r\n",DoubleToString(psl,_Digits));
+   s+=StringFormat("Open R: %+.2f    Banked R: %+.2f\r\n",InvOpenR(),g_inv_rows[k].r_multiple);
+   s+=(g_inv_extended? "Auto-close: CANCELLED (extended)\r\n"
+                     : StringFormat("Auto-close in %d H4 bars\r\n",12-bars));
+   return s;
+  }
+
 //--- append one manual-intervention row + rewrite the actions CSV.
 void LogManualAction(int idx,string what,double price,double lots_before,
                      double lots_after,double sl_after)
@@ -870,7 +1118,10 @@ string PanelStateText(int idx,bool be_ok)
 void ManagePanelTick()
   {
    int idx=ActiveRowIdx();
-   if(idx<0)
+   //--- graded WINS: the inverse gets the panel only when NO graded position is open,
+   //--- so this feature never changes graded-trade management (integrity §3).
+   bool manage_inv=(idx<0 && g_inv_open);
+   if(idx<0 && !manage_inv)
      {
       if(g_panel_open){ TDM_Close(); g_panel_open=false; }
       return;
@@ -878,34 +1129,50 @@ void ManagePanelTick()
    static bool warned=false;
    if(!g_panel_open)
      {
-      if(TDM_Open("Manage position")==1) { g_panel_open=true; warned=false; }
-      else                               // window not up yet; retry next tick
+      if(TDM_Open(manage_inv? "Manage INVERSE" : "Manage position")==1) { g_panel_open=true; warned=false; }
+      else
         {
          if(!warned){ Print("Management panel not up yet (retrying) - if this persists the DLL window failed to create."); warned=true; }
          return;
         }
      }
+   TDM_ShowExtend(manage_inv?1:0);
 
    //--- drain a CONFIRMED button press and execute it on THIS (MQL) thread
    int act=TDM_Poll();
-   if(act==1)      ManualClose(idx);
-   else if(act==2) ManualClose50(idx);
-   else if(act==3) ManualBE(idx);
+   if(manage_inv)
+     {
+      if(act==1)      CloseInverse("MANUAL");
+      else if(act==2) Close50Inverse();
+      else if(act==3) BEInverse();
+      else if(act==4) ExtendInverse();
+      if(!g_inv_open){ TDM_Close(); g_panel_open=false; return; }   // inverse fully closed this tick
+     }
+   else
+     {
+      if(act==1)      ManualClose(idx);
+      else if(act==2) ManualClose50(idx);
+      else if(act==3) ManualBE(idx);
+      idx=ActiveRowIdx();
+      if(idx<0){ TDM_Close(); g_panel_open=false; return; }
+     }
 
-   //--- a full close / final exit may have flattened us this tick
-   idx=ActiveRowIdx();
-   if(idx<0){ TDM_Close(); g_panel_open=false; return; }
-
-   //--- refresh at most once per tester-clock SECOND (or immediately after an
-   //--- action): pushing every tick under model-1 fast-forward floods the panel
-   //--- thread with repaints and makes it sluggish exactly when a click is due.
+   //--- throttled state refresh (once per tester second, or right after an action)
    static datetime last_push=0;
    datetime now=TimeCurrent();
    if(now!=last_push || act!=0)
      {
-      bool be_ok=BEPlaceable(idx);
-      double vol=(PositionSelectByTicket((ulong)g_rows[idx].posid)? PositionGetDouble(POSITION_VOLUME):0.0);
-      TDM_Update(PanelStateText(idx,be_ok),vol,be_ok?1:0);
+      if(manage_inv)
+        {
+         double vol=(PositionSelectByTicket((ulong)g_inv_posid)? PositionGetDouble(POSITION_VOLUME):0.0);
+         TDM_Update(InvPanelStateText(),vol,1);   // BE always offered for the inverse
+        }
+      else
+        {
+         bool be_ok=BEPlaceable(idx);
+         double vol=(PositionSelectByTicket((ulong)g_rows[idx].posid)? PositionGetDouble(POSITION_VOLUME):0.0);
+         TDM_Update(PanelStateText(idx,be_ok),vol,be_ok?1:0);
+        }
       last_push=now;
      }
   }
@@ -1120,9 +1387,9 @@ bool ValidScale(int dir,double e,double s,double tp1,double tp2,double ts)
 //| chart corner label's timestamp. Entry away from market => pending.  |
 //+------------------------------------------------------------------+
 bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
-                       int &skip_reason,bool &entry_edited)
+                       int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv)
   {
-   skip_reason=0; entry_edited=false;
+   skip_reason=0; entry_edited=false; want_inv=false;
    int    dir=cand.direction;
    bool   scaleout=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
    double frac=cand.partial_fraction;
@@ -1160,6 +1427,7 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
       Print("Signal #",id," dialog failed to open - fail-closed to SKIP.");
       return false;
      }
+   TD_OfferInverse(offer_inv?1:0);   // 3rd choice, only for EMArev past the fwd-V gate
    //--- decision-time chart snapshot (overlays already drawn; dialog not in shot)
    DecisionScreenshot(id);
    //--- popup upcoming-events list (both date forms for the coach-mode toggle)
@@ -1240,6 +1508,8 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
      }
    TD_Close();
 
+   if(r==3){ want_inv=true; return false; }   // INVERSE chosen: not a graded fade (handled by caller)
+
    if(r==1)   // approved: commit the (possibly edited) levels; NEVER collapse
      {
       cand.entry=ce; cand.sl=cs;
@@ -1277,11 +1547,17 @@ void UiSpin(int ms)
 //| Modal / auto-approve. Returns true on approve.                    |
 //+------------------------------------------------------------------+
 bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &decision_ms,
-                 int &skip_reason,bool &entry_edited)
+                 int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv)
   {
-   skip_reason=0; entry_edited=false;
-   //--- headless automated verification: no DLL, no modal (never edits entry)
-   if(InpAutoApprove==AA_ALL)  { decision_ms=0; return true;  }
+   skip_reason=0; entry_edited=false; want_inv=false;
+   //--- headless automated verification: no DLL, no modal (never edits entry).
+   //--- INVERSE is interactive-only: headless never chooses it.
+   if(InpAutoApprove==AA_ALL)
+     { decision_ms=0;
+       // TEST hook: exercise the inverse lifecycle headlessly on EMArev (bypasses the
+       // fwd-V gate, which legitimately blocks most news-driven stretches).
+       if(InpTestInverse && cand.strategy=="EMArev" && !g_inv_open){ want_inv=true; return false; }
+       return true; }
    if(InpAutoApprove==AA_SKIP) { decision_ms=0; return false; }
 
    uint t0=GetTickCount();
@@ -1295,7 +1571,7 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
      {
       //--- editable, R:R-locked, live-updating dialog (may mutate cand levels);
       //--- returns the skip-reason code and whether the entry was edited (pending).
-      yes=InteractiveDialog(id,cand,caption,plan,skip_reason,entry_edited);
+      yes=InteractiveDialog(id,cand,caption,plan,skip_reason,entry_edited,offer_inv,want_inv);
      }
    else
      {
@@ -2100,6 +2376,30 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(HistoryDealGetInteger(deal,DEAL_ENTRY)!=DEAL_ENTRY_OUT) return;
 
    long posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+
+   //--- INVERSE cohort close: its posid is NEVER in g_rows[]; finalize the isolated
+   //--- .inv row here (identical R math), clear g_inv_open only on FULL close.
+   if(g_inv_open && posid==g_inv_posid && g_inv_open_idx>=0 && g_inv_open_idx<ArraySize(g_inv_rows))
+     {
+      int k=g_inv_open_idx;
+      double iv=HistoryDealGetDouble(deal,DEAL_VOLUME), ip=HistoryDealGetDouble(deal,DEAL_PRICE);
+      double ipr=HistoryDealGetDouble(deal,DEAL_PROFIT)+HistoryDealGetDouble(deal,DEAL_SWAP)+HistoryDealGetDouble(deal,DEAL_COMMISSION);
+      datetime idt=(datetime)HistoryDealGetInteger(deal,DEAL_TIME);
+      double imv=(g_inv_rows[k].direction>0? ip-g_inv_rows[k].entry : g_inv_rows[k].entry-ip);
+      double iwf=(g_inv_rows[k].lots>0? iv/g_inv_rows[k].lots:1.0);
+      g_inv_rows[k].pnl+=ipr; g_inv_rows[k].r_multiple+=(g_inv_rows[k].risk_px>0? iwf*imv/g_inv_rows[k].risk_px:0.0);
+      g_inv_rows[k].closed_vol+=iv; g_inv_rows[k].exit_time=idt; g_inv_rows[k].exit_price=ip;
+      double istep=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(istep<=0)istep=0.01;
+      if(g_inv_rows[k].closed_vol >= g_inv_rows[k].lots - istep*0.5)
+        {
+         g_inv_rows[k].closed=true; g_inv_open=false; g_inv_open_idx=-1; g_inv_posid=0;
+         Print("INVERSE #",g_inv_rows[k].id," CLOSED  R=",DoubleToString(g_inv_rows[k].r_multiple,2),
+               "  pnl=",DoubleToString(g_inv_rows[k].pnl,2));
+        }
+      WriteInvJournal(g_inv_journal_part);
+      return;
+     }
+
    int idx=-1;
    for(int i=0;i<ArraySize(g_rows);i++)
       if(g_rows[i].posid==posid && !g_rows[i].closed) { idx=i; break; }
@@ -2200,6 +2500,22 @@ void OnDeinit(const int reason)
          WriteActions(af);
          if(g_actions_part!="" && g_actions_part!=af) FileDelete(g_actions_part,FILE_COMMON);
          Print("Manual-actions log finalised: <Terminal>\\Common\\Files\\",af," (",ArraySize(g_actions)," actions)");
+        }
+      //--- finalise the ISOLATED inverse cohort (separate file; never the graded journal)
+      if(ArraySize(g_inv_rows)>0)
+        {
+         string invf=StringFormat("journal\\%s%s_%s_%s.inv.csv",
+                                  jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+         WriteInvJournal(invf);
+         if(g_inv_journal_part!="" && g_inv_journal_part!=invf) FileDelete(g_inv_journal_part,FILE_COMMON);
+         Print("Inverse journal finalised: <Terminal>\\Common\\Files\\",invf," (",ArraySize(g_inv_rows)," inverse trades)");
+         if(ArraySize(g_inv_actions)>0)
+           {
+            string iaf=StringFormat("journal\\%s%s_%s_%s.inv.actions.csv",
+                                    jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+            WriteInvActions(iaf);
+            if(g_inv_actions_part!="" && g_inv_actions_part!=iaf) FileDelete(g_inv_actions_part,FILE_COMMON);
+           }
         }
       if(InpCleanupOnDeinit) ObjectsDeleteAll(0,InpObjPrefix);
      }

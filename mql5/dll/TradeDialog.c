@@ -64,6 +64,9 @@
 /* ---- colour palette ----------------------------------------------------- */
 #define COL_ENTRY   RGB(0,160,0)      /* green  */
 #define COL_SL      RGB(204,0,0)      /* red    */
+#define COL_CAUTION RGB(200,130,0)    /* amber: 6-12h caution band. pure yellow is
+                                         invisible on the white events box, so a dark
+                                         amber carries the "yellow/caution" read legibly */
 #define COL_TP      RGB(0,0,204)      /* blue   */
 #define COL_BUY     RGB(0,160,0)
 #define COL_SELL    RGB(204,0,0)
@@ -76,6 +79,7 @@
 /* ---- control ids -------------------------------------------------------- */
 #define ID_YES      100
 #define ID_NO       101
+#define ID_INV      102   /* BUTTON: INVERSE (open a position WITH the stretch) */
 #define ID_ENTRY    200   /* EDIT */
 #define ID_SL       201   /* EDIT */
 #define ID_TP       202   /* EDIT (single TP, or TP1 for scale-out) */
@@ -96,6 +100,7 @@
 #define ID_MCLOSE   400   /* BUTTON: close full position (arm -> confirm)      */
 #define ID_MCLOSE50 401   /* BUTTON: close 50% (arm -> confirm)                */
 #define ID_MBE      402   /* BUTTON: SL -> break-even (instant; reversible)    */
+#define ID_MEXTEND  404   /* BUTTON: EXTEND (cancel the inverse 12-bar auto-close) */
 #define ID_MSTATE   403   /* read-only multiline EDIT: live position state     */
 #define PM_UPDATE   (WM_APP + 1)   /* EA pushed new state text (cross-thread)  */
 #define PM_KILL     (WM_APP + 2)   /* EA asked to tear the panel down          */
@@ -142,7 +147,8 @@ typedef struct {
     HWND   hEvToggle;            /* collapse/expand the events list */
     HWND   hRedact;              /* coach-mode toggle button */
     HWND   hHint;
-    HWND   hYes,   hNo;
+    HWND   hYes,   hNo,  hInv;
+    int    offer_inv;           /* 1 = show the INVERSE button (EMArev + gate ok) */
     HWND   hShot;               /* "Retake H4 screenshot" button */
     int    shot_req;            /* 1 = operator asked to re-take the H4 screenshot */
     HWND   hWhy;                /* "Why skip?" prompt (reason-picker mode) */
@@ -189,8 +195,9 @@ typedef struct {
     HANDLE  hReady;             /* signaled once the window+controls exist   */
     HWND    hwnd;
     HWND    hState;             /* read-only multiline: direction/lots/R/... */
-    HWND    hClose, hClose50, hBe;
-    volatile LONG action;       /* 0 none, 1 close, 2 close50, 3 be (latched)*/
+    HWND    hClose, hClose50, hBe, hExtend;
+    volatile LONG action;       /* 0 none, 1 close, 2 close50, 3 be, 4 extend (latched)*/
+    volatile LONG show_extend;  /* 1 = EXTEND button relevant (managing an inverse)   */
     volatile LONG be_enable;    /* 1 = BE button clickable (valid stop dist)  */
     CRITICAL_SECTION cs;        /* guards buf + lots                          */
     wchar_t buf[1024];          /* pending state text (EA -> panel)           */
@@ -269,10 +276,12 @@ static void set_events_text(void)
         int dlen = 0; while (dp[dlen] && dp[dlen] != L'\r' && dp[dlen] != L'\n') dlen++;
         int rlen = 0; while (rp[rlen] && rp[rlen] != L'\r' && rp[rlen] != L'\n') rlen++;
         int dd = -1, hh = -1;
-        int imm = (swscanf(rp, L"in %dd %dh", &dd, &hh) == 2 && dd == 0 && hh <= 12);
+        int parsed = (swscanf(rp, L"in %dd %dh", &dd, &hh) == 2 && dd == 0);
+        int red   = (parsed && hh < 6);              /* 0-6h  -> violation (red)   */
+        int amber = (parsed && hh >= 6 && hh < 12);  /* 6-12h -> caution   (amber) */
         cf.dwMask     = CFM_COLOR | CFM_BOLD;
-        cf.crTextColor = imm ? COL_SL : COL_VALUE;
-        cf.dwEffects  = imm ? CFE_BOLD : 0;
+        cf.crTextColor = red ? COL_SL : (amber ? COL_CAUTION : COL_VALUE);
+        cf.dwEffects  = (red || amber) ? CFE_BOLD : 0;
         SendMessageW(g.hEvents, EM_SETSEL, 0x7fffffff, 0x7fffffff);   /* caret -> end */
         SendMessageW(g.hEvents, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
         wchar_t buf[512]; int n = dlen < 500 ? dlen : 500;
@@ -339,13 +348,21 @@ static void relayout(void)
         ShowWindow(g.hWhy, SW_HIDE); ShowWindow(g.hBack, SW_HIDE);
         for (int i = 0; i < 6; i++) ShowWindow(g.hReason[i], SW_HIDE);
         ShowWindow(g.hYes, SW_SHOW); ShowWindow(g.hNo, SW_SHOW);
-        int bx = (W - (L_BTNW * 2 + L_BTNGAP)) / 2;
+        ShowWindow(g.hInv, g.offer_inv ? SW_SHOW : SW_HIDE);
+        int nbtn = g.offer_inv ? 3 : 2;
+        int rowW = L_BTNW * nbtn + L_BTNGAP * (nbtn - 1);
+        int bx = (W - rowW) / 2;
         MoveWindow(g.hYes, bx, btnTop, L_BTNW, L_BTNH, TRUE);
-        MoveWindow(g.hNo,  bx + L_BTNW + L_BTNGAP, btnTop, L_BTNW, L_BTNH, TRUE);
+        if (g.offer_inv) {
+            MoveWindow(g.hInv, bx + L_BTNW + L_BTNGAP, btnTop, L_BTNW, L_BTNH, TRUE);
+            MoveWindow(g.hNo,  bx + (L_BTNW + L_BTNGAP) * 2, btnTop, L_BTNW, L_BTNH, TRUE);
+        } else {
+            MoveWindow(g.hNo,  bx + L_BTNW + L_BTNGAP, btnTop, L_BTNW, L_BTNH, TRUE);
+        }
         y = btnTop + L_BTNH;
-        /* full-width "Retake H4 screenshot" row under Accept/Skip */
+        /* full-width "Retake H4 screenshot" row under the decision buttons */
         ShowWindow(g.hShot, SW_SHOW);
-        MoveWindow(g.hShot, bx, y + L_RGAP, L_BTNW * 2 + L_BTNGAP, L_RBTNH, TRUE);
+        MoveWindow(g.hShot, bx, y + L_RGAP, rowW, L_RBTNH, TRUE);
         y += L_RGAP + L_RBTNH;
     } else {
         ShowWindow(g.hYes, SW_HIDE); ShowWindow(g.hNo, SW_HIDE);
@@ -419,6 +436,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == ID_YES) { if (g.ok) g.result = 1; return 0; }
+        if (id == ID_INV) { if (g.offer_inv) g.result = 3; return 0; }  /* INVERSE */
         if (id == ID_NO)  { show_reason_picker(1); return 0; }   /* Skip -> ask why */
         if (id == ID_BACK){ show_reason_picker(0); return 0; }   /* cancel the picker */
         if (id == ID_REDACT){ g.redact ^= 1; apply_redact(); return 0; }
@@ -606,8 +624,13 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     g.hNo = CreateWindowExW(0, L"BUTTON", L"&Skip",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, L_BTNW, L_BTNH, hwnd, (HMENU)(INT_PTR)ID_NO, g_hinst, NULL);
+    /* INVERSE: shown only when the EA offered it (EMArev + gate ok). Hidden otherwise. */
+    g.hInv = CreateWindowExW(0, L"BUTTON", L"&Inverse",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, L_BTNW, L_BTNH, hwnd, (HMENU)(INT_PTR)ID_INV, g_hinst, NULL);
     SendMessageW(g.hYes, WM_SETFONT, (WPARAM)g.fNormal, TRUE);
     SendMessageW(g.hNo,  WM_SETFONT, (WPARAM)g.fNormal, TRUE);
+    SendMessageW(g.hInv, WM_SETFONT, (WPARAM)g.fNormal, TRUE);
 
     /* manual re-screenshot: overwrites the advisor's h4.png for THIS setup. The
        OS-capture daemon watches for the EA-written trigger and re-grabs the
@@ -754,6 +777,15 @@ void TD_SetOrderType(const wchar_t *s)
     if (g.hOrder && s) SetWindowTextW(g.hOrder, s);
 }
 
+/* Offer (or hide) the INVERSE button. The EA calls TD_OfferInverse(1) after TD_Open  */
+/* only for an EMArev signal that passes the fwd-V<=6h gate; default hidden.          */
+__declspec(dllexport)
+void TD_OfferInverse(int on)
+{
+    g.offer_inv = on ? 1 : 0;
+    if (g.hwnd) { relayout(); InvalidateRect(g.hwnd, NULL, TRUE); }
+}
+
 /* ------------------------------------------------------------------------ */
 /* Fill the upcoming-events list. The EA passes BOTH forms (absolute + relative
    dates); the dialog shows one per the coach-mode toggle, so redaction needs no
@@ -811,6 +843,7 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == ID_MBE) { InterlockedExchange(&gm.action, 3); return 0; }  /* instant */
+        if (id == ID_MEXTEND) { InterlockedExchange(&gm.action, 4); return 0; } /* cancel auto-close */
         if (id == ID_MCLOSE) {
             if (gm.armed == 1) { InterlockedExchange(&gm.action, 1); panel_disarm(); }
             else { panel_disarm(); gm.armed = 1; SetWindowTextW(gm.hClose, L"Confirm CLOSE"); }
@@ -830,6 +863,7 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         double lots = gm.lots;
         LeaveCriticalSection(&gm.cs);
         EnableWindow(gm.hBe, gm.be_enable ? TRUE : FALSE);
+        if (gm.hExtend) ShowWindow(gm.hExtend, gm.show_extend ? SW_SHOW : SW_HIDE);
         double d = lots - gm.last_lots; if (d < 0) d = -d;
         if (gm.last_lots >= 0 && d > 1e-9) panel_disarm();   /* volume changed => stale confirm */
         gm.last_lots = lots;
@@ -863,7 +897,7 @@ static DWORD WINAPI panel_thread(LPVOID param)
 
     DWORD style   = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     DWORD exstyle = WS_EX_APPWINDOW;               /* taskbar button => minimise/restore works */
-    int clientH = P_PAD + P_STATEH + 10 + P_BTNH + P_PAD;
+    int clientH = P_PAD + P_STATEH + 10 + P_BTNH + P_BTNGAP + P_BTNH + P_PAD; /* +EXTEND row */
     RECT rc = { 0, 0, P_W, clientH };
     AdjustWindowRectEx(&rc, style, FALSE, exstyle);
     int winW = rc.right - rc.left, winH = rc.bottom - rc.top;
@@ -891,9 +925,14 @@ static DWORD WINAPI panel_thread(LPVOID param)
     gm.hBe = CreateWindowExW(0, L"BUTTON", L"SL → BE",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         P_PAD + 2*(P_BTNW + P_BTNGAP), y, P_BTNW, P_BTNH, hwnd, (HMENU)(INT_PTR)ID_MBE, g_hinst, NULL);
+    /* EXTEND: full-width row below, hidden unless the panel is managing an inverse.  */
+    gm.hExtend = CreateWindowExW(0, L"BUTTON", L"EXTEND (cancel 12-bar auto-close)",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+        P_PAD, y + P_BTNH + P_BTNGAP, P_W - 2*P_PAD, P_BTNH, hwnd, (HMENU)(INT_PTR)ID_MEXTEND, g_hinst, NULL);
     SendMessageW(gm.hClose,   WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
     SendMessageW(gm.hClose50, WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
     SendMessageW(gm.hBe,      WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
+    SendMessageW(gm.hExtend,  WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
 
     gm.hwnd = hwnd;
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);      /* visible but don't steal focus */
@@ -953,6 +992,15 @@ void TDM_Update(const wchar_t *state_text, double lots, int be_enabled)
     LeaveCriticalSection(&gm.cs);
     InterlockedExchange(&gm.be_enable, be_enabled ? 1 : 0);
     PostMessageW(gm.hwnd, PM_UPDATE, 0, 0);
+}
+
+/* Show/hide the EXTEND button: the EA sets it on only while the panel is managing an  */
+/* inverse position (which has the 12-bar auto-close). Off for graded positions.       */
+__declspec(dllexport)
+void TDM_ShowExtend(int on)
+{
+    InterlockedExchange(&gm.show_extend, on ? 1 : 0);
+    if (gm.hwnd) PostMessageW(gm.hwnd, PM_UPDATE, 0, 0);
 }
 
 /* Drain a confirmed button action: 0 none, 1 close, 2 close50, 3 SL->BE. The EA
