@@ -45,7 +45,7 @@ esac; done
 
 case "$MODE" in ALL) AA=1;; SKIP) AA=2;; *) die "--mode must be ALL or SKIP";; esac
 has(){ [[ ",$STRAT," == *",$1,"* ]] && echo true || echo false; }
-USE_SMC=$(has SMC); USE_FIB=$(has Fib); USE_EMA=$(has EMA)
+USE_SMC=$(has SMC); USE_FIB=$(has Fib); USE_EMA=$(has EMA); USE_SHOCK=$(has Shock); USE_ERI=$(has EmaRevInv)
 
 proc_running(){ tasklist.exe /FI "IMAGENAME eq terminal64.exe" 2>/dev/null | grep -qi terminal64.exe; }
 proc_running && die "terminal64 already running - refusing to launch (would disrupt the user)."
@@ -60,10 +60,22 @@ mkdir -p "$SETDIR"
   echo "InpUseSMC=$USE_SMC"
   echo "InpUseFib=$USE_FIB"
   echo "InpUseEMA=$USE_EMA"
+  echo "InpUseShock=$USE_SHOCK"
+  echo "InpUseEmaRevInv=$USE_ERI"
+  # Shock Continuation's entry is a breakout STOP valid entry_valid_bars=6 H4 bars
+  # (spec §5); the pending-order auto-cancel is the same InpPendingExpiryBars knob.
+  $USE_SHOCK && echo "InpPendingExpiryBars=6"
+  # grid params (default to spec defaults; the backtest driver overrides per cell)
+  [[ -n "${SHOCK_ATR:-}" ]]     && echo "InpShockAtr=${SHOCK_ATR}"
+  [[ -n "${SHOCK_PULL:-}" ]]    && echo "InpShockPullAtr=${SHOCK_PULL}"
+  [[ -n "${SHOCK_TPMULT:-}" ]]  && echo "InpShockTpMult=${SHOCK_TPMULT}"
+  [[ -n "${SHOCK_CALGATE:-}" ]] && echo "InpShockCalGate=${SHOCK_CALGATE}"
+  [[ -n "${OFFER_INV:-}" ]]     && echo "InpOfferInverse=${OFFER_INV}"
+  [[ -n "${TEST_INV:-}" ]]      && echo "InpTestInverse=${TEST_INV}"
   $FORCE_PENDING && echo "InpForcePendingTest=true"
   $FORCE_PENDING && echo "InpForcePendingPts=$FORCE_PTS"
 } > "$SETDIR/hft_verify.set"
-log ".set -> AutoApprove=$AA SMC=$USE_SMC Fib=$USE_FIB EMA=$USE_EMA force_pending=$FORCE_PENDING"
+log ".set -> AutoApprove=$AA SMC=$USE_SMC Fib=$USE_FIB EMA=$USE_EMA Shock=$USE_SHOCK force_pending=$FORCE_PENDING"
 
 # --- [Tester] config ini ---------------------------------------------------
 {
@@ -120,7 +132,7 @@ NEWJ=$(comm -13 <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | grep -i "
 JPATH="$COMMON_JOURNAL/$NEWJ"
 log "journal: $JPATH"
 log "----- per-strategy counts (journalled = arbitration winners) -----"
-for s in SweepMSS DeepFib EMArev; do
+for s in SweepMSS DeepFib EMArev ShockCont EmaRevInv; do
   n=$(grep -c ",$s," "$JPATH" 2>/dev/null || echo 0)
   log "  $s: $n"
 done

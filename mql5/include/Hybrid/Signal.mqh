@@ -38,6 +38,11 @@ struct SignalCandidate
    double   partial_fraction;// fraction to bank at tp1 (0 = single target)
    //--- context flag (PM decision 1: FLAG, never a hard filter)
    bool     d1_context;      // true = D1 aligned / confluent (shown, not gated)
+   //--- entry-order hint (optional; default false ⇒ unchanged market-fill behaviour).
+   //--- true ⇒ the detector wants a breakout STOP resting at `entry` (cancel-if-
+   //--- unfilled via InpPendingExpiryBars), even headless. Used by ShockCont; the
+   //--- three live detectors never set it, so their fills/baselines are unchanged.
+   bool     stop_entry;
    //--- human-readable one-liner for modal + label
    string   comment;
    //--- extra overlay geometry (rendered by the extended DrawOverlays)

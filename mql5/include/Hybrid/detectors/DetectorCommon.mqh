@@ -110,7 +110,7 @@ void ResetCandidate(SignalCandidate &c)
    c.valid=false; c.strategy=""; c.direction=0;
    c.entry=0; c.sl=0; c.tp=0; c.rr=0;
    c.zone_from=0; c.zone_to=0; c.zone_hi=0; c.zone_lo=0;
-   c.tp1=0; c.tp2=0; c.partial_fraction=0; c.d1_context=false; c.comment="";
+   c.tp1=0; c.tp2=0; c.partial_fraction=0; c.d1_context=false; c.stop_entry=false; c.comment="";
    c.aux_count=0;
    for(int i=0;i<8;i++) { c.aux_price[i]=0.0; c.aux_label[i]=""; }
    c.zone2_hi=0; c.zone2_lo=0; c.leg_t0=0; c.leg_t1=0; c.leg_p0=0; c.leg_p1=0;
