@@ -541,24 +541,26 @@ void HandleSignal(SignalCandidate &cand)
    else                 { g_sig_seq++; id=g_sig_seq; }
 
    if(!is_replay) g_delay_count=0;   // fresh signal: reset the per-signal delay clock
-   //--- (b) RECOMPUTE at reopen (trader ruling 2026-09): on a delayed re-present re-anchor
-   //--- the ENTRY to the CURRENT market and let R/lots recompute off it, so a setup you sat
-   //--- on for several bars shows LIVE risk, not the stale trigger entry. SL/TP keep their
-   //--- structural prices. Skipped for pending/STOP setups (entry is a breakout LEVEL, not
-   //--- the market). Delays stay UNLIMITED and never auto-cancel (trader ruling: coach's
-   //--- hard-cap-1 and detector-invalidation declined).
+   //--- (b) RECOMPUTE at reopen (trader ruling 2026-09): on a delayed re-present, SLIDE THE
+   //--- WHOLE PLAN to the current market. Entry re-anchors to the market price and SL / TP /
+   //--- TP1 / TP2 all shift by the SAME delta, so the risk & reward DISTANCES - and the R:R -
+   //--- are preserved and every level updates together (no floating ratio). The parallel
+   //--- shift keeps the stop distance intact, so it can never degenerate; delays stay
+   //--- UNLIMITED and never auto-cancel. Skipped for pending/STOP setups (entry is a breakout
+   //--- LEVEL, not the market). g_delayed is updated so the next delay slides from here.
    if(is_replay && !cand.stop_entry)
      {
       double mk=(cand.direction>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
                                   : SymbolInfoDouble(_Symbol,SYMBOL_BID));
       if(mk>0.0)
         {
-         double ne=NormPrice(mk), nd=MathAbs(ne-cand.sl);
-         //--- re-anchor ONLY if the market entry still clears the min-stop. If price has
-         //--- run so close to the SL that the recomputed stop is degenerate, KEEP the
-         //--- frozen entry: a delay must never auto-cancel (trader ruling d), and the
-         //--- safety gate below would otherwise reject/cancel the deferred signal.
-         if(nd>0.0 && nd>=MinStopDist(SignalATR())){ cand.entry=ne; g_delayed.entry=ne; }
+         double ne=NormPrice(mk), d=ne-cand.entry;
+         cand.entry=ne;
+         cand.sl = NormPrice(cand.sl + d);
+         if(cand.tp >0.0) cand.tp  = NormPrice(cand.tp  + d);
+         if(cand.tp1>0.0) cand.tp1 = NormPrice(cand.tp1 + d);
+         if(cand.tp2>0.0) cand.tp2 = NormPrice(cand.tp2 + d);
+         g_delayed=cand;                 // persist the slid plan for the next re-present
         }
      }
 
