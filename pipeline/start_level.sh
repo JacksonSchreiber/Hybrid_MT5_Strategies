@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   -h|--help) sed -n '3,20p' "$0"; exit 0;;
   *) LEVEL="$1"; shift;;
 esac; done
-[[ -n "$LEVEL" ]] || die "usage: start_level.sh <0-6|7a|7b|7c> [--alt] [--skip-baseline]"
+[[ -n "$LEVEL" ]] || die "usage: start_level.sh <0-6|7a|7b|7c|8a|8b> [--alt] [--skip-baseline]"
 
 # --- level table: symbol from to [alt-symbol alt-from alt-to] ---------------
 # Keep in sync with training/training-program.html level cards.
@@ -62,7 +62,9 @@ case "$LEVEL" in
   7a) P=(EURUSD.dk 2025.07.01 2026.06.30); A=();;   # was 2025 full year: 2025-H1 sits inside the interactively-traded 2024-01→2025-06 window (amended 2026-08-07; engineer must verify .dk tick coverage into 2026 before this runs)
   7b) P=(GBPUSD.dk 2025.01.01 2025.12.31); A=();;
   7c) P=(XAUUSD.dk 2025.01.01 2025.12.31); A=();;
-  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c)";;
+  8a) P=(XAUUSD.dk 2024.01.01 2024.12.31); A=();;   # Phase-2.5 gate (coach 2026-09): XAU 2024, single-shot
+  8b) P=(XAUUSD.dk 2021.01.01 2021.12.31); A=();;   # Phase-2.5 gate (coach 2026-09): XAU 2021, single-shot
+  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b)";;
 esac
 if $ALT; then
   [[ ${#A[@]} -gt 0 ]] || die "level $LEVEL has no alternate window (final-exam levels are single-shot)"
