@@ -383,6 +383,12 @@ void OnTick()
    if(g_delay_pending)
      {
       g_delay_pending=false; g_delay_replaying=true;
+      //--- re-snap the chart HARD RIGHT to the just-closed (current) bar before the
+      //--- dialog re-opens, so both the operator's view and the advisor's capture show
+      //--- how price developed during the delay - not where the chart sat last bar.
+      ChartSetInteger(0,CHART_AUTOSCROLL,true);
+      ChartNavigate(0,CHART_END,0);
+      ChartRedraw(0);
       HandleSignal(g_delayed);
       return;   // detectors wait while a delayed signal is still being decided
      }
