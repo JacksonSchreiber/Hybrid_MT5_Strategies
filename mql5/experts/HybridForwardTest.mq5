@@ -35,7 +35,7 @@
 //--- lines live, until the user clicks Accept(1)/Skip(2). See TradeDialog.c.
 #import "TradeDialog.dll"
 int  TD_Open(string title,string symbol,string strategy,string direction,
-             string sigtime,string entry,string sl,string tp,string tp2,string lots,string rr);
+             string sigtime,string regime,string entry,string sl,string tp,string tp2,string lots,string rr);
 int  TD_Poll(double &entry,double &sl,double &tp,double &tp2,int &dirty);
 void TD_SetDisplay(string entry,string sl,string tp,string tp2,string lots,string rr,int ok);
 void TD_Close(void);
@@ -212,6 +212,8 @@ struct JournalRow
    double   exit_price;
    double   pnl;
    double   r_multiple;     // blended, volume-weighted
+   string   regime;         // FROZEN D1 regime at signal time: TREND_UP/TREND_DOWN/CHOP/'' (warm-up)
+   string   with_trend;     // '1' if signal dir matches trend, '0' if against, '' in CHOP/blank
   };
 JournalRow g_rows[];
 
@@ -258,6 +260,10 @@ bool         g_delay_pending  = false;   // a signal is waiting to be re-asked n
 int          g_delayed_id     = 0;       // its stable signal id (unchanged across delays)
 bool         g_delay_replaying= false;   // current HandleSignal call is a delay re-present
 int          g_delay_count    = 0;       // how many times the CURRENT signal has been delayed (audit)
+int          g_h_ema200_d1  = INVALID_HANDLE;  // D1 200-EMA handle (regime tag)
+int          g_h_adx_d1      = INVALID_HANDLE; // D1 ADX(14) handle (regime tag)
+string       g_sig_regime    = "";       // regime FROZEN at the signal's first presentation
+string       g_sig_with_trend= "";       // with_trend FROZEN likewise (recompute-safe across delays)
 
 //+------------------------------------------------------------------+
 string DirStr(int d) { return (d>0 ? "BUY" : "SELL"); }
@@ -295,6 +301,12 @@ int OnInit()
    if(InpUseShock) g_detectors[g_ndet++]=new CShockContinuation(InpShockAtr,InpShockPullAtr,InpShockTpMult,InpShockMinRR,InpRiskPct,InpShockTrig,InpShockCalGate);
    if(InpUseEmaRevInv) g_detectors[g_ndet++]=new CEmaRevInverse(InpEmaStretch,InpEmaAdxCeil,InpEmaMinRR,InpRiskPct);
    if(g_ndet==0) Print("WARNING: no detectors enabled.");
+
+   //--- D1 regime indicators (coach Phase-2.5 gate): 200-EMA + ADX(14) on the daily.
+   g_h_ema200_d1=iMA(_Symbol,PERIOD_D1,200,0,MODE_EMA,PRICE_CLOSE);
+   g_h_adx_d1  =iADX(_Symbol,PERIOD_D1,14);
+   if(g_h_ema200_d1==INVALID_HANDLE || g_h_adx_d1==INVALID_HANDLE)
+      Print("WARNING: D1 regime indicator handle failed - regime column will be blank.");
 
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetDeviationInPoints(InpDeviation);
@@ -524,6 +536,7 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].strategy=cand.strategy; g_rows[n].direction=cand.direction;
    g_rows[n].orig_entry=cand.entry; g_rows[n].orig_sl=cand.sl; g_rows[n].orig_tp=cand.tp;
    g_rows[n].orig_tp1=cand.tp1; g_rows[n].orig_tp2=cand.tp2;
+   g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend;
    g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=cand.tp;
    g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=0.0;
    g_rows[n].lots=0.0; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
@@ -539,6 +552,34 @@ void JournalReject(int id,SignalCandidate &cand,string why)
 //+------------------------------------------------------------------+
 //| Size -> overlays -> dialog -> execute (market or pending) -> log   |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| FROZEN regime tag (coach Phase-2.5, 2026-09) - DO NOT ALTER.       |
+//| On D1 at the LAST CLOSED bar (shift 1):                            |
+//|   TREND_UP   if close > 200-EMA AND 200-EMA > its value 10 D1 bars |
+//|              ago AND ADX(14) >= 20                                 |
+//|   TREND_DOWN mirrored ; else CHOP.                                 |
+//| with_trend = signal direction matches the trend direction (blank   |
+//| in CHOP). Warm-up / unready buffers -> BLANK (never a fake CHOP).  |
+//| Same formula everywhere; frozen once shipped.                      |
+//+------------------------------------------------------------------+
+void ComputeRegime(int dir,string &regime,string &wt)
+  {
+   regime=""; wt="";
+   if(g_h_ema200_d1==INVALID_HANDLE || g_h_adx_d1==INVALID_HANDLE){ Print("Regime: no D1 handle - blank"); return; }
+   double ema[],adx[]; ArraySetAsSeries(ema,true); ArraySetAsSeries(adx,true);
+   if(CopyBuffer(g_h_ema200_d1,0,1,11,ema)<11){ Print("Regime: D1 EMA200 not ready (need ~210 D1 bars) - blank"); return; }
+   if(CopyBuffer(g_h_adx_d1,0,1,1,adx)<1){ Print("Regime: D1 ADX not ready - blank"); return; }
+   double ema1=ema[0], ema11=ema[10];          // shift 1 (last closed) and shift 11 (10 bars earlier)
+   double c1=iClose(_Symbol,PERIOD_D1,1);
+   double a1=adx[0];
+   if(ema1==EMPTY_VALUE || ema11==EMPTY_VALUE || a1==EMPTY_VALUE || c1<=0.0){ Print("Regime: D1 buffers empty - blank"); return; }
+   if(c1>ema1 && ema1>ema11 && a1>=20.0)      regime="TREND_UP";
+   else if(c1<ema1 && ema1<ema11 && a1>=20.0) regime="TREND_DOWN";
+   else                                        regime="CHOP";
+   if(regime=="CHOP") wt="";
+   else wt=(((regime=="TREND_UP") && dir>0) || ((regime=="TREND_DOWN") && dir<0)) ? "1" : "0";
+  }
+
 void HandleSignal(SignalCandidate &cand)
   {
    int id;
@@ -547,6 +588,7 @@ void HandleSignal(SignalCandidate &cand)
    else                 { g_sig_seq++; id=g_sig_seq; }
 
    if(!is_replay) g_delay_count=0;   // fresh signal: reset the per-signal delay clock
+   if(!is_replay) ComputeRegime(cand.direction,g_sig_regime,g_sig_with_trend);   // FREEZE at signal time
    //--- (b) RECOMPUTE at reopen (trader ruling 2026-09): on a delayed re-present, SLIDE THE
    //--- WHOLE PLAN to the current market. Entry re-anchors to the market price and SL / TP /
    //--- TP1 / TP2 all shift by the SAME delta, so the risk & reward DISTANCES - and the R:R -
@@ -677,6 +719,7 @@ void HandleSignal(SignalCandidate &cand)
    g_rows[n].decision_ms=decision_ms; g_rows[n].skip_reason=0; g_rows[n].edited=any_edited;
    g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0;
    g_rows[n].posid=0; g_rows[n].closed=false;
+   g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend;
    g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
 
    if(want_inv)
@@ -1447,7 +1490,7 @@ void WritePendingSetup(int id,SignalCandidate &cand,
    if(h==INVALID_HANDLE)
      { Print("Signal #",id," pending sidecar open failed err=",GetLastError()); return; }
    FileWriteString(h,"signal_id,signal_time,symbol,strategy,direction,"
-                     "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2\r\n");
+                     "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,regime,with_trend\r\n");
    //--- signal_time = the DECISION bar (current), NOT the trigger. The blind advisor
    //--- bundle (setup.md time-of-day + hours_until countdown) is derived from this,
    //--- and it must match the popup's "Time" field and the chart it screenshots -
@@ -1455,11 +1498,11 @@ void WritePendingSetup(int id,SignalCandidate &cand,
    //--- written with the advanced bar, keeping the advisor in step with the trader.
    //--- (The GRADED journal keeps cand.zone_to as the signal time - grading refs the
    //--- trigger; this sidecar is real-time advisor delivery only, never graded.)
-   FileWriteString(h,StringFormat("%d,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
+   FileWriteString(h,StringFormat("%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
       id,TimeToString(iTime(_Symbol,g_tf,0),TIME_DATE|TIME_MINUTES),_Symbol,cand.strategy,
       (cand.direction>0?"BUY":"SELL"),
       DoubleToString(oe,_Digits),DoubleToString(osl,_Digits),DoubleToString(ot,_Digits),
-      DoubleToString(ot1,_Digits),DoubleToString(ot2,_Digits)));
+      DoubleToString(ot1,_Digits),DoubleToString(ot2,_Digits),g_sig_regime,g_sig_with_trend));
    FileClose(h);
   }
 
@@ -1511,6 +1554,14 @@ bool ValidScale(int dir,double e,double s,double tp1,double tp2,double ts)
 //| BLOCKS Accept below the strategy floor. Coach mode also scrubs the  |
 //| chart corner label's timestamp. Entry away from market => pending.  |
 //+------------------------------------------------------------------+
+//--- display string for the FROZEN regime tag (popup + setup.md use the same text).
+string RegimePretty()
+  {
+   if(g_sig_regime=="")     return "--";                            // blank / warming up
+   if(g_sig_regime=="CHOP") return "CHOP";
+   return g_sig_regime+"  -  "+(g_sig_with_trend=="1"?"WITH-TREND":"AGAINST-TREND");
+  }
+
 bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
                        int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv,bool &want_delay)
   {
@@ -1555,7 +1606,7 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
    //--- kept short so it fits the fixed-width value field without clipping the time.
    int delays=(int)((dnow-cand.zone_to)/PeriodSeconds(g_tf))-1;
    if(delays>0) sigtime+=StringFormat("  (+%d bar%s)",delays,(delays==1?"":"s"));
-   if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),sigtime,
+   if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),sigtime,RegimePretty(),
               DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),tp2str,
               LotsLine(lots0,ce,cs,atr),rrs)!=1)
      {
@@ -2673,12 +2724,12 @@ void WriteJournal(string path)
       "signal_id,signal_time,symbol,strategy,direction,"
       "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
-      "exit_time,exit_price,pnl,r_multiple\n");
+      "exit_time,exit_price,pnl,r_multiple,regime,with_trend\n");
    for(int i=0;i<ArraySize(g_rows);i++)
      {
       JournalRow r=g_rows[i];
       string line=StringFormat(
-         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s\n",
+         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s,%s,%s\n",
          r.id,TimeToString(r.time,TIME_DATE|TIME_SECONDS),r.symbol,r.strategy,DirStr(r.direction),
          DoubleToString(r.orig_entry,_Digits),DoubleToString(r.orig_sl,_Digits),DoubleToString(r.orig_tp,_Digits),
          (r.orig_tp1>0?DoubleToString(r.orig_tp1,_Digits):""),(r.orig_tp2>0?DoubleToString(r.orig_tp2,_Digits):""),
@@ -2689,7 +2740,8 @@ void WriteJournal(string path)
          (r.closed?TimeToString(r.exit_time,TIME_DATE|TIME_SECONDS):""),
          (r.closed?DoubleToString(r.exit_price,_Digits):""),
          (r.closed?DoubleToString(r.pnl,2):""),
-         (r.closed?DoubleToString(r.r_multiple,2):""));
+         (r.closed?DoubleToString(r.r_multiple,2):""),
+         r.regime,r.with_trend);
       FileWriteString(h,line);
      }
    FileFlush(h); FileClose(h);

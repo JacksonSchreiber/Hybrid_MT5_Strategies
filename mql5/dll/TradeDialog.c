@@ -483,7 +483,7 @@ static HWND make_value_static(HWND parent, const wchar_t *txt, int x, int y,
 __declspec(dllexport)
 int TD_Open(const wchar_t *title,   const wchar_t *symbol,
             const wchar_t *strategy, const wchar_t *direction,
-            const wchar_t *sigtime, const wchar_t *entry,
+            const wchar_t *sigtime, const wchar_t *regime, const wchar_t *entry,
             const wchar_t *sl,      const wchar_t *tp,
             const wchar_t *tp2,     const wchar_t *lots,
             const wchar_t *rr)
@@ -561,6 +561,7 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     int is_fri = (sigtime && wcsstr(sigtime, L"Friday") != NULL);   /* Friday -> red + bold */
     CAP(L"Time");      make_value_static(hwnd, sigtime, vx, r, VALUEW, ROWH - 6,
                        is_fri ? COL_SL : COL_VALUE, is_fri ? g.fBold : g.fNormal);                                r += ROWH;
+    CAP(L"Regime");    make_value_static(hwnd, regime, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fBold);              r += ROWH;
 
     /* Entry / SL / TP(s) are ALL editable + independent. Green/red/blue tie each
        to its chart line. Scale-out strategies split TP into TP1 (bank) + TP2. */

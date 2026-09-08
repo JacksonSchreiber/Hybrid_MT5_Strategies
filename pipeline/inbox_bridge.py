@@ -187,11 +187,23 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
         except Exception:
             pass
 
+    # regime tag: verbatim from the EA's sidecar (single frozen source of truth); the
+    # advisor may see it — it's derived from the visible D1 chart, not a blindness leak.
+    reg = (row.get("regime") or "").strip()
+    wt  = (row.get("with_trend") or "").strip()
+    if reg == "CHOP":
+        regime_line = "REGIME: CHOP"
+    elif reg in ("TREND_UP", "TREND_DOWN"):
+        regime_line = f"REGIME: {reg} · signal {'WITH-TREND' if wt == '1' else 'AGAINST-TREND'}"
+    else:
+        regime_line = "REGIME: (warming up / unavailable)"
+
     lines = [
         f"# BLIND SETUP — {strat} {dstr}",
         "_No symbol, no date. For the blind advisor. Judge from the charts + the library only._",
         "",
         f"- **Session / day / time:** {sess} / {dow} / {tod}",
+        f"- **{regime_line}** (D1 200-EMA/ADX, chart-derived)",
         f"- **Proposed levels (chart-visible prices):** entry {entry}, SL {sl}, "
         f"TP1 {tp1}, TP2 {tp2}",
         f"- **Risk geometry:** SL {rmult(sl)} · TP1 {rmult(tp1)} · TP2 {rmult(tp2)} "
