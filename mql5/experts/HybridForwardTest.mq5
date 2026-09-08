@@ -79,6 +79,7 @@ input long   InpMagic       = 990217;   // magic number (graded stream)
 input bool   InpOfferInverse  = true;    // offer INVERSE on EMArev alerts (a 3rd dialog choice; default ON)
 input long   InpInverseMagic  = 990218;  // SEPARATE magic for inverse trades (isolates them)
 input bool   InpTestInverse   = false;   // TEST-ONLY: under AA_ALL, auto-take INVERSE on EMArev (headless lifecycle check)
+input int    InpTestDelay     = 0;       // TEST-ONLY: under AA_ALL, delay each signal N bars then approve (headless delay check)
 input int    InpDeviation   = 50;       // max slippage (points)
 input bool   InpCleanupOnDeinit = false;// delete overlay objects on EA removal
 input string InpObjPrefix   = "HFT_";   // chart-object name prefix
@@ -250,6 +251,14 @@ long         g_inv_posid = 0;            // its position id
 datetime     g_inv_entry_bar = 0;        // H4 bar time at entry (12-bar auto-close clock)
 bool         g_inv_extended = false;     // trader hit EXTEND -> auto-close cancelled
 
+//--- DELAY-decision state: the operator can defer a signal one bar at a time and keep
+//--- deferring; the SAME candidate (same id, same entry/SL/TP) is re-presented next bar.
+SignalCandidate g_delayed;               // the deferred candidate awaiting re-presentation
+bool         g_delay_pending  = false;   // a signal is waiting to be re-asked next bar
+int          g_delayed_id     = 0;       // its stable signal id (unchanged across delays)
+bool         g_delay_replaying= false;   // current HandleSignal call is a delay re-present
+int          g_delay_count    = 0;       // how many times the CURRENT signal has been delayed (audit)
+
 //+------------------------------------------------------------------+
 string DirStr(int d) { return (d>0 ? "BUY" : "SELL"); }
 string StampCompact(datetime t)
@@ -368,6 +377,15 @@ void OnTick()
    if(InpShowEvents) DrawEconEvents();
    //--- persistent swing markers over the rolling window (signal-independent)
    if(InpShowSwings) DrawSwingMarkers();
+
+   //--- a DELAYED signal takes priority on the new bar: re-present the SAME candidate
+   //--- (same id, same entry/SL/TP) so the operator can watch how price developed.
+   if(g_delay_pending)
+     {
+      g_delay_pending=false; g_delay_replaying=true;
+      HandleSignal(g_delayed);
+      return;   // detectors wait while a delayed signal is still being decided
+     }
 
    //--- call ALL detectors every bar so each advances its state machine;
    //--- keep the highest-priority valid emit (array is in priority order).
@@ -517,8 +535,32 @@ void JournalReject(int id,SignalCandidate &cand,string why)
 //+------------------------------------------------------------------+
 void HandleSignal(SignalCandidate &cand)
   {
-   g_sig_seq++;
-   int id=g_sig_seq;
+   int id;
+   bool is_replay=g_delay_replaying;                                   // this call is a delay re-present
+   if(g_delay_replaying){ id=g_delayed_id; g_delay_replaying=false; }  // re-present: keep id
+   else                 { g_sig_seq++; id=g_sig_seq; }
+
+   if(!is_replay) g_delay_count=0;   // fresh signal: reset the per-signal delay clock
+   //--- (b) RECOMPUTE at reopen (trader ruling 2026-09): on a delayed re-present re-anchor
+   //--- the ENTRY to the CURRENT market and let R/lots recompute off it, so a setup you sat
+   //--- on for several bars shows LIVE risk, not the stale trigger entry. SL/TP keep their
+   //--- structural prices. Skipped for pending/STOP setups (entry is a breakout LEVEL, not
+   //--- the market). Delays stay UNLIMITED and never auto-cancel (trader ruling: coach's
+   //--- hard-cap-1 and detector-invalidation declined).
+   if(is_replay && !cand.stop_entry)
+     {
+      double mk=(cand.direction>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
+                                  : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+      if(mk>0.0)
+        {
+         double ne=NormPrice(mk), nd=MathAbs(ne-cand.sl);
+         //--- re-anchor ONLY if the market entry still clears the min-stop. If price has
+         //--- run so close to the SL that the recomputed stop is degenerate, KEEP the
+         //--- frozen entry: a delay must never auto-cancel (trader ruling d), and the
+         //--- safety gate below would otherwise reject/cancel the deferred signal.
+         if(nd>0.0 && nd>=MinStopDist(SignalATR())){ cand.entry=ne; g_delayed.entry=ne; }
+        }
+     }
 
    //--- ACCOUNT-SAFETY GATE (before sizing/overlays/dialog): a stop tighter than
    //--- the min distance is a degenerate signal - reject it, log it, journal it.
@@ -536,7 +578,18 @@ void HandleSignal(SignalCandidate &cand)
 
    double lots=SizeByRisk(cand.entry,cand.sl);
 
+   //--- INVERSE is ALWAYS an option on an EMArev trigger (trader ruling): offer it
+   //--- whenever the flag is on and none is already open (max 1). The old fwd-V<=6h
+   //--- HARD gate is gone - V-class events are so common (rate decisions/CPI/NFP/GDP
+   //--- across every ccy) that it suppressed the button almost always. Imminent-V risk
+   //--- is still surfaced: the popup's red event band shows a <6h event, and PlaceInverse
+   //--- logs a V_WARN. The inverse cohort is ungraded, so this never touches the exam.
+   bool offer_inv=(InpOfferInverse && cand.strategy=="EMArev" && !g_inv_open);
+
    DrawOverlays(id,cand);
+   //--- when INVERSE is on the table, overlay its ride entry/stop/take too (distinct
+   //--- color + "INVERSE" labels) so the geometry is visible before the operator picks.
+   if(offer_inv) DrawInverseOverlays(id,cand);
    PruneOverlays(id);
    //--- scroll the chart HARD RIGHT to the latest bar before the dialog opens, so
    //--- the advisor's decision-time screenshot always shows the most recent bars
@@ -547,8 +600,10 @@ void HandleSignal(SignalCandidate &cand)
    ChartRedraw(0);
 
    //--- snapshot the detector's PROPOSED levels BEFORE the dialog can edit them
-   double orig_entry=cand.entry, orig_sl=cand.sl, orig_tp=cand.tp;
-   double orig_tp1=cand.tp1, orig_tp2=cand.tp2;
+   //--- snapshot the detector's proposal ON THE TICK GRID (NormPrice), matching how the
+   //--- committed levels are stored, so an off-grid emit can't later read as an 'edit'.
+   double orig_entry=NormPrice(cand.entry), orig_sl=NormPrice(cand.sl), orig_tp=NormPrice(cand.tp);
+   double orig_tp1=NormPrice(cand.tp1), orig_tp2=NormPrice(cand.tp2);
 
    //--- real-time advisor delivery: write the blind numbers NOW (before the
    //--- dialog) so the OS-capture daemon can deliver the setup while the popup is
@@ -559,11 +614,26 @@ void HandleSignal(SignalCandidate &cand)
    WritePendingSetup(id,cand,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2);
 
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
-   long decision_ms=0; int skip_reason=0; bool entry_edited=false; bool want_inv=false;
-   //--- offer INVERSE only for EMArev, past the fwd-V<=6h gate, when none is open (max 1)
-   bool offer_inv=(InpOfferInverse && cand.strategy=="EMArev" && !g_inv_open
-                   && InverseFwdVClear(cand.zone_to));
-   bool approved=AskApproval(id,cand,lots,caption,decision_ms,skip_reason,entry_edited,offer_inv,want_inv);
+   long decision_ms=0; int skip_reason=0; bool entry_edited=false; bool want_inv=false; bool want_delay=false;
+   bool approved=AskApproval(id,cand,lots,caption,decision_ms,skip_reason,entry_edited,offer_inv,want_inv,want_delay);
+   //--- DELAY: defer this signal one bar (repeatable). No journal, no order - the same
+   //--- candidate (unchanged levels) is re-presented next bar by the OnTick hook above.
+   if(want_delay)
+     {
+      g_delayed=cand; g_delayed_id=id; g_delay_pending=true;
+      g_delay_count++;                                   // (a) auditable: count + log this delay
+      WriteDelayLog(id,g_delay_count,cand);
+      Print("Signal #",id," DELAYED (#",g_delay_count,") - re-asking next bar; entry recomputes to market at reopen, SL/TP frozen.");
+      return;   // KEEP the inverse preview: the same signal is re-presented next bar
+     }
+   //--- decision resolved to a FADE or SKIP (not delay, not inverse): drop the orange
+   //--- INVERSE preview lines so they never linger on a chart where a graded fade is
+   //--- now open (would read as live orders). Kept when INVERSE was chosen - there the
+   //--- lines show the active ride's levels. Harmless no-op if never drawn.
+   if(!want_inv)
+     { string pp=StringFormat("%s%d_",InpObjPrefix,id);
+       string iobj[]={"ientry","isl","itake","ientryL","islL","itakeL"};
+       for(int q=0;q<ArraySize(iobj);q++) ObjectDelete(0,pp+iobj[q]); }
    //--- the dialog may have retuned Entry/SL/TP (R:R held) - re-size on the
    //--- final risk distance so the placed order + journal use edited levels.
    lots=SizeByRisk(cand.entry,cand.sl);
@@ -573,15 +643,18 @@ void HandleSignal(SignalCandidate &cand)
    //--- overwritten by the realised fill, which ~never equals the proposal.)
    double etol=0.5*SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
    if(etol<=0.0) etol=0.5*_Point;
-   bool any_edited=(MathAbs(cand.entry-orig_entry)>etol
-                    || MathAbs(cand.sl-orig_sl)>etol
-                    || MathAbs(cand.tp-orig_tp)>etol
-                    || MathAbs(cand.tp1-orig_tp1)>etol
-                    || MathAbs(cand.tp2-orig_tp2)>etol);
-
    //--- for two-target strategies the order TP is the RUNNER (tp2); we bank
    //--- partial_fraction at tp1 en route and move SL to BE.
    bool two_target=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
+   //--- PHANTOM edited=1 fix: diff only the OPERATOR-EDITABLE fields. cand.tp is an
+   //--- internal field the approve-commit reassigns to the runner for scale-out (so it
+   //--- != the detector's orig tp even when nothing was edited) - exclude it for two-
+   //--- target setups; only entry/SL/tp1/tp2 are user-editable there.
+   bool any_edited=(MathAbs(cand.entry-orig_entry)>etol
+                    || MathAbs(cand.sl-orig_sl)>etol
+                    || (two_target
+                        ? (MathAbs(cand.tp1-orig_tp1)>etol || MathAbs(cand.tp2-orig_tp2)>etol)
+                        : MathAbs(cand.tp-orig_tp)>etol));
    double order_tp=(two_target? cand.tp2 : cand.tp);
 
    int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
@@ -838,10 +911,19 @@ void WriteActions(string path)
 //  magic, own state). None of this ever writes g_rows[] or the graded journal.
 //==================================================================================
 //--- calendar gates (reuse the EA's loaded econ cache g_ev_*; class strings V/W/C).
-bool InverseFwdVClear(datetime sigtime)   // false => a forward V within 6h -> no arm
+bool InverseFwdVClear(datetime sigtime)   // false => a symbol-relevant forward V within 6h
   {
+   //--- SCOPE to the traded symbol's currencies (base/quote/"All"), like DrawEconEvents.
+   //--- V-class is very common (rate decisions, CPI, NFP, GDP, PCE... across EVERY ccy);
+   //--- an unrelated JPY CPI must NOT flag an XAUUSD/EURUSD setup. No longer a hard gate
+   //--- on the offer (see offer_inv) - used only as an imminent-V *warning* at placement.
+   string base,quote; SymbolCcy(base,quote);
    for(int i=0;i<ArraySize(g_ev_t);i++)
-      if(g_ev_cls[i]=="V" && g_ev_t[i]>sigtime && g_ev_t[i]<=sigtime+6*3600) return false;
+     {
+      if(g_ev_cls[i]!="V") continue;
+      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote && g_ev_ccy[i]!="All") continue;
+      if(g_ev_t[i]>sigtime && g_ev_t[i]<=sigtime+6*3600) return false;
+     }
    return true;
   }
 bool InverseWInHold(datetime sigtime)     // a W-class event in the next ~3 days
@@ -934,7 +1016,12 @@ void PlaceInverse(int id,SignalCandidate &cand)
    double sl=(inv_dir>0? entry-risk : entry+risk);
    double lots=SizeByRisk(entry,sl);
    if(lots<=0.0){ Print("Inverse #",id," lots<=0 - not placing."); return; }
-   bool w_warn=InverseWInHold(cand.zone_to);
+   //--- W-in-hold measured from the ACTUAL entry bar (current), not the trigger:
+   //--- a delayed INVERSE enters now and its projected hold runs from here.
+   bool w_warn=InverseWInHold(iTime(_Symbol,g_tf,0));
+   //--- fwd-V no longer BLOCKS the offer (trader ruling); it warns instead. A symbol-
+   //--- relevant V-class event within 6h of entry = the trader is riding into a print.
+   bool v_warn=!InverseFwdVClear(iTime(_Symbol,g_tf,0));
    g_trade.SetExpertMagicNumber(InpInverseMagic);        // ISOLATE: separate magic
    string cap=StringFormat("EMArevINV #%d",id);
    bool ok=(inv_dir>0? g_trade.Buy(lots,_Symbol,0.0,sl,0.0,cap) : g_trade.Sell(lots,_Symbol,0.0,sl,0.0,cap));
@@ -961,8 +1048,10 @@ void PlaceInverse(int id,SignalCandidate &cand)
    WriteInvJournal(g_inv_journal_part);
    Print("Signal #",id," INVERSE ",DirStr(inv_dir)," ",DoubleToString(lots,2)," lots @ ",
          DoubleToString(fill,_Digits)," SL ",DoubleToString(sl,_Digits)," (EMA-stop; auto-close 12 H4 bars)",
-         (w_warn?"  [WARN: W event in projected hold - ungraded, trader proceeded]":""));
+         (w_warn?"  [WARN: W event in projected hold - ungraded, trader proceeded]":""),
+         (v_warn?"  [WARN: V event <6h - riding into a print, trader proceeded]":""));
    if(w_warn) LogInvAction("W_WARN",fill,lots,lots,sl);
+   if(v_warn) LogInvAction("V_WARN",fill,lots,lots,sl);
   }
 //--- inverse management (mirror the graded manual ops on g_inv_posid; full-close
 //--- finalization + g_inv_open clearing happen in OnTradeTransaction).
@@ -1319,6 +1408,27 @@ void WriteD1Series(int id)
    FileClose(h);
   }
 
+//--- (a) DELAY audit log: every delay the trader takes on a signal is appended here
+//--- (signal_id, seq, bar, levels-as-shown), so a journal is never silently missing a
+//--- deferral. Sidecar keyed by run stamp; delay-specific schema (NOT the graded 28-col
+//--- journal). One row per delay; unlimited delays per signal (trader ruling 2026-09).
+void WriteDelayLog(int id,int seq,SignalCandidate &cand)
+  {
+   FolderCreate("journal",FILE_COMMON);
+   string f=StringFormat("journal\\%s_%s.delays.csv",_Symbol,StampCompact(g_start_time));
+   bool exists=FileIsExist(f,FILE_COMMON);
+   int h=FileOpen(f,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE){ Print("Signal #",id," delay-log open failed err=",GetLastError()); return; }
+   FileSeek(h,0,SEEK_END);
+   if(!exists) FileWriteString(h,"signal_id,delay_seq,bar_time,symbol,strategy,direction,entry,sl,tp,tp1,tp2\r\n");
+   FileWriteString(h,StringFormat("%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
+      id,seq,TimeToString(iTime(_Symbol,g_tf,0),TIME_DATE|TIME_MINUTES),_Symbol,cand.strategy,
+      (cand.direction>0?"BUY":"SELL"),
+      DoubleToString(cand.entry,_Digits),DoubleToString(cand.sl,_Digits),DoubleToString(cand.tp,_Digits),
+      DoubleToString(cand.tp1,_Digits),DoubleToString(cand.tp2,_Digits)));
+   FileClose(h);
+  }
+
 void WritePendingSetup(int id,SignalCandidate &cand,
                        double oe,double osl,double ot,double ot1,double ot2)
   {
@@ -1330,8 +1440,15 @@ void WritePendingSetup(int id,SignalCandidate &cand,
      { Print("Signal #",id," pending sidecar open failed err=",GetLastError()); return; }
    FileWriteString(h,"signal_id,signal_time,symbol,strategy,direction,"
                      "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2\r\n");
+   //--- signal_time = the DECISION bar (current), NOT the trigger. The blind advisor
+   //--- bundle (setup.md time-of-day + hours_until countdown) is derived from this,
+   //--- and it must match the popup's "Time" field and the chart it screenshots -
+   //--- all anchored to iTime(_Symbol,g_tf,0). On a delayed re-present this is re-
+   //--- written with the advanced bar, keeping the advisor in step with the trader.
+   //--- (The GRADED journal keeps cand.zone_to as the signal time - grading refs the
+   //--- trigger; this sidecar is real-time advisor delivery only, never graded.)
    FileWriteString(h,StringFormat("%d,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
-      id,TimeToString(cand.zone_to,TIME_DATE|TIME_MINUTES),_Symbol,cand.strategy,
+      id,TimeToString(iTime(_Symbol,g_tf,0),TIME_DATE|TIME_MINUTES),_Symbol,cand.strategy,
       (cand.direction>0?"BUY":"SELL"),
       DoubleToString(oe,_Digits),DoubleToString(osl,_Digits),DoubleToString(ot,_Digits),
       DoubleToString(ot1,_Digits),DoubleToString(ot2,_Digits)));
@@ -1387,9 +1504,9 @@ bool ValidScale(int dir,double e,double s,double tp1,double tp2,double ts)
 //| chart corner label's timestamp. Entry away from market => pending.  |
 //+------------------------------------------------------------------+
 bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
-                       int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv)
+                       int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv,bool &want_delay)
   {
-   skip_reason=0; entry_edited=false; want_inv=false;
+   skip_reason=0; entry_edited=false; want_inv=false; want_delay=false;
    int    dir=cand.direction;
    bool   scaleout=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
    double frac=cand.partial_fraction;
@@ -1415,11 +1532,21 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
    double lots0=SizeByRisk(ce,cs);
    int ok0=(( scaleout? ValidScale(dir,ce,cs,c1,c2,ts) : ValidGeom(dir,ce,cs,c1) )
             && runnerR>=floor && MathAbs(ce-cs)>=minstop)?1:0;
-   //--- signal fire time: day-of-week + HH:MM only (no date -> coach-safe),
-   //--- labelled UTC (.dk symbols are Dukascopy UTC data; econ overlay confirms).
-   MqlDateTime sdt; TimeToStruct(cand.zone_to,sdt);
+   //--- DECISION-bar time: the bar the operator is deciding ON (current bar), so it
+   //--- REFRESHES on every delayed re-present - the trader watches the clock advance
+   //--- as bars play out. Day-of-week + HH:MM only (no date -> coach-safe), UTC (.dk
+   //--- symbols are Dukascopy UTC data). Once the signal has actually been delayed
+   //--- (>1 bar past the trigger; the 1-bar presentation lag is normal), append the
+   //--- original signal fire time so the setup's age stays visible. The DLL's Friday
+   //--- weekend-risk flag keys off this string -> now reflects the real decision bar.
    string dows[]={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
-   string sigtime=StringFormat("%s  %s UTC",dows[sdt.day_of_week],TimeToString(cand.zone_to,TIME_MINUTES));
+   datetime dnow=iTime(_Symbol,g_tf,0);
+   MqlDateTime ndt; TimeToStruct(dnow,ndt);
+   string sigtime=StringFormat("%s  %s UTC",dows[ndt.day_of_week],TimeToString(dnow,TIME_MINUTES));
+   //--- compact delay counter (dbars-1 backs out the normal 1-bar presentation lag),
+   //--- kept short so it fits the fixed-width value field without clipping the time.
+   int delays=(int)((dnow-cand.zone_to)/PeriodSeconds(g_tf))-1;
+   if(delays>0) sigtime+=StringFormat("  (+%d bar%s)",delays,(delays==1?"":"s"));
    if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),sigtime,
               DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),tp2str,
               LotsLine(lots0,ce,cs,atr),rrs)!=1)
@@ -1430,9 +1557,13 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
    TD_OfferInverse(offer_inv?1:0);   // 3rd choice, only for EMArev past the fwd-V gate
    //--- decision-time chart snapshot (overlays already drawn; dialog not in shot)
    DecisionScreenshot(id);
-   //--- popup upcoming-events list (both date forms for the coach-mode toggle)
+   //--- popup upcoming-events list (both date forms for the coach-mode toggle).
+   //--- Anchor to the CURRENT decision bar, NOT cand.zone_to: on a delayed re-present
+   //--- the trigger is in the past, so the forward window + "in Xd Yh" countdowns
+   //--- (which drive the DLL's red<6h / amber 6-12h bands) must roll forward with the
+   //--- market - staying in lockstep with the fresh chart overlay the advisor sees.
    string ev_abs="",ev_rel="";
-   if(g_ev_loaded) BuildEventBlocks(cand.zone_to,ev_abs,ev_rel);
+   if(g_ev_loaded) BuildEventBlocks(iTime(_Symbol,g_tf,0),ev_abs,ev_rel);
    else            { ev_abs="(events not loaded)"; ev_rel=ev_abs; }
    TD_SetEvents(ev_abs,ev_rel);
    TD_SetDisplay(DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),tp2str,
@@ -1508,7 +1639,8 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
      }
    TD_Close();
 
-   if(r==3){ want_inv=true; return false; }   // INVERSE chosen: not a graded fade (handled by caller)
+   if(r==3){ want_inv=true;   return false; } // INVERSE chosen: not a graded fade (handled by caller)
+   if(r==4){ want_delay=true; return false; } // DELAY chosen: re-ask next bar (caller defers)
 
    if(r==1)   // approved: commit the (possibly edited) levels; NEVER collapse
      {
@@ -1547,9 +1679,9 @@ void UiSpin(int ms)
 //| Modal / auto-approve. Returns true on approve.                    |
 //+------------------------------------------------------------------+
 bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &decision_ms,
-                 int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv)
+                 int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv,bool &want_delay)
   {
-   skip_reason=0; entry_edited=false; want_inv=false;
+   skip_reason=0; entry_edited=false; want_inv=false; want_delay=false;
    //--- headless automated verification: no DLL, no modal (never edits entry).
    //--- INVERSE is interactive-only: headless never chooses it.
    if(InpAutoApprove==AA_ALL)
@@ -1557,6 +1689,19 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
        // TEST hook: exercise the inverse lifecycle headlessly on EMArev (bypasses the
        // fwd-V gate, which legitimately blocks most news-driven stretches).
        if(InpTestInverse && cand.strategy=="EMArev" && !g_inv_open){ want_inv=true; return false; }
+       // TEST: delay each signal InpTestDelay bars (re-presented with the same id), then approve
+       static int td_last=-1, td_cnt=0;
+       if(InpTestDelay>0)
+         { if(id!=td_last){ td_last=id; td_cnt=0; }
+           // prove the decision-relative event context rolls forward each re-present:
+           // log the SAME anchor the popup uses (current bar) and the nearest countdown.
+           if(g_ev_loaded)
+             { string ea,er; BuildEventBlocks(iTime(_Symbol,g_tf,0),ea,er);
+               string first=er; int nl=StringFind(first,"\r\n"); if(nl>=0) first=StringSubstr(first,0,nl);
+               PrintFormat("DELAYCTX #%d present=%d bar=%s trig=%s  next-event: %s",
+                 id,td_cnt+1,TimeToString(iTime(_Symbol,g_tf,0),TIME_DATE|TIME_MINUTES),
+                 TimeToString(cand.zone_to,TIME_DATE|TIME_MINUTES),first); }
+           if(td_cnt<InpTestDelay){ td_cnt++; want_delay=true; return false; } }
        return true; }
    if(InpAutoApprove==AA_SKIP) { decision_ms=0; return false; }
 
@@ -1571,7 +1716,7 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
      {
       //--- editable, R:R-locked, live-updating dialog (may mutate cand levels);
       //--- returns the skip-reason code and whether the entry was edited (pending).
-      yes=InteractiveDialog(id,cand,caption,plan,skip_reason,entry_edited,offer_inv,want_inv);
+      yes=InteractiveDialog(id,cand,caption,plan,skip_reason,entry_edited,offer_inv,want_inv,want_delay);
      }
    else
      {
@@ -1735,11 +1880,87 @@ void DrawOverlays(int id,SignalCandidate &c)
      }
   }
 
+//+------------------------------------------------------------------+
+//| INVERSE ("ride the stretch") preview lines, drawn alongside the   |
+//| EMArev fade overlay when the INVERSE option is on the table. Same  |
+//| per-signal prefix (HFT_<id>_) so PruneOverlays cleans them up, but  |
+//| a DISTINCT colour (orange) + dashed + explicit "INVERSE" labels so  |
+//| there is no mistaking them for the graded fade's entry/SL/TP. The   |
+//| geometry MIRRORS PlaceInverse exactly (E1 entry at the signal price,|
+//| stop just beyond EMA20 capped 1.0-2.5x ATR, X1 take 1x ATR beyond   |
+//| the stretch extreme) so the picture matches the order that fires.   |
+//+------------------------------------------------------------------+
+void DrawInverseOverlays(int id,SignalCandidate &c)
+  {
+   string p=StringFormat("%s%d_",InpObjPrefix,id);
+   int inv_dir=-c.direction;                       // trade WITH the stretch
+   //--- ATR basis identical to PlaceInverse (zone height / stretch, iATR fallback)
+   double atr=(InpEmaStretch>0.0? (c.zone_hi-c.zone_lo)/InpEmaStretch : 0.0);
+   if(atr<=0.0){ double a[]; ArraySetAsSeries(a,true); int hA=iATR(_Symbol,g_tf,14);
+                 if(hA!=INVALID_HANDLE && CopyBuffer(hA,0,1,1,a)>0) atr=a[0]; }
+   if(atr<=0.0) return;                            // no scale -> can't preview
+   //--- entry = MARKET now (what PlaceInverse actually fills), not the signal price,
+   //--- so the preview matches the order. Re-drawn each re-present, so it stays live.
+   double entry=(inv_dir>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
+                          : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+   if(entry<=0.0) entry=c.entry;
+   double ema=c.tp1;                               // EMA20 (the fade's mean target)
+   double ema_dist=MathAbs(entry-ema);
+   double spread=SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID); if(spread<0)spread=0;
+   double buf=MathMax(0.10*atr,spread);            // mirror PlaceInverse's buffer exactly
+   double risk=(ema_dist<1.0*atr ? 1.0*atr : MathMin(ema_dist+buf,2.5*atr)); // cap 2.5, floor 1.0
+   double isl=(inv_dir>0? entry-risk : entry+risk);
+   //--- X1 take = 1x ATR beyond the TRUE stretch extreme. For EMArev, zone_hi/zone_lo
+   //--- are the EMA BAND (mean +/- 2xATR), NOT the extreme - the real extreme is the
+   //--- detector's "stretch anchor" aux (m_extreme). Fall back to entry if absent.
+   double xtreme=entry;
+   for(int a=0;a<c.aux_count && a<8;a++)
+      if(StringFind(c.aux_label[a],"stretch anchor")>=0){ xtreme=c.aux_price[a]; break; }
+   double itake=xtreme+inv_dir*atr;                // 1x ATR beyond the extreme, ride direction
+
+   color ORANGE=C'255,140,0';
+   datetime lt=iTime(_Symbol,g_tf,0);              // labels on the right edge (clear of fade labels)
+   double lv[3];   lv[0]=entry; lv[1]=isl;         lv[2]=itake;
+   string nm[3];   nm[0]="ientry"; nm[1]="isl";    nm[2]="itake";
+   string tx[3];
+   tx[0]=StringFormat("INVERSE entry (ride %s)",(inv_dir>0?"UP":"DOWN"));
+   tx[1]="INVERSE stop";
+   tx[2]="INVERSE take ref (X1 1xATR - no TP order, 12-bar time exit)";
+   for(int k=0;k<3;k++)
+     {
+      string ln=p+nm[k];
+      if(ObjectCreate(0,ln,OBJ_HLINE,0,0,lv[k]))
+        {
+         ObjectSetInteger(0,ln,OBJPROP_COLOR,ORANGE);
+         ObjectSetInteger(0,ln,OBJPROP_WIDTH,InpLineWidth);
+         ObjectSetInteger(0,ln,OBJPROP_STYLE,STYLE_DASH);
+         ObjectSetInteger(0,ln,OBJPROP_BACK,false);
+         ObjectSetInteger(0,ln,OBJPROP_SELECTABLE,false);
+        }
+      else ObjectSetDouble(0,ln,OBJPROP_PRICE,lv[k]);   // re-present: keep it fresh
+      string lb=p+nm[k]+"L";
+      if(ObjectCreate(0,lb,OBJ_TEXT,0,lt,lv[k]))
+        {
+         ObjectSetString (0,lb,OBJPROP_TEXT,tx[k]);
+         ObjectSetInteger(0,lb,OBJPROP_COLOR,ORANGE);
+         ObjectSetInteger(0,lb,OBJPROP_FONTSIZE,InpFontSize);
+         ObjectSetInteger(0,lb,OBJPROP_ANCHOR,ANCHOR_RIGHT);
+         ObjectSetInteger(0,lb,OBJPROP_SELECTABLE,false);
+        }
+      else ObjectMove(0,lb,0,lt,lv[k]);                 // re-present: move label to right edge
+     }
+  }
+
 //--- keep only the newest InpMaxVisibleSignals setups' overlays on the chart;
 //--- delete older setups by their per-signal object prefix. Econ-event objects
 //--- use a different prefix (HFT_EVT*/HFT_EVTL*) and are unaffected.
 void PruneOverlays(int id)
   {
+   //--- a re-presented (delayed) signal reuses its id: if it is already registered,
+   //--- do NOT add it again. Re-adding lets the keep-list fill with duplicates and,
+   //--- once it overflows, ObjectsDeleteAll("HFT_<id>_") would wipe THIS signal's own
+   //--- entry/SL/TP (and inverse) lines - the "lines vanish after Delay" bug.
+   for(int j=0;j<ArraySize(g_sig_ids);j++) if(g_sig_ids[j]==id) return;
    int n=ArraySize(g_sig_ids);
    ArrayResize(g_sig_ids,n+1); g_sig_ids[n]=id;
    int keep=(InpMaxVisibleSignals<1?1:InpMaxVisibleSignals);

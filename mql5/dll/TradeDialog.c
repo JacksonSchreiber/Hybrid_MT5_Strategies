@@ -94,6 +94,7 @@
 #define ID_REDACT   214   /* BUTTON: toggle coach-mode redaction */
 #define ID_EVTOGGLE 215   /* BUTTON: collapse/expand the events list */
 #define ID_SHOT     216   /* BUTTON: manually re-take the H4 blind screenshot */
+#define ID_DELAY    217   /* BUTTON: delay the decision one bar (re-ask next bar) */
 #define ID_REASON1  300   /* 6 reason buttons: ID_REASON1 + (code-1), code 1..6 */
 
 /* ---- management-panel control ids (separate window, separate thread) ------ */
@@ -151,6 +152,7 @@ typedef struct {
     int    offer_inv;           /* 1 = show the INVERSE button (EMArev + gate ok) */
     HWND   hShot;               /* "Retake H4 screenshot" button */
     int    shot_req;            /* 1 = operator asked to re-take the H4 screenshot */
+    HWND   hDelay;              /* "Delay 1 bar" button (re-ask on the next bar) */
     HWND   hWhy;                /* "Why skip?" prompt (reason-picker mode) */
     HWND   hReason[6];          /* labelled reason buttons (codes 1..6) */
     HWND   hBack;               /* back out of the reason picker */
@@ -364,9 +366,13 @@ static void relayout(void)
         ShowWindow(g.hShot, SW_SHOW);
         MoveWindow(g.hShot, bx, y + L_RGAP, rowW, L_RBTNH, TRUE);
         y += L_RGAP + L_RBTNH;
+        /* full-width "Delay 1 bar" row (repeatable; re-asks the same signal next bar) */
+        ShowWindow(g.hDelay, SW_SHOW);
+        MoveWindow(g.hDelay, bx, y + L_RGAP, rowW, L_RBTNH, TRUE);
+        y += L_RGAP + L_RBTNH;
     } else {
         ShowWindow(g.hYes, SW_HIDE); ShowWindow(g.hNo, SW_HIDE);
-        ShowWindow(g.hShot, SW_HIDE);
+        ShowWindow(g.hShot, SW_HIDE); ShowWindow(g.hDelay, SW_HIDE);
         ShowWindow(g.hWhy, SW_SHOW); ShowWindow(g.hBack, SW_SHOW);
         MoveWindow(g.hWhy, L_PADX, btnTop + 4, W - 2 * L_PADX, 20, TRUE);
         int rTop1 = btnTop + 28;
@@ -437,6 +443,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int id = LOWORD(wp);
         if (id == ID_YES) { if (g.ok) g.result = 1; return 0; }
         if (id == ID_INV) { if (g.offer_inv) g.result = 3; return 0; }  /* INVERSE */
+        if (id == ID_DELAY){ g.result = 4; return 0; }          /* delay 1 bar, re-ask */
         if (id == ID_NO)  { show_reason_picker(1); return 0; }   /* Skip -> ask why */
         if (id == ID_BACK){ show_reason_picker(0); return 0; }   /* cancel the picker */
         if (id == ID_REDACT){ g.redact ^= 1; apply_redact(); return 0; }
@@ -640,6 +647,12 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, L_BTNW, L_RBTNH, hwnd, (HMENU)(INT_PTR)ID_SHOT, g_hinst, NULL);
     SendMessageW(g.hShot, WM_SETFONT, (WPARAM)g.fHint, TRUE);
+    /* delay one bar: close the dialog, let the tester advance, re-ask next bar (same
+       levels). Repeatable indefinitely - lets the operator watch price develop. */
+    g.hDelay = CreateWindowExW(0, L"BUTTON", L"Delay 1 bar (re-ask next bar)",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, L_BTNW, L_RBTNH, hwnd, (HMENU)(INT_PTR)ID_DELAY, g_hinst, NULL);
+    SendMessageW(g.hDelay, WM_SETFONT, (WPARAM)g.fHint, TRUE);
 
     /* --- reason picker (hidden until Skip is clicked) --- */
     g.hWhy = CreateWindowExW(0, L"STATIC", L"Why skip this setup?  (or press 1-6)",
