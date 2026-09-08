@@ -246,7 +246,8 @@ def watch(interval: float):
     print(f"os_shot_daemon watching for approval popups (every {interval}s) — "
           "Ctrl-C to stop")
     captured: dict[int, tuple] = {}               # id -> (raw_path, sym, stamp), awaiting row
-    done: set[int] = set()
+    delivered: set = set()                        # (sid, signal_time) already delivered - a DELAY
+                                                  # re-present bumps signal_time -> fresh bundle
     while True:
         try:
             wins = list_windows()
@@ -259,7 +260,7 @@ def watch(interval: float):
                 if not m:
                     continue
                 sid = int(m.group(1))
-                if sid in captured or sid in done:
+                if sid in captured:                 # capture already pending this cycle
                     continue
                 if not visual:
                     print(f"  Signal #{sid}: popup up but no visual window found — "
@@ -268,6 +269,13 @@ def watch(interval: float):
                 sym, stamp = parse_visual(visual["title"])
                 if not sym:
                     print(f"  Signal #{sid}: could not parse visual title — skip")
+                    continue
+                # freshness: the sidecar signal_time advances on each DELAY re-present, so a
+                # re-presented same-id popup delivers a fresh bundle (updated time + chart)
+                # instead of being deduped away as "already done".
+                _prow, _ = find_pending(sym, sid)
+                _sigt = (_prow.get("signal_time") or "").strip() if _prow else None
+                if _sigt and (sid, _sigt) in delivered:
                     continue
                 time.sleep(SETTLE_S)   # let the chart settle on the latest bar first
                 scroll_chart_end()     # then force it to the latest bar (repaint-lag fix)
@@ -290,7 +298,7 @@ def watch(interval: float):
                     d1 = build_bundle(sid, stamp, sym, raw, row)
                     print(f"  Signal #{sid} {sym}: bundle delivered "
                           f"(d1={'yes' if d1 else 'no'}) → {ARCHIVE}/{stamp}_{sid}/")
-                    done.add(sid)
+                    delivered.add((sid, (row.get("signal_time") or "").strip()))
                     del captured[sid]
             time.sleep(interval)
         except KeyboardInterrupt:
