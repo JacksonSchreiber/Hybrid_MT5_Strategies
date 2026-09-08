@@ -29,6 +29,23 @@ INVERSE = ("unemployment rate","jobless claim","unemployment claim",
 PM_KEYS = ("fomc","federal funds","rate decision","rate statement","press conference",
            "official bank rate","main refinancing","cash rate","monetary policy")
 
+def reconstruct_slot(ev, ccy):
+    """Announcement-time slot for a DATE-ONLY (pre-2020 archive, local-midnight) row.
+    Central banks publish rate decisions at fixed local times; the old code lumped every
+    PM_KEYS match into the US 18:30 slot, which put BOE (real ~12:00 UTC) and ECB
+    (~12:45) hours late and mis-timed the V-class violation gate. First match wins."""
+    e = ev.lower()
+    if "official bank rate" in e or "bank rate vote" in e:      # BOE MPC decision ~12:00 UTC (noon UK)
+        return time(12, 0)
+    if ccy == "EUR" and ("main refinancing" in e or "rate decision" in e
+                         or "monetary policy" in e or "interest rate" in e):
+        return time(12, 45)                                     # ECB rate decision ~12:45 UTC
+    if ccy == "EUR" and "press conference" in e:
+        return time(13, 30)                                     # ECB press conference ~13:30 UTC
+    if any(k in e for k in PM_KEYS):
+        return time(18, 30)                                     # US FOMC / Fed afternoon (2pm ET)
+    return time(12, 30)
+
 POLITICAL_CSV = Path(__file__).resolve().parent.parent / "config" / "political_events.csv"
 
 def to_num(s):
@@ -77,7 +94,7 @@ def main():
             if not ccy or not ev: continue
             hm=(d.hour,d.minute)
             if hm==(0,0) or hm==(23,59):           # date-only sentinel
-                slot=time(18,30) if any(k in ev.lower() for k in PM_KEYS) else time(12,30)
+                slot=reconstruct_slot(ev, ccy)
                 u=datetime.combine(d.date(),slot,tzinfo=timezone.utc)
                 dateonly+=1
             else:

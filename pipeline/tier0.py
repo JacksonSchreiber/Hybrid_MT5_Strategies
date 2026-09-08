@@ -137,6 +137,8 @@ def _to_int(s):
 
 
 SWING_FLOOR_DAYS = 5   # covers a weekday vote (US Tue / UK Thu) landing just past Monday
+MAJOR_W_HORIZON_DAYS = 45   # (iv) advisory: a month-ahead W set-piece a long hold could run into
+HOLD_V_HORIZON_DAYS  = 14   # (vii) advisory: the next V-class print within a plausible hold
 
 
 def _weekend_end(now: datetime) -> datetime:
@@ -210,7 +212,9 @@ def _recent_bias(signal: Signal, events, ccy, past_h: float = 24.0):
         ccy_effect = ev["bias"] * (1 if leg == "base" else -1)
         if ccy_effect != 0:
             return "with" if (ccy_effect > 0) == (signal.direction > 0) else "against"
-        return "none"
+        # (iii) a came-in-as-expected V (bias 0) must NOT mask an earlier real-bias V
+        # within the lookback - keep scanning back instead of returning "none" here.
+        continue
     return "none"
 
 
@@ -222,6 +226,22 @@ def _aff(legs: set[str]) -> str:
     if legs == {"quote"}:
         return "quote"
     return "both"
+
+
+def _next_days(signal, events, cls_letter, horizon_days):
+    """Advisory (non-gating) days-until the nearest class-`cls_letter` event affecting the
+    symbol, within horizon_days. Blind: returns a day count only, never a name/date. None
+    if nothing scheduled. Surfaces month-ahead set-pieces the tight gates above can't see."""
+    ccy = symbol_currencies(signal.symbol)
+    now = signal.entry_time
+    end = now + timedelta(days=horizon_days)
+    best = None
+    for ev in events:
+        if ev["cls"] != cls_letter or not _event_matches(ev, ccy):
+            continue
+        if now < ev["t"] <= end and (best is None or ev["t"] < best):
+            best = ev["t"]
+    return None if best is None else round((best - now).total_seconds() / 86400.0, 1)
 
 
 def blind_calendar(signal: Signal, events, horizon_h: float = VIOLATION_HORIZON_H,
@@ -245,4 +265,8 @@ def blind_calendar(signal: Signal, events, horizon_h: float = VIOLATION_HORIZON_
         "weekend_class": "W" if s["weekend"] else None,
         "weekend_hours_until": s["weekend"][0]["hours_until"] if s["weekend"] else None,
         "weekend_affects": _aff(w_legs),
+        # longer-horizon ADVISORY (blind day-counts, non-gating): a month-ahead W
+        # set-piece (iv) and the next V-class print inside a plausible hold (vii)
+        "major_w_ahead_days": _next_days(signal, events, "W", MAJOR_W_HORIZON_DAYS),
+        "next_v_in_hold_days": _next_days(signal, events, "V", HOLD_V_HORIZON_DAYS),
     }

@@ -203,6 +203,9 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
         f"class={cal.get('weekend_class')}, hours_until={cal.get('weekend_hours_until')}, "
         f"affects={cal.get('weekend_affects')} "
         "(a scheduled event this position would be open across Fri→Mon; class W = weekend-hold)",
+        f"- **Longer-horizon watch (blind):** next V-class inside a plausible hold="
+        f"{cal.get('next_v_in_hold_days')}d, month-ahead W set-piece={cal.get('major_w_ahead_days')}d "
+        "(advisory only — a print or major weekend event further out than the gates above)",
         "",
         "Images: `d1.png` (daily context) · `h4.png` (H4 setup, with overlays).",
     ]
@@ -214,7 +217,12 @@ def crop_blind(src: Path, dst: Path, top=CROP_TOP, bottom=CROP_BOTTOM):
     from PIL import Image
     im = Image.open(src).convert("RGB")
     w, h = im.size
-    im.crop((0, top, w, max(top + 1, h - bottom))).save(dst, "PNG")
+    c = im.crop((0, top, w, max(top + 1, h - bottom)))
+    le = max(c.size)                                  # long edge <= 1568px (match daemon)
+    if le > 1568:
+        sc = 1568.0 / le
+        c = c.resize((max(1, round(c.width * sc)), max(1, round(c.height * sc))), Image.LANCZOS)
+    c.save(dst, "PNG")
 
 
 def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None,

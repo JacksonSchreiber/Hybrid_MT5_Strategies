@@ -160,7 +160,12 @@ def blind_crop(raw: Path, dst: Path):
     w, h = im.size
     top = round(CROP_TOP_FRAC * h)
     bot = round(CROP_BOT_FRAC * h)
-    im.crop((0, top, w, max(top + 1, bot))).save(dst, "PNG")
+    c = im.crop((0, top, w, max(top + 1, bot)))
+    le = max(c.size)                                  # (v) downscale: long edge <= 1568px
+    if le > 1568:
+        sc = 1568.0 / le
+        c = c.resize((max(1, round(c.width * sc)), max(1, round(c.height * sc))), Image.LANCZOS)
+    c.save(dst, "PNG")
 
 
 def parse_visual(title: str):

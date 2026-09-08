@@ -35,8 +35,18 @@
 #                      consumers treat it as affecting every symbol.
 
 rules:
-  # --- C overrides that must beat the generic V rate rules (order-sensitive) --------
+  # --- C overrides that must beat the generic V rate / W summit rules (order-sensitive)
   - {re: 'fomc minutes|meeting minutes|monetary policy meeting accounts|ecb.*account', class: C}
+  # Central-bank SPEECHES are caution, not violation. The generic rate regex below
+  # catches "FOMC Member ... Speaks" via the 'fomc' token (and a "Monetary Policy
+  # Committee Member ... Speaks" via 'monetary policy'); pull speeches out to C FIRST.
+  # SPEAKS/SPEECH only - "Testifies"/"Testimony" stay V (the Fed-Chair rule below is the
+  # ratified semiannual-testimony=violation doctrine). Screen-V speech flags were
+  # costing ~+11R of doctrine-legal trades (exam audit). (coach Phase-2.5, 2026-09)
+  - {re: '\bspeaks\b|\bspeech\b|member.*speak', class: C}
+  # OPEC-JMMC is a routine monthly monitoring committee -> C. Must beat the '\bopec\b'
+  # W rule below; full "OPEC Meetings" and G7/G20 summits stay W. (coach Phase-2.5)
+  - {re: 'opec.?jmmc|\bjmmc\b', class: C}
 
   # --- V: violation-class -----------------------------------------------------------
   # Fed Chair semiannual testimony (Humphrey-Hawkins). Must precede the generic
