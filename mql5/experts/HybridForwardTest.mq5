@@ -634,7 +634,11 @@ void HandleSignal(SignalCandidate &cand)
    //--- across every ccy) that it suppressed the button almost always. Imminent-V risk
    //--- is still surfaced: the popup's red event band shows a <6h event, and PlaceInverse
    //--- logs a V_WARN. The inverse cohort is ungraded, so this never touches the exam.
-   bool offer_inv=(InpOfferInverse && cand.strategy=="EMArev" && !g_inv_open);
+   //--- INVERSE dialog buttons DISABLED regardless of flags (coach audit 2026-09-08): the
+   //--- live inverse changed position lifetimes and cascaded the graded signal SET vs the AA
+   //--- baseline. The E1.X2 inverse is now a HEADLESS counterfactual (pipeline/backtest_emarev_inv.py),
+   //--- never a live button. InpOfferInverse / InpTestInverse are inert.
+   bool offer_inv=false;
 
    DrawOverlays(id,cand);
    //--- when INVERSE is on the table, overlay its ride entry/stop/take too (distinct
@@ -1747,7 +1751,8 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
      { decision_ms=0;
        // TEST hook: exercise the inverse lifecycle headlessly on EMArev (bypasses the
        // fwd-V gate, which legitimately blocks most news-driven stretches).
-       if(InpTestInverse && cand.strategy=="EMArev" && !g_inv_open){ want_inv=true; return false; }
+       // INVERSE fully disabled (coach 2026-09-08); the InpTestInverse auto-take hook is inert:
+       // if(InpTestInverse && cand.strategy=="EMArev" && !g_inv_open){ want_inv=true; return false; }
        // TEST: delay each signal InpTestDelay bars (re-presented with the same id), then approve
        static int td_last=-1, td_cnt=0;
        if(InpTestDelay>0)

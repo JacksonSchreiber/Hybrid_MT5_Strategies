@@ -367,9 +367,45 @@ def stage_report():
     print(f"\nreport -> {RESULTS/'REPORT.md'}")
 
 
+def stage_window(sym, frm, to):
+    """Headless E1.X2 inverse counterfactual for ONE window's EMArev signals (coach
+    2026-09-08): the live INVERSE button is retired; this is the frozen unmanaged
+    counterfactual it is replaced by. E1 = market at the trigger close, X2 = 12-bar
+    time exit, EMA-stop (cap 2.5 / floor 1.0 ATR). Writes a per-signal column CSV +
+    prints the aggregate over the ungated (tradeable) set."""
+    print(f"=== E1.X2 inverse counterfactual: {sym} {frm}..{to} ===", flush=True)
+    run_symbol(sym, frm, to)
+    sigs = load_signals(sym); bars = load_bars(sym)
+    econ = load_econ()
+    for sg in sigs:
+        recompute_flags(sg, econ)
+    rows = []
+    for sg in sigs:
+        g = gated(sg)
+        tr = sim(sg, bars, "E1", "X2")
+        rows.append({"signal_time": sg["t"].strftime("%Y.%m.%d %H:%M"), "dir": sg["dir"],
+                     "gated": int(g), "e1x2_r": (round(tr["r"], 3) if tr else ""),
+                     "reason": (tr["reason"] if tr else "no_trade"),
+                     "shock": sg["shock"], "sched": sg["sched"],
+                     "weekend": (int(tr["wknd"]) if tr else "")})
+    outp = RESULTS / f"{sym}_{frm.replace('.','')}_{to.replace('.','')}.e1x2_inverse.csv"
+    with open(outp, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["signal_time","dir","gated","e1x2_r","reason","shock","sched","weekend"])
+        w.writeheader(); w.writerows(rows)
+    traded = [r["e1x2_r"] for r in rows if not r["gated"] and r["e1x2_r"] != ""]
+    n = len(traded); wr = 100.0*sum(1 for r in traded if r>0)/n if n else 0.0
+    print(f"  {len(sigs)} EMArev signals | {sum(r['gated'] for r in rows)} gated | {n} traded (ungated)")
+    if n:
+        print(f"  E1.X2 counterfactual (ungated): n={n} WR={wr:.0f}% avgR={sum(traded)/n:+.3f} totR={sum(traded):+.1f}")
+    print(f"  -> {outp}")
+
+
 if __name__ == "__main__":
-    stage = sys.argv[1] if len(sys.argv) > 1 else "all"
-    if stage in ("all", "collect"):
-        stage_collect()
-    if stage in ("all", "report"):
-        stage_report()
+    if len(sys.argv) >= 5 and sys.argv[1] == "window":
+        stage_window(sys.argv[2], sys.argv[3], sys.argv[4])   # window SYMBOL FROM TO
+    else:
+        stage = sys.argv[1] if len(sys.argv) > 1 else "all"
+        if stage in ("all", "collect"):
+            stage_collect()
+        if stage in ("all", "report"):
+            stage_report()
