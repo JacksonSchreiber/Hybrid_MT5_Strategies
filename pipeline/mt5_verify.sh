@@ -73,6 +73,7 @@ mkdir -p "$SETDIR"
   [[ -n "${OFFER_INV:-}" ]]     && echo "InpOfferInverse=${OFFER_INV}"
   [[ -n "${TEST_INV:-}" ]]      && echo "InpTestInverse=${TEST_INV}"
   [[ -n "${TEST_DELAY:-}" ]]    && echo "InpTestDelay=${TEST_DELAY}"
+  [[ -n "${DELAY_MODE:-}" ]]    && echo "InpDelayMode=${DELAY_MODE}"   # 0=FREEZE(default) 1=SLIDE
   $FORCE_PENDING && echo "InpForcePendingTest=true"
   $FORCE_PENDING && echo "InpForcePendingPts=$FORCE_PTS"
 } > "$SETDIR/hft_verify.set"

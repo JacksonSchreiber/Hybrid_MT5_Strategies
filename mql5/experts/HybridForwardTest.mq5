@@ -77,6 +77,8 @@ input long   InpMagic       = 990217;   // magic number (graded stream)
 //--- EMArev INVERSE live option (interactive tester only; ungraded, isolated cohort).
 //--- default OFF; start_level.sh sets InpOfferInverse=true only with --inverse.
 input bool   InpOfferInverse  = false;   // offer INVERSE on EMArev alerts (a 3rd dialog choice; default OFF, opt-in)
+enum ENUM_DELAY_MODE { DM_FREEZE=0, DM_SLIDE=1 };
+input ENUM_DELAY_MODE InpDelayMode = DM_FREEZE;  // delay reopen: FREEZE detector levels (pending at orig entry) vs SLIDE to market
 input long   InpInverseMagic  = 990218;  // SEPARATE magic for inverse trades (isolates them)
 input bool   InpTestInverse   = false;   // TEST-ONLY: under AA_ALL, auto-take INVERSE on EMArev (headless lifecycle check)
 input int    InpTestDelay     = 0;       // TEST-ONLY: under AA_ALL, delay each signal N bars then approve (headless delay check)
@@ -214,6 +216,15 @@ struct JournalRow
    double   r_multiple;     // blended, volume-weighted
    string   regime;         // FROZEN D1 regime at signal time: TREND_UP/TREND_DOWN/CHOP/'' (warm-up)
    string   with_trend;     // '1' if signal dir matches trend, '0' if against, '' in CHOP/blank
+   double   to_entry;       // TRUE-ORIG: detector's FIRST-presentation levels, immutable (delay audit)
+   double   to_sl;
+   double   to_tp1;
+   double   to_tp2;
+   double   mfe_r;          // max favorable excursion in R (Item 2 MFE table)
+   double   pre_dip_r;      // max R reached BEFORE the first recross below entry
+   double   post_dip_r;     // max R reached AFTER a recross below entry (recovery); 0 if never dipped
+   int      dipped;         // 1 = went >=+0.25R then traded back below entry
+   string   terminal;       // single token: TP / BE / SL / end (assignment - no string accumulation)
   };
 JournalRow g_rows[];
 
@@ -264,6 +275,7 @@ int          g_h_ema200_d1  = INVALID_HANDLE;  // D1 200-EMA handle (regime tag)
 int          g_h_adx_d1      = INVALID_HANDLE; // D1 ADX(14) handle (regime tag)
 string       g_sig_regime    = "";       // regime FROZEN at the signal's first presentation
 string       g_sig_with_trend= "";       // with_trend FROZEN likewise (recompute-safe across delays)
+double       g_to_entry=0, g_to_sl=0, g_to_tp1=0, g_to_tp2=0;  // TRUE-ORIG frozen at first presentation
 
 //+------------------------------------------------------------------+
 string DirStr(int d) { return (d>0 ? "BUY" : "SELL"); }
@@ -333,6 +345,51 @@ int OnInit()
   }
 
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Item 2 (coach 2026-09-08): per-tick MFE + ordered path, journal-only |
+//| (no behaviour change). mfe_r = max favorable excursion in R; path    |
+//| records up-crossings of 0.25/0.5/0.75/1/1.5/2/3 R, 'B' each recross   |
+//| below entry, and a terminal (TP/BE/SL/end) at close. Model-4 ticks =  |
+//| true touch order; the MFE/recovery tables compute exactly from path.  |
+//+------------------------------------------------------------------+
+const double PATH_TH[7]={0.25,0.5,0.75,1.0,1.5,2.0,3.0};   // reference thresholds (analysis-side)
+//--- Item 2 MFE/recovery tracker. One graded position open at a time (one-setup lock),
+//--- tracked in GLOBAL DOUBLES (which persist reliably; struct-array string accumulation
+//--- does not in the tester). Snapshot an immutable entry/risk basis at position-open so a
+//--- scale-out partial / BE move can't reset it. Journal-only, no behaviour change.
+long   g_mfe_posid=0; int g_mfe_rowidx=-1, g_mfe_dir=0; bool g_mfe_dipped=false;
+double g_mfe_entry=0, g_mfe_risk=0, g_mfe_max=0, g_mfe_pre=0, g_mfe_post=0;
+void MfeTerminal(int idx,string term)
+  {
+   if(idx!=g_mfe_rowidx || g_mfe_posid==0) return;
+   g_rows[idx].mfe_r=g_mfe_max; g_rows[idx].pre_dip_r=g_mfe_pre;
+   g_rows[idx].post_dip_r=g_mfe_post; g_rows[idx].dipped=(g_mfe_dipped?1:0);
+   g_rows[idx].terminal=term;
+   g_mfe_posid=0; g_mfe_rowidx=-1;
+  }
+void TrackAllMfePath()
+  {
+   int oi=-1;
+   for(int i=0;i<ArraySize(g_rows);i++)
+      if(g_rows[i].posid>0 && !g_rows[i].closed){ oi=i; break; }
+   if(oi<0) return;
+   if(g_rows[oi].posid!=g_mfe_posid)
+     { g_mfe_posid=g_rows[oi].posid; g_mfe_rowidx=oi; g_mfe_dir=g_rows[oi].direction;
+       g_mfe_entry=g_rows[oi].entry; g_mfe_risk=g_rows[oi].risk_px;
+       g_mfe_max=0; g_mfe_pre=0; g_mfe_post=0; g_mfe_dipped=false; }
+   if(g_mfe_risk<=0.0) return;
+   double exitpx=(g_mfe_dir>0? SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   double favR=((g_mfe_dir>0? exitpx-g_mfe_entry : g_mfe_entry-exitpx))/g_mfe_risk;
+   if(favR>g_mfe_max) g_mfe_max=favR;
+   if(!g_mfe_dipped)
+     { if(favR>g_mfe_pre) g_mfe_pre=favR;
+       if(favR<=0.0 && g_mfe_pre>=0.25) g_mfe_dipped=true; }
+   else
+     { if(favR>g_mfe_post) g_mfe_post=favR; }
+   g_rows[oi].mfe_r=g_mfe_max; g_rows[oi].pre_dip_r=g_mfe_pre;
+   g_rows[oi].post_dip_r=g_mfe_post; g_rows[oi].dipped=(g_mfe_dipped?1:0);
+  }
+
 void OnTick()
   {
    if(!g_active) return;
@@ -363,6 +420,7 @@ void OnTick()
 
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
+   TrackAllMfePath();          // Item 2: per-tick MFE + path (journal-only)
    //--- age out unfilled pending orders (edited-entry setups) every tick
    ExpireStalePendings();
 
@@ -545,6 +603,9 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].tp1_done=true; g_rows[n].decision_ms=0; g_rows[n].posid=0;
    g_rows[n].closed=true; g_rows[n].exit_time=0; g_rows[n].exit_price=0.0;
    g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
+   g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend;
+   g_rows[n].to_entry=g_to_entry; g_rows[n].to_sl=g_to_sl; g_rows[n].to_tp1=g_to_tp1; g_rows[n].to_tp2=g_to_tp2;
+   g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0; g_rows[n].terminal="";
    Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," REJECTED: ",why);
    WriteJournal(g_journal_part);
   }
@@ -589,14 +650,19 @@ void HandleSignal(SignalCandidate &cand)
 
    if(!is_replay) g_delay_count=0;   // fresh signal: reset the per-signal delay clock
    if(!is_replay) ComputeRegime(cand.direction,g_sig_regime,g_sig_with_trend);   // FREEZE at signal time
-   //--- (b) RECOMPUTE at reopen (trader ruling 2026-09): on a delayed re-present, SLIDE THE
+   if(!is_replay){ g_to_entry=NormPrice(cand.entry); g_to_sl=NormPrice(cand.sl);
+                   g_to_tp1=NormPrice(cand.tp1); g_to_tp2=NormPrice(cand.tp2); }  // (1a) TRUE-ORIG freeze
+   //--- (b) DELAY MODE (coach 2026-09-08): SLIDE re-anchors the whole plan to market (below);
+   //--- FREEZE (default) keeps the detector's original levels and enters via a PENDING order at
+   //--- the original entry, so the SL stays anchored to the structure it was drawn from.
+   //--- SLIDE path: on a delayed re-present, SLIDE THE
    //--- WHOLE PLAN to the current market. Entry re-anchors to the market price and SL / TP /
    //--- TP1 / TP2 all shift by the SAME delta, so the risk & reward DISTANCES - and the R:R -
    //--- are preserved and every level updates together (no floating ratio). The parallel
    //--- shift keeps the stop distance intact, so it can never degenerate; delays stay
    //--- UNLIMITED and never auto-cancel. Skipped for pending/STOP setups (entry is a breakout
    //--- LEVEL, not the market). g_delayed is updated so the next delay slides from here.
-   if(is_replay && !cand.stop_entry)
+   if(is_replay && !cand.stop_entry && InpDelayMode==DM_SLIDE)
      {
       double mk=(cand.direction>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
                                   : SymbolInfoDouble(_Symbol,SYMBOL_BID));
@@ -616,14 +682,17 @@ void HandleSignal(SignalCandidate &cand)
    //--- the min distance is a degenerate signal - reject it, log it, journal it.
    //--- This is what catches the "1.9-pip stop -> 13-lot monster" class of bug.
    double atr_now=SignalATR();
-   double stopdist=MathAbs(cand.entry-cand.sl);
-   double minstop=MinStopDist(atr_now);
-   if(stopdist<minstop || stopdist<=0.0)
-     {
-      double atrx=(atr_now>0.0? stopdist/atr_now : 0.0);
-      JournalReject(id,cand,StringFormat("SL distance %s (%.2f ATR) < min %s - degenerate stop",
-                    DoubleToString(stopdist,_Digits),atrx,DoubleToString(minstop,_Digits)));
-      return;
+   if(!is_replay)   // the setup passed this gate at first presentation; a delay re-present must
+     {              // never auto-cancel through it (current ATR could push minstop past a valid stop)
+      double stopdist=MathAbs(cand.entry-cand.sl);
+      double minstop=MinStopDist(atr_now);
+      if(stopdist<minstop || stopdist<=0.0)
+        {
+         double atrx=(atr_now>0.0? stopdist/atr_now : 0.0);
+         JournalReject(id,cand,StringFormat("SL distance %s (%.2f ATR) < min %s - degenerate stop",
+                       DoubleToString(stopdist,_Digits),atrx,DoubleToString(minstop,_Digits)));
+         return;
+        }
      }
 
    double lots=SizeByRisk(cand.entry,cand.sl);
@@ -724,6 +793,8 @@ void HandleSignal(SignalCandidate &cand)
    g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0;
    g_rows[n].posid=0; g_rows[n].closed=false;
    g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend;
+   g_rows[n].to_entry=g_to_entry; g_rows[n].to_sl=g_to_sl; g_rows[n].to_tp1=g_to_tp1; g_rows[n].to_tp2=g_to_tp2;
+   g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0; g_rows[n].terminal="";
    g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
 
    if(want_inv)
@@ -756,7 +827,10 @@ void HandleSignal(SignalCandidate &cand)
          double pend_price=cand.entry;
          //--- a detector can request a breakout STOP entry (cand.stop_entry) so the
          //--- setup only fills on resumption and cancels if unfilled (ShockCont).
-         bool want_pending=((entry_edited || cand.stop_entry) && MathAbs(cand.entry-mkt)>gate);
+         //--- FREEZE-mode delayed signal: enter as a PENDING at the frozen original entry so the
+         //--- structural SL is kept (trap: entry_edited/stop_entry are both false for it).
+         bool freeze_pend=(InpDelayMode==DM_FREEZE && g_delay_count>0);
+         bool want_pending=((entry_edited || cand.stop_entry || freeze_pend) && MathAbs(cand.entry-mkt)>gate);
          //--- TEST-ONLY headless probe (AA_ALL): force a pending so the
          //--- OnTradeTransaction fill-binding + expiry paths can be verified.
          //--- InpForcePendingPts > 0 => STOP just past market (fills fast);
@@ -2711,8 +2785,16 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(g_rows[idx].closed_vol >= g_rows[idx].lots - step*0.5)
      {
       g_rows[idx].closed=true;
+      //--- Item 2: terminal path event (TP / BE / SL / end) by exit vs levels
+      double _xp=g_rows[idx].exit_price, _e=g_rows[idx].entry;
+      double _tol=MathMax(3.0*(SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE)>0?SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE):_Point),0.0005*_xp);
+      string _term="end";
+      if(g_rows[idx].tp>0.0 && MathAbs(_xp-g_rows[idx].tp)<=_tol) _term="TP";
+      else if(g_rows[idx].tp1_done && MathAbs(_xp-_e)<=_tol)      _term="BE";
+      else if(MathAbs(_xp-g_rows[idx].sl)<=_tol)                  _term="SL";
+      MfeTerminal(idx,_term);
       Print("Signal #",g_rows[idx].id," CLOSED  blendedR=",DoubleToString(g_rows[idx].r_multiple,2),
-            "  pnl=",DoubleToString(g_rows[idx].pnl,2));
+            "  pnl=",DoubleToString(g_rows[idx].pnl,2),"  mfeR=",DoubleToString(g_rows[idx].mfe_r,2)," term=",g_rows[idx].terminal);
      }
    else
       Print("Signal #",g_rows[idx].id," partial exit ",DoubleToString(dvol,2),
@@ -2729,12 +2811,12 @@ void WriteJournal(string path)
       "signal_id,signal_time,symbol,strategy,direction,"
       "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
-      "exit_time,exit_price,pnl,r_multiple,regime,with_trend\n");
+      "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal\n");
    for(int i=0;i<ArraySize(g_rows);i++)
      {
       JournalRow r=g_rows[i];
       string line=StringFormat(
-         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s,%s,%s\n",
+         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s\n",
          r.id,TimeToString(r.time,TIME_DATE|TIME_SECONDS),r.symbol,r.strategy,DirStr(r.direction),
          DoubleToString(r.orig_entry,_Digits),DoubleToString(r.orig_sl,_Digits),DoubleToString(r.orig_tp,_Digits),
          (r.orig_tp1>0?DoubleToString(r.orig_tp1,_Digits):""),(r.orig_tp2>0?DoubleToString(r.orig_tp2,_Digits):""),
@@ -2746,7 +2828,12 @@ void WriteJournal(string path)
          (r.closed?DoubleToString(r.exit_price,_Digits):""),
          (r.closed?DoubleToString(r.pnl,2):""),
          (r.closed?DoubleToString(r.r_multiple,2):""),
-         r.regime,r.with_trend);
+         r.regime,r.with_trend,
+         DoubleToString(r.to_entry,_Digits),DoubleToString(r.to_sl,_Digits),
+         (r.to_tp1>0?DoubleToString(r.to_tp1,_Digits):""),(r.to_tp2>0?DoubleToString(r.to_tp2,_Digits):""),
+         (r.closed?DoubleToString(r.mfe_r,2):""),
+         (r.closed?DoubleToString(r.pre_dip_r,2):""),(r.closed?DoubleToString(r.post_dip_r,2):""),
+         r.dipped,r.terminal);
       FileWriteString(h,line);
      }
    FileFlush(h); FileClose(h);
