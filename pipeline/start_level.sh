@@ -37,13 +37,13 @@ GUIDE_WIN='C:\Users\jacks\OneDrive\Trading\hybrid_project\training\quick-referen
 log(){ printf '%s\n' "$*" >&2; }
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-LEVEL=""; ALT=false; SKIP_BASELINE=false; DRYRUN=false; INVERSE=true  # INVERSE option ON by default
+LEVEL=""; ALT=false; SKIP_BASELINE=false; DRYRUN=false; INVERSE=false  # INVERSE option OFF by default (opt in with --inverse)
 while [[ $# -gt 0 ]]; do case "$1" in
   --alt) ALT=true; shift;;
   --skip-baseline) SKIP_BASELINE=true; shift;;
   --dry-run) DRYRUN=true; shift;;
-  --inverse) INVERSE=true; shift;;      # (default) offer the ungraded EMArev INVERSE option
-  --no-inverse) INVERSE=false; shift;;  # opt out of the INVERSE option for this session
+  --inverse) INVERSE=true; shift;;      # opt IN to the ungraded EMArev INVERSE dialog option (off by default)
+  --no-inverse) INVERSE=false; shift;;  # (default) no INVERSE option
   -h|--help) sed -n '3,20p' "$0"; exit 0;;
   *) LEVEL="$1"; shift;;
 esac; done
@@ -121,7 +121,7 @@ mkdir -p "$SETDIR"
   echo "InpUseEMA=true"
   echo "InpUseShock=false"        # Strategy 4 candidate stays OFF in the interactive/training path
   echo "InpUseEmaRevInv=false"    # EMArev-Inverse backtest detector stays OFF in the training path
-  echo "InpOfferInverse=$($INVERSE && echo true || echo false)"  # EMArev INVERSE dialog option (default ON; --no-inverse to disable)
+  echo "InpOfferInverse=$($INVERSE && echo true || echo false)"  # EMArev INVERSE dialog option (default OFF; --inverse to enable)
   echo "InpShotOnDecision=true"   # capture the H4 chart (with overlays) on each signal
   echo "InpBlindLabels=true"      # on-chart label carries no date -> blind screenshots
   echo "InpShowEvents=true"       # event lines ON (operator wants to see upcoming news). Blindness

@@ -76,7 +76,7 @@ input double InpMaxMarginPct = 0.50;    // hard cap: one position may use <= thi
 input long   InpMagic       = 990217;   // magic number (graded stream)
 //--- EMArev INVERSE live option (interactive tester only; ungraded, isolated cohort).
 //--- default OFF; start_level.sh sets InpOfferInverse=true only with --inverse.
-input bool   InpOfferInverse  = true;    // offer INVERSE on EMArev alerts (a 3rd dialog choice; default ON)
+input bool   InpOfferInverse  = false;   // offer INVERSE on EMArev alerts (a 3rd dialog choice; default OFF, opt-in)
 input long   InpInverseMagic  = 990218;  // SEPARATE magic for inverse trades (isolates them)
 input bool   InpTestInverse   = false;   // TEST-ONLY: under AA_ALL, auto-take INVERSE on EMArev (headless lifecycle check)
 input int    InpTestDelay     = 0;       // TEST-ONLY: under AA_ALL, delay each signal N bars then approve (headless delay check)
