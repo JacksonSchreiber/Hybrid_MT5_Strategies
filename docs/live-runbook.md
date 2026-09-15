@@ -77,3 +77,21 @@ approve/skip/delay by hand; acks/audit tail in the driver.
   `config\account.json`; set `initial_balance` explicitly at go-live.
 - `tasks\done` retention (90 d) and `signals\` pruning: web-app milestone.
 - MFE/rt trackers are not persisted across a restart (journal-only fields restart from 0 for that position).
+
+## Milestone 2 — web app, monitor, advisor runner (2026-09-15)
+
+Code: `live/` (stdlib + Pillow): `common.py` (config, queue readers, typed task writer with web audit, events, Telegram),
+`charts.py` (H4/D1 renderer from the bars in the signal JSON, tester palette, overlay geometry), `webapp.py`,
+`monitor.py`, `advisor_runner.py`. Local test config: `live/live_config.local.json` (git-ignored) pointing at the
+`live_selftest` root; `python3 live/webapp.py --config … --port 8099`, `python3 live/monitor.py --config … --dry --once`,
+`python3 live/advisor_runner.py --config … --once <key> [--reply "…"]`.
+
+Verified locally 2026-09-15: all pages 200 on the 27 self-test signals; task refusal before any file write for a
+non-open signal / unknown verb; reply queue; kill switch write + audit; one real consult (fresh session, full
+scorecard in the CLAUDE.live.md format, model wrote its own log line) in 45 s and a `--resume` reply in 8 s.
+Latency note: the role file's mandatory quick-reference read makes a fresh consult ~40-45 s (spec target ~30 s);
+tuning candidate for M3 (pre-warmed session per symbol, or a trimmed reference).
+
+Advisor session model: session id = uuid5(signal_key); consult = `claude -p … --session-id`, reply = `--resume`; the
+runner scrubs inherited `CLAUDE_*` env vars (a nested child hangs otherwise). `verdicts.live.log` on the VPS is the
+canonical copy (M3 nightly pull syncs it to the training tree for the coach).

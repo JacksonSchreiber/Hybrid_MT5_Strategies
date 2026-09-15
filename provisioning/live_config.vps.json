@@ -1,0 +1,14 @@
+{
+  "root": "C:\\Users\\hybridops\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common\\Files\\live",
+  "common_files": "C:\\Users\\hybridops\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common\\Files",
+  "symbols": [],
+  "web": {"bind": "10.77.0.1", "port": 8080, "base_url": "http://10.77.0.1:8080"},
+  "telegram": {"token_file": "C:\\ProgramData\\hybrid\\secrets\\telegram.token", "chat_id_file": "C:\\ProgramData\\hybrid\\secrets\\telegram.chat_id"},
+  "advisor": {"claude_cmd": "C:\\Users\\hybridops\\AppData\\Roaming\\npm\\claude.cmd", "model": "sonnet", "effort": "low", "timeout_s": 150,
+              "live_dir": "C:\\ProgramData\\hybrid\\advisor\\live\\advisor",
+              "node_path": "C:\\Program Files\\nodejs;C:\\Users\\hybridops\\AppData\\Roaming\\npm",
+              "token_file": "C:\\ProgramData\\hybrid\\secrets\\advisor.token"},
+  "monitor": {"interval_s": 15, "heartbeat_stale_s": 180, "headroom_warn_pct": [0.02, 0.01], "calendar_min_days": 14, "daily_summary_utc": "21:05",
+              "mt5_task": "hybrid-mt5", "mt5_process": "terminal64", "web_task": "hybrid-web", "advisor_task": "hybrid-advisor"},
+  "logs_dir": "C:\\ProgramData\\hybrid\\logs"
+}

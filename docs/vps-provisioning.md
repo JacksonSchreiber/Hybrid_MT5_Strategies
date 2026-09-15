@@ -13,7 +13,7 @@ commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md`
 | inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
 | clock | UTC |
 | secrets | `C:\ProgramData\hybrid\secrets\` (ACL: Administrators + SYSTEM only; never in the repo): `mt5.json` {login, password, investor_password, server}, `telegram.token`, `telegram.chat_id`, `advisor.token` (Claude Code OAuth from `claude setup-token`, bills the subscription). Master copies live in the trader's KeePassXC; re-copy with `scp` over the tunnel |
-| status | steps 1–3 done 2026-09-15; reboot tests passed; EA live-heartbeating on EURUSD.sim; external probe: no TCP port open |
+| status | steps 1–4 done 2026-09-15; EA live-heartbeating on EURUSD.sim; web/monitor/advisor services up; external probe: no TCP port open |
 | provider | Contabo. Recovery path if SSH is ever lost: Contabo panel → VPS → VNC (browser). Log in as Administrator, PowerShell as admin |
 
 ## Step 1 — bootstrap over RDP (the only step ever done by hand on the console)
@@ -107,8 +107,29 @@ root (`EURUSD`). An FTMO server uses plain `EURUSD` — ini change only. Verifie
 60 s on the wall clock, `account_login` set, equity 25 000, `terminal_trade_allowed`/`mql_trade_allowed` true,
 `trading_enabled` false (no `config\trading_enabled.json` yet — the kill switch stays off until the shadow period).
 
-## Step 4 — web app, notifier, advisor runner, watchdog as services
-_Pending._
+## Step 4 — web app, monitor (notifier + watchdog), advisor runner (done 2026-09-15)
+
+Runtime (over SSH, once): Python 3.12 (`python-3.12.6-amd64.exe /quiet InstallAllUsers=1 PrependPath=1`) + `pip install
+pillow certifi matplotlib`; Node 22 (`node-v22.11.0-x64.msi /qn`) + `npm i -g @anthropic-ai/claude-code`.
+Layout: `C:\ProgramData\hybrid\live\{live\*.py, live_config.json, hybrid-*.cmd}`; advisor tree
+`C:\ProgramData\hybrid\advisor\live\{quick-reference.html, advisor\{CLAUDE.md (= CLAUDE.live.md), library\,
+.claude\settings.json, notes.live.md, verdicts.live.log, bundles\}}`; logs `C:\ProgramData\hybrid\logs\`.
+
+Deploy from the workstation: `provisioning/deploy_live.sh` (copies code + `provisioning/live_config.vps.json` + the
+live advisor material, runs `provisioning/live_tasks.ps1`, restarts the tasks, checks `/health` over the tunnel).
+`--code` skips the advisor material. Tasks `hybrid-web`, `hybrid-monitor`, `hybrid-advisor`: at startup + 45 s, as
+`hybridops` with the stored password, restart every minute on failure, each runs its `.cmd` (never inline commands).
+Firewall: `Hybrid web over WireGuard` = TCP 8080 on `10.77.0.1` only. The advisor folder is pre-trusted in
+`C:\Users\hybridops\.claude.json` (otherwise its `settings.json` permissions are ignored).
+
+Web app: `http://10.77.0.1:8080` from any WireGuard peer (phone = 10.77.0.3). No login (trader ruling 2026-09-15:
+the tunnel is the boundary); plain HTTP inside the tunnel. Verify after any deploy or reboot: `/health` returns
+`{"ok":true}`, dashboard shows `EA alive` with a fresh beat, `hybrid-monitor.task.log` shows a successful Telegram
+send (the daily summary fires once after start when past 21:05 UTC).
+
+Gotchas found: (1) a child `claude` inherits `CLAUDE_*` variables from a parent Claude Code session and hangs — the
+runner scrubs them; (2) Python's default cert store on a fresh Windows box fails Telegram's chain — `certifi` is used
+when present; (3) `.sim` symbol suffix (step 3).
 
 ## Step 5 — backup / restore and the Windows Update maintenance window
 _Pending._

@@ -26,3 +26,4 @@ playbook/.snapshots/
 **/journal/shots/
 logs/assistant/
 playbook/incoming/
+live_config.local.json

@@ -1,0 +1,7 @@
+{
+  "effortLevel": "low",
+  "permissions": {
+    "allow": ["Read", "Glob", "Grep", "Write(verdicts.live.log)", "Edit(verdicts.live.log)", "Write(notes.live.md)", "Edit(notes.live.md)"],
+    "deny": ["Bash", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit"]
+  }
+}
