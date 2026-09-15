@@ -6,14 +6,15 @@ commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md`
 
 | item | value |
 |---|---|
-| OS | Windows Server 2022 (provider image) |
+| OS | Windows Server 2022 Datacenter (Contabo image), 8 GB RAM, ~87 GB free on C: |
+| broker/terminal | OANDA MT5 (demo on `OANDA-Demo-1`); the FTMO challenge account, when it arrives, is a second terminal install |
 | ops account | `hybridops` (local Administrators; SSH key-only; built-in `Administrator` denied over SSH) |
 | WireGuard | server `10.77.0.1/24`, UDP `51820`; peers: engineer workstation `10.77.0.2/32`, trader phone `10.77.0.3/32` |
 | inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
 | clock | UTC |
-| secrets | `C:\ProgramData\hybrid\secrets\` (never in the repo), readable by `hybridops` + the service accounts only |
+| secrets | `C:\ProgramData\hybrid\secrets\` (ACL: Administrators + SYSTEM only; never in the repo): `mt5.json` {login, password, investor_password, server}, `telegram.token`, `telegram.chat_id`, `advisor.token` (Claude Code OAuth from `claude setup-token`, bills the subscription). Master copies live in the trader's KeePassXC; re-copy with `scp` over the tunnel |
 | status | steps 1–2 done 2026-09-15; two reboot tests passed; external probe: no TCP port open |
-| provider console | the recovery path if SSH is ever lost (VNC in the provider panel; no RDP). Log in as Administrator, PowerShell as admin |
+| provider | Contabo. Recovery path if SSH is ever lost: Contabo panel → VPS → VNC (browser). Log in as Administrator, PowerShell as admin |
 
 ## Step 1 — bootstrap over RDP (the only step ever done by hand on the console)
 
