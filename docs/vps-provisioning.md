@@ -13,7 +13,7 @@ commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md`
 | inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
 | clock | UTC |
 | secrets | `C:\ProgramData\hybrid\secrets\` (ACL: Administrators + SYSTEM only; never in the repo): `mt5.json` {login, password, investor_password, server}, `telegram.token`, `telegram.chat_id`, `advisor.token` (Claude Code OAuth from `claude setup-token`, bills the subscription). Master copies live in the trader's KeePassXC; re-copy with `scp` over the tunnel |
-| status | steps 1–2 done 2026-09-15; two reboot tests passed; external probe: no TCP port open |
+| status | steps 1–3 done 2026-09-15; reboot tests passed; EA live-heartbeating on EURUSD.sim; external probe: no TCP port open |
 | provider | Contabo. Recovery path if SSH is ever lost: Contabo panel → VPS → VNC (browser). Log in as Administrator, PowerShell as admin |
 
 ## Step 1 — bootstrap over RDP (the only step ever done by hand on the console)
@@ -100,9 +100,12 @@ Over SSH:
    expert log `HybridForwardTest ACTIVE [LIVE(queue)]`, `live\heartbeat_EURUSD.json` rewritten every 60 s with
    `terminal_trade_allowed:true, mql_trade_allowed:true`.
 
-**Open (2026-09-15):** the OANDA-Demo-1 account authorizes but delivers no quotes (last server time 2024-11-12,
-no ticks, balance 0) — looks like an expired demo. Waiting on a live demo account. Also found: the EA's live cadence
-used tick time, which freezes without ticks (and every weekend); fixed to a wall clock in the EA (`LiveNow()`).
+**Symbol naming:** OANDA's MT5 servers suffix symbols with `.sim` (`EURUSD.sim`); a `[StartUp] Symbol=EURUSD` chart never
+synchronises and the EA is removed after 5 min ("symbol synchronization timeout"). The queue files are therefore
+`heartbeat_EURUSD.sim.json`, `signals/EURUSD.sim-*.json`, journals `EURUSD.sim_YYYYMM.csv`; `risk_mult.json` keys use the
+root (`EURUSD`). An FTMO server uses plain `EURUSD` — ini change only. Verified 2026-09-15 21:59 UTC: heartbeat every
+60 s on the wall clock, `account_login` set, equity 25 000, `terminal_trade_allowed`/`mql_trade_allowed` true,
+`trading_enabled` false (no `config\trading_enabled.json` yet — the kill switch stays off until the shadow period).
 
 ## Step 4 — web app, notifier, advisor runner, watchdog as services
 _Pending._
