@@ -29,6 +29,11 @@ _DEFAULT_CONFIG = {
                 "calendar_min_days": 14, "daily_summary_utc": "21:05", "mt5_task": "hybrid-mt5",
                 "mt5_process": "terminal64", "web_task": "hybrid-web", "advisor_task": "hybrid-advisor"},
     "logs_dir": "",
+    # TradingView symbol per broker-symbol root (the widget runs on the phone's own internet, not through the box)
+    "tv_symbols": {"EURUSD": "OANDA:EURUSD", "GBPUSD": "OANDA:GBPUSD", "USDJPY": "OANDA:USDJPY", "AUDUSD": "OANDA:AUDUSD", "USDCAD": "OANDA:USDCAD",
+                   "USDCHF": "OANDA:USDCHF", "NZDUSD": "OANDA:NZDUSD", "US100": "OANDA:NAS100USD", "US500": "OANDA:SPX500USD", "US30": "OANDA:US30USD",
+                   "XAUUSD": "OANDA:XAUUSD", "XAGUSD": "OANDA:XAGUSD", "USOIL": "OANDA:WTICOUSD", "UKOIL": "OANDA:BCOUSD"},
+    "tv_widget": True,
 }
 
 def _deep_merge(a: dict, b: dict) -> dict:
@@ -262,6 +267,10 @@ def _ssl_ctx():
             import certifi; _SSL = ssl.create_default_context(cafile=certifi.where())
         except ImportError: _SSL = ssl.create_default_context()
     return _SSL
+
+def tv_symbol(cfg: dict, symbol: str) -> str:
+    root = symbol.split(".")[0].upper()
+    return (cfg.get("tv_symbols") or {}).get(root, f"OANDA:{root}")
 
 def r_fmt(x) -> str:
     try: return f"{float(x):+.2f}R"
