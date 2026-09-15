@@ -445,6 +445,9 @@ LivePark g_park;
 
 string LivePath(string sub){ return InpLiveRoot+"\\"+sub; }
 string SymbolRoot(){ int p=StringFind(_Symbol,"."); return (p>0 ? StringSubstr(_Symbol,0,p) : _Symbol); }
+//--- live wall clock. TimeCurrent() is the last TICK time: it freezes over weekends and on a dead feed, which would
+//--- silence the heartbeat and the task poll. The tester keeps sim time (self-test / parity unchanged).
+datetime LiveNow(){ return ((bool)MQLInfoInteger(MQL_TESTER) ? TimeCurrent() : TimeGMT()); }
 string IsoTime(datetime t)
   { MqlDateTime d; TimeToStruct(t,d);
     return StringFormat("%04d-%02d-%02dT%02d:%02d:%02dZ",d.year,d.mon,d.day,d.hour,d.min,d.sec); }
@@ -601,7 +604,7 @@ void AppendLine(string rel,string line)
 void AuditLine(string ev,string task_id,string verb,string target,string result,string reason,string detail)
   {
    AppendLine(LivePath("audit_"+_Symbol+".log"),
-              IsoTime(TimeCurrent())+"|"+_Symbol+"|"+ev+"|"+task_id+"|"+verb+"|"+target+"|"+result+"|"+reason+"|"+detail);
+              IsoTime(LiveNow())+"|"+_Symbol+"|"+ev+"|"+task_id+"|"+verb+"|"+target+"|"+result+"|"+reason+"|"+detail);
   }
 
 void LiveEnsureDirs()
@@ -679,10 +682,11 @@ double AggregateRiskToStop(int &unprotected)
 //--- E5 heartbeat: heartbeat_<SYMBOL>.json (per-instance, §11-1). Includes §11-8 trade-allowed flags.
 void WriteHeartbeat(string status="running")
   {
+   if(g_account_login==0) g_account_login=AccountInfoInteger(ACCOUNT_LOGIN);
    int unprot=0; double agg=AggregateRiskToStop(unprot);
    CJsonW j; j.BeginObj();
    j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KStr("ea_build",EA_BUILD);
-   j.KStr("symbol",_Symbol); j.KStr("status",status); j.KTime("ts",TimeCurrent());
+   j.KStr("symbol",_Symbol); j.KStr("status",status); j.KTime("ts",LiveNow());
    j.KInt("account_login",g_account_login);
    j.KNum("equity",AccountInfoDouble(ACCOUNT_EQUITY),2); j.KNum("balance",AccountInfoDouble(ACCOUNT_BALANCE),2);
    j.KNum("margin_free",AccountInfoDouble(ACCOUNT_MARGIN_FREE),2);
@@ -751,7 +755,7 @@ void OnTimer()
   {
    if(!g_active || !InpLiveMode) return;
    if(!g_live_inited) LiveInit();
-   datetime now=TimeCurrent();
+   datetime now=LiveNow();
    //--- the kill-switch FILE is re-read at the poll cadence (<=5s, same as tasks); its VALUE is honoured
    //--- on every decision (E10). Reading it every second was 15M file reads per tester-year for nothing.
    if(now-g_live_last_poll>=InpTaskPollSec)
@@ -1725,7 +1729,7 @@ void LiveWritePositions()
       j.KBool("banked",g_rows[i].banked); j.KBool("tp1_done",g_rows[i].tp1_done); j.KBool("ratcheted",g_rows[i].ratcheted);
       j.KBool("be_placeable",BEPlaceable(i)); j.KBool("ratchet_placeable",RatchetPlaceable(i));
       j.KInt("opened_at",(long)PositionGetInteger(POSITION_TIME)); j.KInt("bars_open",(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/PeriodSeconds(g_tf)));
-      j.KTime("ts",TimeCurrent());
+      j.KTime("ts",LiveNow());
       j.EndObj();
       AtomicWriteText(f,j.Text());
      }
@@ -1942,7 +1946,7 @@ string g_ftmo_day_key=""; double g_ftmo_day_bal=0.0, g_ftmo_day_eq=0.0;
 string FtmoDayKey(datetime t){ MqlDateTime d; TimeToStruct(t-(datetime)(g_ftmo_reset_hour*3600),d); return StringFormat("%04d-%02d-%02d",d.year,d.mon,d.day); }
 void LiveFtmoSaveState()
   { AtomicWriteText(LivePath("state\\account.json"),StringFormat("{\"schema_version\":%d,\"login\":%I64d,\"initial_balance\":%.2f,\"day_key\":\"%s\",\"day_start_balance\":%.2f,\"day_start_equity\":%.2f,\"set_at\":\"%s\"}",
-      LIVE_SCHEMA_VERSION,g_account_login,g_ftmo_initial,g_ftmo_day_key,g_ftmo_day_bal,g_ftmo_day_eq,IsoTime(TimeCurrent()))); }
+      LIVE_SCHEMA_VERSION,g_account_login,g_ftmo_initial,g_ftmo_day_key,g_ftmo_day_bal,g_ftmo_day_eq,IsoTime(LiveNow()))); }
 void LiveFtmoLoad()
   {
    string p=LivePath("config\\account.json"); string t=ReadTextFile(p); string k[],v[],e;
@@ -1959,14 +1963,15 @@ void LiveFtmoLoad()
      { g_ftmo_initial=StringToDouble(JGet(sk,sv,"initial_balance","0")); g_ftmo_day_key=JGet(sk,sv,"day_key","");
        g_ftmo_day_bal=StringToDouble(JGet(sk,sv,"day_start_balance","0")); g_ftmo_day_eq=StringToDouble(JGet(sk,sv,"day_start_equity","0")); }
    if(cfg_init>0.0) g_ftmo_initial=cfg_init;                                   // config wins when set
-   if(g_ftmo_initial<=0.0){ g_ftmo_initial=AccountInfoDouble(ACCOUNT_BALANCE); AuditLine("config","","","","info","ftmo_initial_captured",DoubleToString(g_ftmo_initial,2)); }
+   if(g_ftmo_initial<=0.0 && AccountInfoDouble(ACCOUNT_BALANCE)>0.0){ g_ftmo_initial=AccountInfoDouble(ACCOUNT_BALANCE); AuditLine("config","","","","info","ftmo_initial_captured",DoubleToString(g_ftmo_initial,2)); }
    LiveFtmoDayReset();
   }
 //--- snapshot day-start balance/equity at the FTMO day boundary (persisted: a mid-day restart never re-snapshots)
 void LiveFtmoDayReset()
   {
-   string key=FtmoDayKey(TimeCurrent());
+   string key=FtmoDayKey(LiveNow());
    if(key==g_ftmo_day_key && g_ftmo_day_bal>0.0) return;
+   if(AccountInfoDouble(ACCOUNT_BALANCE)<=0.0) return;                     // account not synced yet: try again next poll
    g_ftmo_day_key=key; g_ftmo_day_bal=AccountInfoDouble(ACCOUNT_BALANCE); g_ftmo_day_eq=AccountInfoDouble(ACCOUNT_EQUITY);
    LiveFtmoSaveState();
    AuditLine("ftmo_day","","","",key,"",StringFormat("day_start_balance=%.2f day_start_equity=%.2f",g_ftmo_day_bal,g_ftmo_day_eq));
@@ -1995,7 +2000,7 @@ void WriteAck(string task_id,string verb,string target_key,long target_id,string
    CJsonW j; j.BeginObj();
    j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KStr("ea_build",EA_BUILD);
    j.KStr("task_id",task_id); j.KStr("symbol",_Symbol); j.KStr("verb",verb);
-   j.KInt(target_key,target_id); j.KStr("result",result); j.KStr("reason",reason); j.KTime("executed_at",TimeCurrent());
+   j.KInt(target_key,target_id); j.KStr("result",result); j.KStr("reason",reason); j.KTime("executed_at",LiveNow());
    j.Key("refs"); j.BeginObj();
    if(row_idx>=0)
      { j.KInt("signal_id",g_rows[row_idx].id); j.KInt("posid",g_rows[row_idx].posid); j.KInt("order_ticket",g_rows[row_idx].order_ticket);
@@ -2011,7 +2016,7 @@ void WriteAck(string task_id,string verb,string target_key,long target_id,string
 string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string &reason,int &row_idx)
   {
    reason=""; row_idx=-1;
-   datetime now=TimeCurrent();
+   datetime now=LiveNow();
    //--- signal verbs --------------------------------------------------------
    if(verb=="approve" || verb=="skip" || verb=="delay")
      {
@@ -2187,7 +2192,7 @@ void LiveProcessTasks()
       else
         {
          datetime issued=IsoToTime(JGet(k,v,"issued_at",""));
-         if(issued>0 && TimeCurrent()-issued>(long)g_cfg_task_max_age_h*3600){ result="expired"; reason="stale_task"; }
+         if(issued>0 && LiveNow()-issued>(long)g_cfg_task_max_age_h*3600){ result="expired"; reason="stale_task"; }
          else result=LiveExecuteTask(k,v,task_id,verb,reason,row_idx);
         }
       AuditLine((result=="accepted"?"executed":"rejected"),task_id,verb,StringFormat("%s:%I64d",target_key,target_id),result,reason,
