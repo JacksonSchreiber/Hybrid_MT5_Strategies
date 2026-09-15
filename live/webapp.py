@@ -27,7 +27,7 @@ nav a{padding:6px 10px;border-radius:6px;white-space:nowrap}nav a.on{background:
 .k{color:var(--dim);font-size:13px}.v{font-variant-numeric:tabular-nums}.big{font-size:22px;font-weight:600}h1{font-size:20px;margin:6px 0}h2{font-size:16px;margin:8px 0 4px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
 .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600;background:#21262d}.ok{color:var(--up)}.bad{color:var(--dn)}.warn{color:var(--warn)}.take{background:#1f3a24;color:var(--up)}.disc{background:#3a2f1f;color:var(--warn)}
 .btn{display:inline-block;padding:12px 16px;border-radius:8px;border:1px solid var(--line);background:#21262d;color:var(--txt);font-size:16px;font-weight:600;cursor:pointer}
-.btn.go{background:#238636;border-color:#2ea043;color:#fff}.btn.no{background:#8b2f2f;border-color:#a33;color:#fff}.btn.wait{background:#3d3520;color:#fff}.btn:disabled{opacity:.4}
+.btn.go{background:#238636;border-color:#2ea043;color:#fff}.btn.no{background:#8b2f2f;border-color:#a33;color:#fff}.btn.wait{background:#3d3520;color:#fff}.btn:disabled{opacity:.4}.btn.on{background:#30363d;border-color:#8b949e}
 form.inline{display:inline}img.chart{width:100%;height:auto;border-radius:6px;border:1px solid var(--line);margin:6px 0}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--dim);font-weight:500}
 pre{white-space:pre-wrap;word-break:break-word;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;background:#0b0f14;padding:10px;border-radius:6px;border:1px solid var(--line);margin:6px 0}
@@ -115,8 +115,8 @@ def signal_page(key: str, q: dict) -> str:
                f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>')
     if s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
     d = s.get("delay_count", 0)
-    out.append(tv_block(s["symbol"], 240, lv))
-    out.append(f'<details><summary class="k">EA charts (levels + detector overlays, as the advisor saw them)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')
+    out.append(chart_block(s, lv))
+    out.append(f'<details><summary class="k">static EA charts (what the advisor saw)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')
     out.append(f'<div class="card"><div class="grid2"><div><span class="k">entry</span> <b class="v">{lv.get("entry")}</b>{" (STOP)" if lv.get("stop_entry") else ""}</div><div><span class="k">SL</span> <b class="v bad">{lv.get("sl")}</b></div>'
                f'<div><span class="k">TP1</span> <b class="v">{lv.get("tp1")}</b> <span class="k">{rr.get("tp1")}R</span></div><div><span class="k">TP2</span> <b class="v">{lv.get("tp2") or "-"}</b> <span class="k">{rr.get("runner")}R</span></div>'
                f'<div><span class="k">lots</span> <b class="v">{sz.get("lots")}</b> <span class="k">{E(sz.get("lots_line", ""))}</span></div><div><span class="k">risk mult</span> <b class="v">{sz.get("risk_mult_applied")}</b> <span class="k">→ {float(sz.get("risk_pct_effective", 0) or 0) * 100:.2f}%</span></div></div>'
@@ -159,6 +159,18 @@ def signal_page(key: str, q: dict) -> str:
         out.append("</table></div>")
     return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home", refresh=60 if is_open else None)
 
+def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None) -> str:
+    """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load."""
+    ov = sig.get("overlay") or {}
+    data = {"bars_h4": sig.get("bars_h4") or [], "bars_d1": sig.get("bars_d1") or [], "levels": levels or sig.get("levels") or {},
+            "overlay": {k: ov.get(k) for k in ("zone", "zone2", "leg", "aux", "swings_hi", "swings_lo")},
+            "signal_t": charts._epoch(sig.get("signal_time")), "digits": charts._digits(sig), "marks": marks or []}
+    tvs = C.tv_symbol(CFG, sig["symbol"]); link = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
+    return (f'<div class="card" style="padding:6px"><div class="hc"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
+            f'<span class="k">EMA <span style="color:#ffd700">20</span> <span style="color:#00bfff">50</span> <span style="color:#ee82ee">200</span> · zone, leg, swings from the detector</span>'
+            f'<a href="{link}" target="_blank" style="margin-left:auto">TradingView ↗</a></div><div class="hc-box" style="width:100%"></div></div>'
+            f'<script src="/static/lw.js"></script><script src="/static/hybrid_chart.js"></script><script>HybridChart.mount(document.currentScript.previousElementSibling.previousElementSibling.previousElementSibling, {json.dumps(data, separators=(",", ":"))});</script></div>')
+
 def tv_block(symbol: str, interval: int = 240, levels: dict | None = None) -> str:
     """TradingView Advanced Chart widget (loads from tradingview.com on the viewer's device) + deep link to the TV app."""
     tvs = C.tv_symbol(CFG, symbol); link = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval={interval}"
@@ -189,7 +201,10 @@ def position_page(key: str, q: dict) -> str:
                f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b class="v">{p.get("tp_live") or "-"}</b></div>'
                f'<div><span class="k">lots</span> <b class="v">{p.get("lots_live")}</b> <span class="k">of {p.get("lots_init")}</span></div><div><span class="k">bars open</span> <b class="v">{p.get("bars_open")}</b></div></div>'
                f'<div class="k">banked {p.get("banked")} · tp1_done {p.get("tp1_done")} · ratcheted {p.get("ratcheted")} · close-now {C.r_fmt(p.get("closenow_r"))} · updated {E(p.get("ts", ""))}{" · CLOSED" if closed else ""}</div></div>')
-    out.append(tv_block(p["symbol"], 240, {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}))
+    src = C.signal(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
+    plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
+    if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None))
+    else: out.append(tv_block(p["symbol"], 240, plv))
     if p.get("signal_id"): out.append(f'<div class="k"><a href="/signal/{E(p["symbol"])}-{p["signal_id"]}">→ signal #{p["signal_id"]} (EA charts, verdict)</a></div>')
     # events inside hold (next 5 days for the symbol)
     evs, _ = C.load_events(CFG); ccys = C.symbol_ccys(p["symbol"]); now = C.now_utc()
@@ -301,6 +316,8 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlsplit(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}; parts = [p for p in u.path.split("/") if p]
         try:
             if not parts: return self._send(dashboard(q))
+            if parts[0] == "static" and len(parts) == 2 and parts[1] in ("lw.js", "hybrid_chart.js"):
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", parts[1]), "rb") as f: return self._send(f.read(), "application/javascript")
             if parts[0] == "health": return self._send(json.dumps({"ok": True, "ts": C.now_iso()}), "application/json")
             if parts[0] == "signal" and len(parts) == 2: return self._send(signal_page(parts[1], q))
             if parts[0] == "position" and len(parts) == 2: return self._send(position_page(parts[1], q))
