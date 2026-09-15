@@ -12,7 +12,7 @@ commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md`
 | inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
 | clock | UTC |
 | secrets | `C:\ProgramData\hybrid\secrets\` (never in the repo), readable by `hybridops` + the service accounts only |
-| status | step 1 written 2026-09-15, awaiting first run |
+| status | step 1 first run 2026-09-15 failed at `Start-Service sshd` (directives appended after the `Match` block); script fixed, re-run pending |
 
 ## Step 1 — bootstrap over RDP (the only step ever done by hand on the console)
 
@@ -51,6 +51,7 @@ AllowedIPs = 10.77.0.0/24
 PersistentKeepalive = 25
 ```
 `sudo wg-quick up ~/.wireguard/hybridvps.conf` then `ssh -i ~/.ssh/hybrid_vps_ed25519 hybridops@10.77.0.1`.
+The script is idempotent: re-run it after any failure (accounts, keys and rules are reused/replaced, never duplicated).
 Re-issuing keys: generate new ones, put the public halves in `bootstrap.ps1`, re-run step 1 (idempotent).
 
 ## Step 2 — lock the console (after SSH over WireGuard is confirmed)

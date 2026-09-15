@@ -38,9 +38,14 @@ $ak = 'C:\ProgramData\ssh\administrators_authorized_keys'
 Set-Content -Path $ak -Value $SshPub -Encoding ascii
 icacls $ak /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
 $cfg = 'C:\ProgramData\ssh\sshd_config'
-$body = Get-Content $cfg | Where-Object { $_ -notmatch '^\s*(PasswordAuthentication|PubkeyAuthentication|ListenAddress|DenyUsers|KbdInteractiveAuthentication)\b' }
-$body += @('', '# --- hybrid provisioning (spec S3) ---', "ListenAddress $ServerIp", 'PubkeyAuthentication yes',
-           'PasswordAuthentication no', 'KbdInteractiveAuthentication no', 'DenyUsers Administrator')
+# The stock file ends with a `Match Group administrators` block. Global directives (ListenAddress etc.) are
+# ILLEGAL inside Match, so our block must go BEFORE the first Match line, not at the end of the file.
+$lines = Get-Content $cfg | Where-Object { $_ -notmatch '^\s*(PasswordAuthentication|PubkeyAuthentication|ListenAddress|DenyUsers|KbdInteractiveAuthentication|SyslogFacility|LogLevel)\b' -and $_ -notmatch '^# --- hybrid' }
+$ours  = @('# --- hybrid provisioning (spec S3) ---', "ListenAddress $ServerIp", 'PubkeyAuthentication yes',
+           'PasswordAuthentication no', 'KbdInteractiveAuthentication no', 'DenyUsers Administrator',
+           'SyslogFacility LOCAL0', 'LogLevel INFO', '')
+$matchIdx = [Array]::FindIndex([string[]]$lines, [Predicate[string]]{ param($l) $l -match '^\s*Match\b' })
+if ($matchIdx -lt 0) { $body = $lines + $ours } else { $body = $lines[0..($matchIdx-1)] + $ours + $lines[$matchIdx..($lines.Count-1)] }
 Set-Content -Path $cfg -Value $body -Encoding ascii
 Remove-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue   # the capability's any-address rule
 
@@ -81,7 +86,18 @@ New-NetFirewallRule -DisplayName 'Hybrid SSH over WireGuard' -Direction Inbound 
 Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Allow
 
 Step "5/6 start sshd on the tunnel address"
-Start-Service sshd
+$deadline = (Get-Date).AddSeconds(30)
+while (-not (Get-NetIPAddress -IPAddress $ServerIp -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep 1 }
+if (-not (Get-NetIPAddress -IPAddress $ServerIp -ErrorAction SilentlyContinue)) { throw "WireGuard adapter has no $ServerIp - tunnel service state: $((Get-Service 'WireGuardTunnel$wg0').Status). See $confDir and Event Viewer > WireGuard." }
+$sshdExe = 'C:\Windows\System32\OpenSSH\sshd.exe'
+$test = & $sshdExe -t -f $cfg 2>&1
+if ($LASTEXITCODE -ne 0) { throw "sshd_config rejected by sshd -t:`n$test" }
+try { Start-Service sshd } catch {
+  Write-Host "sshd failed to start. Last OpenSSH events:" -ForegroundColor Yellow
+  Get-WinEvent -LogName 'OpenSSH/Operational' -MaxEvents 10 -ErrorAction SilentlyContinue | Format-List TimeCreated, Message | Out-String | Write-Host
+  if (Test-Path 'C:\ProgramData\ssh\logs\sshd.log') { Get-Content 'C:\ProgramData\ssh\logs\sshd.log' -Tail 20 | Write-Host }
+  throw
+}
 Start-Sleep 2
 
 Step "6/6 basics: UTC clock, no auto-reboot from Windows Update (maintenance window is set later)"
