@@ -14,6 +14,7 @@
 $ErrorActionPreference = 'Stop'
 $OpsUser   = 'hybridops'
 $ClientPub = 'F+UOLc2dyuJ+koxrAA9H+T6rVcxnHECN72hgC6VZGmo='                              # engineer's WireGuard public key
+$PhonePub  = 'JgpsCJgwWSwfBxUTLRXTfKAzyGYu1EI1Tn03zSMsZl4='                              # trader phone WireGuard public key
 $SshPub    = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII+uWJpLb6qHbClSbkyw1S64wTjJpwijNnk7LnhCpMfz hybrid-ops@wsl'
 $WgNet     = '10.77.0'; $ServerIp = "$WgNet.1"; $ClientIp = "$WgNet.2"; $WgPort = 51820
 $WgMsi     = 'https://download.wireguard.com/windows-client/wireguard-amd64-0.5.3.msi'
@@ -77,6 +78,11 @@ ListenPort = $WgPort
 [Peer]
 PublicKey = $ClientPub
 AllowedIPs = $ClientIp/32
+
+# trader phone
+[Peer]
+PublicKey = $PhonePub
+AllowedIPs = $WgNet.3/32
 "@ | Set-Content -Path "$confDir\wg0.conf" -Encoding ascii
 if (Get-Service 'WireGuardTunnel$wg0' -ErrorAction SilentlyContinue) { & "$wgDir\wireguard.exe" /uninstalltunnelservice wg0; Start-Sleep 2 }
 & "$wgDir\wireguard.exe" /installtunnelservice "$confDir\wg0.conf"

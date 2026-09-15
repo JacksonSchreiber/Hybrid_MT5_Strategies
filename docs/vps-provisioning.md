@@ -8,7 +8,7 @@ commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md`
 |---|---|
 | OS | Windows Server 2022 (provider image) |
 | ops account | `hybridops` (local Administrators; SSH key-only; built-in `Administrator` denied over SSH) |
-| WireGuard | server `10.77.0.1/24`, UDP `51820`; engineer workstation peer `10.77.0.2/32` |
+| WireGuard | server `10.77.0.1/24`, UDP `51820`; peers: engineer workstation `10.77.0.2/32`, trader phone `10.77.0.3/32` |
 | inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
 | clock | UTC |
 | secrets | `C:\ProgramData\hybrid\secrets\` (never in the repo), readable by `hybridops` + the service accounts only |
@@ -39,7 +39,8 @@ only, `DenyUsers Administrator`, sshd **delayed start + restart-on-failure + `hy
 service with the engineer's public key as the only peer; firewall default-deny inbound + the two allow
 rules; UTC; Windows Update set to download-and-notify (no auto-install/reboot).
 
-**Engineer side (WSL):** private keys live in `~/.ssh/hybrid_vps_ed25519` and `~/.wireguard/client.key`.
+**Engineer side (WSL):** private keys live in `~/.ssh/hybrid_vps_ed25519` and `~/.wireguard/client.key`; the phone's
+full config is `~/.wireguard/phone.conf` (also kept in the trader's KeePassXC). Private keys are never in the repo.
 Tunnel config `~/.wireguard/hybridvps.conf`:
 ```
 [Interface]
