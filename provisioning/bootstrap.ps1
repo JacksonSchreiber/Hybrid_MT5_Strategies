@@ -32,12 +32,16 @@ if (-not (Get-LocalUser -Name $OpsUser -ErrorAction SilentlyContinue)) {
 Step "2/6 OpenSSH Server (key-only, PowerShell shell, Administrator denied)"
 if ((Get-WindowsCapability -Online -Name 'OpenSSH.Server*').State -ne 'Installed') { Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null }
 Set-Service sshd -StartupType Automatic
-Start-Service sshd; Start-Sleep 3; Stop-Service sshd            # first start materialises C:\ProgramData\ssh\*
+$cfg = 'C:\ProgramData\ssh\sshd_config'
+if (-not (Test-Path $cfg)) {                                    # first start materialises C:\ProgramData\ssh\* (only on a fresh box)
+  Start-Service sshd; Start-Sleep 3
+}
+Stop-Service sshd -ErrorAction SilentlyContinue
+if (-not (Test-Path $cfg)) { Copy-Item 'C:\Windows\System32\OpenSSH\sshd_config_default' $cfg }   # fallback: the shipped default
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force | Out-Null
 $ak = 'C:\ProgramData\ssh\administrators_authorized_keys'
 Set-Content -Path $ak -Value $SshPub -Encoding ascii
 icacls $ak /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
-$cfg = 'C:\ProgramData\ssh\sshd_config'
 # The stock file ends with a `Match Group administrators` block. Global directives (ListenAddress etc.) are
 # ILLEGAL inside Match, so our block must go BEFORE the first Match line, not at the end of the file.
 $lines = Get-Content $cfg | Where-Object { $_ -notmatch '^\s*(PasswordAuthentication|PubkeyAuthentication|ListenAddress|DenyUsers|KbdInteractiveAuthentication|SyslogFacility|LogLevel)\b' -and $_ -notmatch '^# --- hybrid' }
