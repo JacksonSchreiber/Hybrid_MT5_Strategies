@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   -h|--help) sed -n '3,20p' "$0"; exit 0;;
   *) LEVEL="$1"; shift;;
 esac; done
-[[ -n "$LEVEL" ]] || die "usage: start_level.sh <0-6|7a|7b|7c|8a|8b|9a|9b> [--alt] [--skip-baseline]"
+[[ -n "$LEVEL" ]] || die "usage: start_level.sh <0-6|7a|7b|7c|8a|8b|9a|9b|10a|10b|11> [--alt] [--skip-baseline]"
 
 # --- level table: symbol from to [alt-symbol alt-from alt-to] ---------------
 # Keep in sync with training/training-program.html level cards.
@@ -66,7 +66,14 @@ case "$LEVEL" in
   8b) P=(XAUUSD.dk 2021.01.01 2021.12.31); A=();;   # Phase-2.5 gate (coach 2026-09): XAU 2021, single-shot
   9a) P=(US500.dk 2018.01.01 2018.12.31); A=();;    # Phase-2.5 retry (coach 2026-09): US500 2018, fresh, single-shot
   9b) P=(USOIL.dk 2019.01.01 2019.12.31); A=();;    # Phase-2.5 retry (coach 2026-09): WTI 2019, fresh, single-shot
-  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b, 9a, 9b)";;
+  10a) P=(US500.dk 2014.01.01 2014.12.31); A=();;   # Doctrine-v2 window (coach 2026-09-09): US500 2014, fresh, single-shot; baseline carries the v2 mechanical +1R exit
+  10b) P=(GBPUSD.dk 2019.01.01 2019.12.31); A=();;  # Doctrine-v2 window (coach 2026-09-09): GBPUSD 2019, fresh, single-shot; baseline carries the v2 mechanical +1R exit
+  11) P=(US100.dk 2017.01.01 2017.12.31); A=();;    # Window 11 (coach 2026-09-09): US100 2017, fresh, single-shot; full-lineup exam. AA baseline DEFERRED until EMArevQ freezes so it carries all four detectors (SweepMSS/DeepFib/TrendCont/EMArevQ).
+  12a) P=(EURUSD.dk 2021.01.01 2021.12.31); A=();;  # Pair-12 (coach 2026-09-10): EURUSD 2021, fresh, single-shot. AA baseline DEFERRED until item-1 TP1-ratchet ruling lands so it carries the final exit doctrine.
+  12b) P=(USOIL.dk 2017.01.01 2017.12.31); A=();;   # Pair-12 (coach 2026-09-10): WTI 2017, fresh, single-shot. AA baseline DEFERRED until item-1 TP1-ratchet ruling lands so it carries the final exit doctrine.
+  13a) P=(GBPUSD.dk 2023.01.01 2023.12.31); A=();;  # Pair-13 (coach 2026-09-10): GBPUSD 2023, fresh, single-shot. AA baseline = current doctrine.
+  13b) P=(US100.dk 2019.01.01 2019.12.31); A=();;   # Pair-13 (coach 2026-09-10): NAS100 2019, fresh, single-shot. AA baseline = current doctrine.
+  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b, 9a, 9b, 10a, 10b, 11, 12a, 12b, 13a, 13b)";;
 esac
 if $ALT; then
   [[ ${#A[@]} -gt 0 ]] || die "level $LEVEL has no alternate window (final-exam levels are single-shot)"
@@ -77,8 +84,21 @@ fi
 FROMC="${FROM//./}"; TOC="${TO//./}"
 BASELINE="$BASELINE_DIR/${SYMBOL}_${FROMC}_${TOC}_AA_ALL.csv"
 
+# --- lineup ERA (coach 2026-09-09) -----------------------------------------
+# The live detector set changed at window 11: base EMArev retired, TrendCont +
+# EMArevQ went live. Windows <=10b were traded on SMC,Fib,EMA and their PARKED
+# baselines use that set — they must NOT be retro-changed, or the AA-vs-interactive
+# comparison for a re-run old level goes lineup-mismatched (see memory:
+# aa-vs-interactive-diverges-by-lock-cascade). Both the baseline --strat and the
+# interactive .set below read these SAME vars so they can never drift.
+# Extend the new-era list (11|12|...) as future windows are added.
+case "$LEVEL" in
+  11|12a|12b|13a|13b) LIVE_STRAT="SMC,Fib,TrendCont,EMArevQ"; SET_EMA=false; SET_EMAQ=true;  SET_TC=true;;
+  *)          LIVE_STRAT="SMC,Fib,EMA";               SET_EMA=true;  SET_EMAQ=false; SET_TC=false;;
+esac
+
 log "=== Level $LEVEL$($ALT && echo ' (alternate window)') ==="
-log "    $SYMBOL  $FROM -> $TO  (H4, real ticks, \$25k, interactive)"
+log "    $SYMBOL  $FROM -> $TO  (H4, real ticks, \$25k, interactive)  lineup: $LIVE_STRAT"
 if $DRYRUN; then
   log "dry-run: baseline file would be $BASELINE ($([[ -f $BASELINE ]] && echo exists || echo missing))"
   log "dry-run: would launch: \"$TERMINAL\" /config:$INI_WIN"
@@ -100,7 +120,9 @@ else
   # Locate the journal by the path mt5_verify itself reports, NOT a before/after
   # dir diff: an earlier verify run (e.g. a data-frequency sanity check) may have
   # left a same-named journal, so the diff would see "no new file" and wrongly fail.
-  vout=$("$HERE/mt5_verify.sh" --mode ALL --strat SMC,Fib,EMA --symbol "$SYMBOL" \
+  # Baseline lineup = this level's ERA lineup (set above); MUST match the interactive
+  # .set below, or the AA-vs-interactive comparison is invalid.
+  vout=$("$HERE/mt5_verify.sh" --mode ALL --strat "$LIVE_STRAT" --symbol "$SYMBOL" \
       --from "$FROM" --to "$TO" --model 4 --timeout 5400 2>&1)
   printf '%s\n' "$vout"
   NEWJ=$(printf '%s\n' "$vout" | sed -n 's/^journal:[[:space:]]*//p' | tail -1)
@@ -118,7 +140,9 @@ mkdir -p "$SETDIR"
   echo "InpAutoApprove=0"
   echo "InpUseSMC=true"
   echo "InpUseFib=true"
-  echo "InpUseEMA=true"
+  echo "InpUseEMA=$SET_EMA"        # ERA-gated (see above): base EMArev live only <=10b
+  echo "InpUseEMArevQ=$SET_EMAQ"   # EMArevQ (quiet-trigger only) live from window 11
+  echo "InpUseTrendCont=$SET_TC"   # trend-continuation detector live from window 11
   echo "InpUseShock=false"        # Strategy 4 candidate stays OFF in the interactive/training path
   echo "InpUseEmaRevInv=false"    # EMArev-Inverse backtest detector stays OFF in the training path
   echo "InpOfferInverse=$($INVERSE && echo true || echo false)"  # EMArev INVERSE dialog option (default OFF; --inverse to enable)

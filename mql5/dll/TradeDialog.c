@@ -80,6 +80,7 @@
 #define ID_YES      100
 #define ID_NO       101
 #define ID_INV      102   /* BUTTON: INVERSE (open a position WITH the stretch) */
+#define ID_MKT      103   /* BUTTON: enter NOW at market (delay-reopen choice, item 3) */
 #define ID_ENTRY    200   /* EDIT */
 #define ID_SL       201   /* EDIT */
 #define ID_TP       202   /* EDIT (single TP, or TP1 for scale-out) */
@@ -101,6 +102,7 @@
 #define ID_MCLOSE   400   /* BUTTON: close full position (arm -> confirm)      */
 #define ID_MCLOSE50 401   /* BUTTON: close 50% (arm -> confirm)                */
 #define ID_MBE      402   /* BUTTON: SL -> break-even (instant; reversible)    */
+#define ID_MRATCHET 403   /* BUTTON: SL -> TP1 ratchet (item 2; graded, runner phase, once) */
 #define ID_MEXTEND  404   /* BUTTON: EXTEND (cancel the inverse 12-bar auto-close) */
 #define ID_MSTATE   403   /* read-only multiline EDIT: live position state     */
 #define PM_UPDATE   (WM_APP + 1)   /* EA pushed new state text (cross-thread)  */
@@ -111,15 +113,15 @@
 #define L_PADY     18
 #define L_LABELW   108
 #define L_GAP      10
-#define L_VALUEW   250
+#define L_VALUEW   350   /* widened so the 3-button decision row (Pending @ frozen / Market now / No) fits */
 #define L_ROWH     30
 #define L_EDITH    24
 #define L_NROWS    9      /* sym,strat,dir,entry,sl,tp,lots,rr,order */
 #define L_CLIENTW  (L_PADX + L_LABELW + L_GAP + L_VALUEW + L_PADX)
 #define L_ROWSBOT  (L_PADY + L_NROWS * L_ROWH)
-#define L_BTNW     130
+#define L_BTNW     160   /* wider: fits "&Pending @ frozen" without clipping */
 #define L_BTNH     34
-#define L_BTNGAP   20
+#define L_BTNGAP   12
 #define L_HINTH    40
 #define L_EVH      110    /* events list edit height when expanded */
 #define L_RBTNH    30
@@ -148,8 +150,9 @@ typedef struct {
     HWND   hEvToggle;            /* collapse/expand the events list */
     HWND   hRedact;              /* coach-mode toggle button */
     HWND   hHint;
-    HWND   hYes,   hNo,  hInv;
+    HWND   hYes,   hNo,  hInv,  hMkt;
     int    offer_inv;           /* 1 = show the INVERSE button (EMArev + gate ok) */
+    int    offer_mkt;           /* 1 = show the "enter now at market" button (a delay reopen) */
     HWND   hShot;               /* "Retake H4 screenshot" button */
     int    shot_req;            /* 1 = operator asked to re-take the H4 screenshot */
     HWND   hDelay;              /* "Delay 1 bar" button (re-ask on the next bar) */
@@ -162,7 +165,7 @@ typedef struct {
     wchar_t sym[64];            /* real symbol (restored when redaction off) */
     wchar_t evAbs[4096];        /* events list, absolute dates */
     wchar_t evRel[4096];        /* events list, relative dates */
-    HFONT  fNormal, fBold, fCaption, fHint;
+    HFONT  fNormal, fBold, fCaption, fHint, fBadge;
     int    result;              /* -1 pending, 1 accept, 2 skip */
     int    skip_reason;         /* 1-6 skip-reason code (set on skip; 6 = other) */
     int    reason_mode;         /* 1 = reason picker showing (Accept/Skip hidden) */
@@ -197,10 +200,11 @@ typedef struct {
     HANDLE  hReady;             /* signaled once the window+controls exist   */
     HWND    hwnd;
     HWND    hState;             /* read-only multiline: direction/lots/R/... */
-    HWND    hClose, hClose50, hBe, hExtend;
-    volatile LONG action;       /* 0 none, 1 close, 2 close50, 3 be, 4 extend (latched)*/
+    HWND    hClose, hClose50, hBe, hExtend, hRatchet;
+    volatile LONG action;       /* 0 none, 1 close, 2 close50, 3 be, 4 extend, 5 ratchet(latched)*/
     volatile LONG show_extend;  /* 1 = EXTEND button relevant (managing an inverse)   */
     volatile LONG be_enable;    /* 1 = BE button clickable (valid stop dist)  */
+    volatile LONG rt_enable;    /* 1 = SL->TP1 ratchet clickable (runner phase, once, price past TP1) */
     CRITICAL_SECTION cs;        /* guards buf + lots                          */
     wchar_t buf[1024];          /* pending state text (EA -> panel)           */
     double  lots;               /* current volume (EA -> panel)               */
@@ -351,16 +355,19 @@ static void relayout(void)
         for (int i = 0; i < 6; i++) ShowWindow(g.hReason[i], SW_HIDE);
         ShowWindow(g.hYes, SW_SHOW); ShowWindow(g.hNo, SW_SHOW);
         ShowWindow(g.hInv, g.offer_inv ? SW_SHOW : SW_HIDE);
-        int nbtn = g.offer_inv ? 3 : 2;
+        ShowWindow(g.hMkt, g.offer_mkt ? SW_SHOW : SW_HIDE);
+        /* At a reopen the YES button places a PENDING at the frozen entry, not a fill; relabel it
+           so "Accept" next to "Market now" cannot be misread as "enter now". Restore otherwise. */
+        SetWindowTextW(g.hYes, g.offer_mkt ? L"&Pending @ frozen" : L"&Accept");
+        /* row order: YES (=pending @ frozen at a reopen), [MARKET now], [INVERSE], NO. */
+        int nbtn = 2 + (g.offer_mkt ? 1 : 0) + (g.offer_inv ? 1 : 0);
         int rowW = L_BTNW * nbtn + L_BTNGAP * (nbtn - 1);
         int bx = (W - rowW) / 2;
-        MoveWindow(g.hYes, bx, btnTop, L_BTNW, L_BTNH, TRUE);
-        if (g.offer_inv) {
-            MoveWindow(g.hInv, bx + L_BTNW + L_BTNGAP, btnTop, L_BTNW, L_BTNH, TRUE);
-            MoveWindow(g.hNo,  bx + (L_BTNW + L_BTNGAP) * 2, btnTop, L_BTNW, L_BTNH, TRUE);
-        } else {
-            MoveWindow(g.hNo,  bx + L_BTNW + L_BTNGAP, btnTop, L_BTNW, L_BTNH, TRUE);
-        }
+        int k = 0;
+        MoveWindow(g.hYes, bx + (L_BTNW + L_BTNGAP) * k, btnTop, L_BTNW, L_BTNH, TRUE); k++;
+        if (g.offer_mkt) { MoveWindow(g.hMkt, bx + (L_BTNW + L_BTNGAP) * k, btnTop, L_BTNW, L_BTNH, TRUE); k++; }
+        if (g.offer_inv) { MoveWindow(g.hInv, bx + (L_BTNW + L_BTNGAP) * k, btnTop, L_BTNW, L_BTNH, TRUE); k++; }
+        MoveWindow(g.hNo,  bx + (L_BTNW + L_BTNGAP) * k, btnTop, L_BTNW, L_BTNH, TRUE); k++;
         y = btnTop + L_BTNH;
         /* full-width "Retake H4 screenshot" row under the decision buttons */
         ShowWindow(g.hShot, SW_SHOW);
@@ -443,6 +450,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int id = LOWORD(wp);
         if (id == ID_YES) { if (g.ok) g.result = 1; return 0; }
         if (id == ID_INV) { if (g.offer_inv) g.result = 3; return 0; }  /* INVERSE */
+        if (id == ID_MKT) { if (g.offer_mkt) g.result = 5; return 0; }  /* enter NOW at market */
         if (id == ID_DELAY){ g.result = 4; return 0; }          /* delay 1 bar, re-ask */
         if (id == ID_NO)  { show_reason_picker(1); return 0; }   /* Skip -> ask why */
         if (id == ID_BACK){ show_reason_picker(0); return 0; }   /* cancel the picker */
@@ -483,7 +491,8 @@ static HWND make_value_static(HWND parent, const wchar_t *txt, int x, int y,
 __declspec(dllexport)
 int TD_Open(const wchar_t *title,   const wchar_t *symbol,
             const wchar_t *strategy, const wchar_t *direction,
-            const wchar_t *sigtime, const wchar_t *regime, const wchar_t *entry,
+            const wchar_t *sigtime, const wchar_t *regime, const wchar_t *protocol,
+            const wchar_t *entry,
             const wchar_t *sl,      const wchar_t *tp,
             const wchar_t *tp2,     const wchar_t *lots,
             const wchar_t *rr)
@@ -503,6 +512,7 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     g.fBold    = make_font(-18, FW_BOLD);
     g.fCaption = make_font(-16, FW_NORMAL);
     g.fHint    = make_font(-14, FW_NORMAL);
+    g.fBadge   = make_font(-14, FW_BOLD);    /* protocol decision-class badge (bold, colored, full-width) */
 
     if (g_bg   == NULL) g_bg   = CreateSolidBrush(COL_BG);
     if (g_edbg == NULL) g_edbg = CreateSolidBrush(COL_EDITBG);
@@ -538,7 +548,7 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
                                 g.style, x, yy, winW0, winH0, NULL, NULL, g_hinst, NULL);
     if (!hwnd) {
         DeleteObject(g.fNormal); DeleteObject(g.fBold);
-        DeleteObject(g.fCaption); DeleteObject(g.fHint);
+        DeleteObject(g.fCaption); DeleteObject(g.fHint); DeleteObject(g.fBadge);
         InterlockedExchange(&g_inuse, 0);
         return 0;
     }
@@ -562,6 +572,20 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     CAP(L"Time");      make_value_static(hwnd, sigtime, vx, r, VALUEW, ROWH - 6,
                        is_fri ? COL_SL : COL_VALUE, is_fri ? g.fBold : g.fNormal);                                r += ROWH;
     CAP(L"Regime");    make_value_static(hwnd, regime, vx, r, VALUEW, ROWH - 6, COL_VALUE, g.fBold);              r += ROWH;
+    /* Protocol decision-class badge (coach 2026-09-09; wording tightened 2026-09-10, item 4):
+       full-width, bold, colour-coded so TAKE vs DISCRETION is unmistakable at a glance.
+       Green=TAKE, amber=DISCRETION. The reason CITES THE RULE, never the market direction -
+       a TAKE is a gate-class strategy in a TREND regime, in BOTH directions (never "due to the
+       uptrend", which misreads a with-the-rule SELL as anomalous). */
+    {
+        int is_take = (protocol && (protocol[0] == L'T' || protocol[0] == L't'));
+        make_value_static(hwnd,
+            is_take ? L"PROTOCOL: TAKE - TREND regime, gate-class strategy (both directions)"
+                    : L"PROTOCOL: DISCRETION - non-gate strategy or CHOP/blank; trader's read",
+            PADX, r, L_CLIENTW - 2 * PADX, ROWH - 6,
+            is_take ? COL_ENTRY : COL_CAUTION, g.fBadge);
+        r += ROWH;
+    }
 
     /* Entry / SL / TP(s) are ALL editable + independent. Green/red/blue tie each
        to its chart line. Scale-out strategies split TP into TP1 (bank) + TP2. */
@@ -636,6 +660,10 @@ int TD_Open(const wchar_t *title,   const wchar_t *symbol,
     g.hInv = CreateWindowExW(0, L"BUTTON", L"&Inverse",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, L_BTNW, L_BTNH, hwnd, (HMENU)(INT_PTR)ID_INV, g_hinst, NULL);
+    g.hMkt = CreateWindowExW(0, L"BUTTON", L"&Market now",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, L_BTNW, L_BTNH, hwnd, (HMENU)(INT_PTR)ID_MKT, g_hinst, NULL);
+    SendMessageW(g.hMkt, WM_SETFONT, (WPARAM)g.fNormal, TRUE);
     SendMessageW(g.hYes, WM_SETFONT, (WPARAM)g.fNormal, TRUE);
     SendMessageW(g.hNo,  WM_SETFONT, (WPARAM)g.fNormal, TRUE);
     SendMessageW(g.hInv, WM_SETFONT, (WPARAM)g.fNormal, TRUE);
@@ -758,6 +786,7 @@ void TD_Close(void)
     if (g.fBold)    { DeleteObject(g.fBold);    g.fBold    = NULL; }
     if (g.fCaption) { DeleteObject(g.fCaption); g.fCaption = NULL; }
     if (g.fHint)    { DeleteObject(g.fHint);    g.fHint    = NULL; }
+    if (g.fBadge)   { DeleteObject(g.fBadge);   g.fBadge   = NULL; }
     InterlockedExchange(&g_inuse, 0);
 }
 
@@ -797,6 +826,17 @@ __declspec(dllexport)
 void TD_OfferInverse(int on)
 {
     g.offer_inv = on ? 1 : 0;
+    if (g.hwnd) { relayout(); InvalidateRect(g.hwnd, NULL, TRUE); }
+}
+
+/* Offer (or hide) the "enter NOW at market" button. The EA calls TD_OfferMarketNow(1) after   */
+/* TD_Open only on a delay REOPEN (item 3); default hidden. On a reopen the trader chooses:     */
+/* Accept = pending at the frozen entry (structural SL/TP); Market now = fill at market with the */
+/* same structural SL/TP, lots resized to 1% off the real entry-SL distance, MinRR re-checked.  */
+__declspec(dllexport)
+void TD_OfferMarketNow(int on)
+{
+    g.offer_mkt = on ? 1 : 0;
     if (g.hwnd) { relayout(); InvalidateRect(g.hwnd, NULL, TRUE); }
 }
 
@@ -857,6 +897,7 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == ID_MBE) { InterlockedExchange(&gm.action, 3); return 0; }  /* instant */
+        if (id == ID_MRATCHET) { InterlockedExchange(&gm.action, 5); return 0; } /* instant SL->TP1 */
         if (id == ID_MEXTEND) { InterlockedExchange(&gm.action, 4); return 0; } /* cancel auto-close */
         if (id == ID_MCLOSE) {
             if (gm.armed == 1) { InterlockedExchange(&gm.action, 1); panel_disarm(); }
@@ -878,6 +919,12 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         LeaveCriticalSection(&gm.cs);
         EnableWindow(gm.hBe, gm.be_enable ? TRUE : FALSE);
         if (gm.hExtend) ShowWindow(gm.hExtend, gm.show_extend ? SW_SHOW : SW_HIDE);
+        /* ratchet shares the EXTEND row: shown for graded (not-extend) positions, disabled
+           until the runner phase + price-past-TP1 make it valid (rt_enable). */
+        if (gm.hRatchet) {
+            ShowWindow(gm.hRatchet, gm.show_extend ? SW_HIDE : SW_SHOW);
+            EnableWindow(gm.hRatchet, gm.rt_enable ? TRUE : FALSE);
+        }
         double d = lots - gm.last_lots; if (d < 0) d = -d;
         if (gm.last_lots >= 0 && d > 1e-9) panel_disarm();   /* volume changed => stale confirm */
         gm.last_lots = lots;
@@ -943,10 +990,16 @@ static DWORD WINAPI panel_thread(LPVOID param)
     gm.hExtend = CreateWindowExW(0, L"BUTTON", L"EXTEND (cancel 12-bar auto-close)",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         P_PAD, y + P_BTNH + P_BTNGAP, P_W - 2*P_PAD, P_BTNH, hwnd, (HMENU)(INT_PTR)ID_MEXTEND, g_hinst, NULL);
+    /* SL->TP1 ratchet: same full-width row as EXTEND (mutually exclusive - EXTEND is inverse-only,
+       ratchet is graded-only). Created hidden; PM_UPDATE shows it for graded positions.            */
+    gm.hRatchet = CreateWindowExW(0, L"BUTTON", L"SL → TP1 (ratchet, once)",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+        P_PAD, y + P_BTNH + P_BTNGAP, P_W - 2*P_PAD, P_BTNH, hwnd, (HMENU)(INT_PTR)ID_MRATCHET, g_hinst, NULL);
     SendMessageW(gm.hClose,   WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
     SendMessageW(gm.hClose50, WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
     SendMessageW(gm.hBe,      WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
     SendMessageW(gm.hExtend,  WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
+    SendMessageW(gm.hRatchet, WM_SETFONT, (WPARAM)gm.fBtn, TRUE);
 
     gm.hwnd = hwnd;
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);      /* visible but don't steal focus */
@@ -997,7 +1050,7 @@ int TDM_Open(const wchar_t *title)
 /* Push the live position-state text (multiline), current volume (for the arm-
    disarm on an auto scale-out), and whether SL->BE is currently valid.        */
 __declspec(dllexport)
-void TDM_Update(const wchar_t *state_text, double lots, int be_enabled)
+void TDM_Update(const wchar_t *state_text, double lots, int be_enabled, int ratchet_enabled)
 {
     if (!gm.hwnd) return;
     EnterCriticalSection(&gm.cs);
@@ -1005,6 +1058,7 @@ void TDM_Update(const wchar_t *state_text, double lots, int be_enabled)
     gm.lots = lots;
     LeaveCriticalSection(&gm.cs);
     InterlockedExchange(&gm.be_enable, be_enabled ? 1 : 0);
+    InterlockedExchange(&gm.rt_enable, ratchet_enabled ? 1 : 0);
     PostMessageW(gm.hwnd, PM_UPDATE, 0, 0);
 }
 

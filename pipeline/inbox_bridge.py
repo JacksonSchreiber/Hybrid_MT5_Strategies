@@ -145,6 +145,26 @@ def setup_levels(row) -> tuple:
             _f(row, "orig_tp2", "tp2"))
 
 
+def asset_class(symbol: str) -> str:
+    """Coarse, blind-SAFE instrument class for the advisor's library reads (coach 2026-09-10):
+    FX major / equity index / energy / metal. Context only — NOT a verdict threshold, and never
+    the symbol name itself. Computed here; only the class label is emitted."""
+    s = (symbol or "").split(".")[0].upper()       # strip .dk / .sim broker suffix
+    if "OIL" in s or s in ("WTI", "BRENT", "XTIUSD", "XBRUSD", "XNGUSD"):
+        return "energy"
+    if s.startswith("XAU") or s.startswith("XAG") or s in ("GOLD", "SILVER"):
+        return "metal"
+    if s in ("US30", "US100", "US500", "US2000", "NAS100", "USTEC", "SPX500", "NDX", "SPX",
+             "GER40", "DE40", "UK100", "JP225", "EU50", "AUS200", "HK50"):
+        return "equity index"
+    majors = {"EUR", "GBP", "USD", "JPY", "CHF", "AUD", "CAD", "NZD"}
+    if len(s) == 6 and s[:3] in majors and s[3:] in majors:
+        return "FX major"
+    if len(s) == 6 and (s[:3] in majors or s[3:] in majors):
+        return "FX cross"
+    return "(unclassified)"
+
+
 def blind_setup_md(row) -> tuple[str, datetime | None]:
     """Build the blind setup.md (no symbol, no date) + return the signal datetime
     (used for the D1 render). Numbers come from the journal row."""
@@ -198,12 +218,31 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
     else:
         regime_line = "REGIME: (warming up / unavailable)"
 
+    # protocol decision-class: verbatim from the EA sidecar (mechanical from regime+strategy,
+    # both already shown here, so no blindness leak). The reason CITES THE RULE, never the market
+    # direction (coach item 4, 2026-09-10): a TAKE is "gate-class strategy in a TREND regime, BOTH
+    # directions" — never "due to the uptrend" (which misreads a with-the-rule SELL as anomalous).
+    cls = (row.get("decision_class") or "").strip().upper()
+    if cls == "TAKE":
+        protocol_line = ("PROTOCOL: TAKE — TREND regime · gate-class strategy "
+                         "(SweepMSS/DeepFib), both directions · skip legal only for "
+                         "event / W / correlation")
+    elif cls == "DISCRETION":
+        protocol_line = ("PROTOCOL: DISCRETION — not a gate-class TREND setup "
+                         "(non-gate strategy, or CHOP / blank / warm-up regime; every "
+                         "TrendCont) · trader's read")
+    else:
+        protocol_line = "PROTOCOL: (unavailable)"
+
     lines = [
         f"# BLIND SETUP — {strat} {dstr}",
         "_No symbol, no date. For the blind advisor. Judge from the charts + the library only._",
         "",
         f"- **Session / day / time:** {sess} / {dow} / {tod}",
+        f"- **Asset class:** {asset_class(row.get('symbol'))} "
+        "(context for library reads; not a verdict threshold)",
         f"- **{regime_line}** (D1 200-EMA/ADX, chart-derived)",
+        f"- **{protocol_line}**",
         f"- **Proposed levels (chart-visible prices):** entry {entry}, SL {sl}, "
         f"TP1 {tp1}, TP2 {tp2}",
         f"- **Risk geometry:** SL {rmult(sl)} · TP1 {rmult(tp1)} · TP2 {rmult(tp2)} "
@@ -254,8 +293,14 @@ def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None
     if len(bars) < 20:
         return False
     seg = bars[-D1_RENDER_BARS:]
-    closes = [b[4] for b in seg]
-    ema = d1s._ema(closes, 20)
+    ns = len(seg)
+    # Three EMAs (item 8, coach 2026-09-10) computed over the FULL dumped history, then sliced to
+    # the render window so EMA200 is warmed by the bars before it (matches a live, fully-warmed D1
+    # chart). Colours mirror the MT5 HybridTriEMA overlay exactly (gold / DeepSkyBlue / violet).
+    full_closes = [b[4] for b in bars]
+    ema20  = d1s._ema(full_closes, 20)[-ns:]
+    ema50  = d1s._ema(full_closes, 50)[-ns:]
+    ema200 = d1s._ema(full_closes, 200)[-ns:]
     hi = max(b[2] for b in seg)
     lo = min(b[3] for b in seg)
     # widen the price range so the setup levels (entry/SL/TP) stay on-screen even
@@ -281,10 +326,17 @@ def render_d1(symbol: str, asof: datetime, dst: Path, d1_csv: Path | None = None
         top_y, bot_y = yv(max(o, c)), yv(min(o, c))
         d.rectangle([x - cw // 2, top_y, x + cw // 2, max(top_y + 1, bot_y)],
                     fill=col if c >= o else (13, 17, 23), outline=col)
-    # EMA20 (amber) for regime context
-    pts = [(pad + i * ((W - 2 * pad) // n) + cw // 2, yv(ema[i])) for i in range(n)]
-    if len(pts) > 1:
-        d.line(pts, fill=(210, 153, 34), width=2)
+    # Three-EMA overlay (item 8): EMA20 gold 1px, EMA50 DeepSkyBlue 1px, EMA200 violet 2px — the
+    # same colours/widths as the MT5 HybridTriEMA H4 overlay, so the H4 and D1 charts read as one
+    # set. A far EMA200 clips at the plot edge rather than squashing the candle scale (context only).
+    def _emapts(series):
+        return [(pad + i * ((W - 2 * pad) // n) + cw // 2, yv(series[i])) for i in range(n)]
+    for series, col, wd in ((ema20,  (255, 215, 0), 1),     # clrGold
+                            (ema50,  (0, 191, 255), 1),     # clrDeepSkyBlue
+                            (ema200, (238, 130, 238), 2)):  # clrViolet
+        pts = _emapts(series)
+        if len(pts) > 1:
+            d.line(pts, fill=col, width=wd)
     # setup levels: dashed entry (green) / SL (red) / TP1·TP2 (blue), matching the
     # H4 chart's colours — gives the advisor the daily context WITH the trade plan.
     if lv:

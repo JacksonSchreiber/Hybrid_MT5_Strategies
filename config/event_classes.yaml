@@ -45,8 +45,13 @@ rules:
   # costing ~+11R of doctrine-legal trades (exam audit). (coach Phase-2.5, 2026-09)
   - {re: '\bspeaks\b|\bspeech\b|member.*speak', class: C}
   # OPEC-JMMC is a routine monthly monitoring committee -> C. Must beat the '\bopec\b'
-  # W rule below; full "OPEC Meetings" and G7/G20 summits stay W. (coach Phase-2.5)
+  # V rule below. Ledger reclass (coach 2026-09-10): full "OPEC Meetings" -> V (V block),
+  # G7/G20 Meetings -> C (next rule); only EU Council / EU summit remain W. (coach Phase-2.5)
   - {re: 'opec.?jmmc|\bjmmc\b', class: C}
+  # G7/G20 Meetings -> C (ledger reclass, coach 2026-09-10; was W under the old summit rule).
+  # Placed in the top override block so nothing can shadow it back to W; no other rule
+  # matches these tokens anyway.
+  - {re: '\bg7\b|\bg-7\b|\bg20\b|\bg-20\b', class: C}
 
   # --- V: violation-class -----------------------------------------------------------
   # Fed Chair semiannual testimony (Humphrey-Hawkins). Must precede the generic
@@ -63,6 +68,9 @@ rules:
   - {re: '\bpce\b', class: V}
   - {re: 'unemployment rate', class: V}
   - {re: 'average (hourly )?earnings|claimant count', class: V}
+  # Full OPEC Meetings -> V (ledger reclass, coach 2026-09-10; was W). OPEC-JMMC is pulled
+  # to C by the top override, so this only catches the full production-decision meeting.
+  - {re: '\bopec\b', class: V}
 
   # --- W: weekend-hold class --------------------------------------------------------
   # Elections / referendums / plebiscites — political, so country-skip-exempt.
@@ -76,8 +84,9 @@ rules:
   - {re: 'no.?confidence|confidence vote|meaningful vote|leadership (ballot|election|contest)|motion of no confidence|vote of no confidence', class: W, political: true}
   # Government funding / shutdown / debt-ceiling deadlines; announced fiscal set-pieces.
   - {re: 'government shutdown|funding deadline|shutdown deadline|debt ceiling|debt limit|autumn statement|spring statement|budget statement|mini.?budget', class: W}
-  # Scheduled summits that can end in a communiqe (G7/G20/EU Council/NATO/OPEC).
-  - {re: '\bg7\b|\bg-7\b|\bg20\b|\bg-20\b|european council|\beu summit\b|\bopec\b', class: W}
+  # Scheduled summits that can end in a communiqe. G7/G20 -> C and full OPEC -> V per the
+  # 2026-09-10 ledger reclass (rules above); EU Council / EU summit remain weekend-hold.
+  - {re: 'european council|\beu summit\b', class: W}
   # Sovereign rating review dates (published each December; all fall on Fridays).
   - {re: 'sovereign.*rating|rating review|credit rating (review|decision)', class: W}
 
