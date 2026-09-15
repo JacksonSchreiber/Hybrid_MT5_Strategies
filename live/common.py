@@ -34,6 +34,7 @@ _DEFAULT_CONFIG = {
                    "USDCHF": "OANDA:USDCHF", "NZDUSD": "OANDA:NZDUSD", "US100": "OANDA:NAS100USD", "US500": "OANDA:SPX500USD", "US30": "OANDA:US30USD",
                    "XAUUSD": "OANDA:XAUUSD", "XAGUSD": "OANDA:XAGUSD", "USOIL": "OANDA:WTICOUSD", "UKOIL": "OANDA:BCOUSD"},
     "tv_widget": True,
+    "mt5": {"terminal_path": "C:\\Program Files\\OANDA MetaTrader 5\\terminal64.exe"},
 }
 
 def _deep_merge(a: dict, b: dict) -> dict:
@@ -48,6 +49,9 @@ def load_config(path: str | None = None) -> dict:
     if os.path.exists(p):
         cfg = _deep_merge(cfg, json.load(open(p, encoding="utf-8")))
     cfg["_path"] = p
+    try:
+        from live import mt5feed; mt5feed.configure((cfg.get("mt5") or {}).get("terminal_path"))
+    except Exception: pass
     if not cfg["root"]:
         raise SystemExit(f"live config {p}: 'root' (queue root) is required")
     if not cfg["common_files"]:

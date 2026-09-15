@@ -127,18 +127,27 @@ def _dashed(d, xa, xb, y, col, on=6, off=6):
     while x < xb:
         d.line([(x, y), (min(x + on, xb), y)], fill=col); x += on + off
 
-def render_signal(sig: dict, out_dir: str) -> tuple[str, str]:
-    """writes <out_dir>/<key>-h4.png and -d1.png (idempotent per delay_count). returns the two paths."""
+def signal_bars(sig: dict, tf: str) -> list[list]:
+    """bars for a signal: the terminal feed when available (live box), else whatever the EA embedded."""
+    try:
+        from live import mt5feed
+        b = mt5feed.bars(sig["symbol"], tf, 500)
+        if b: return b
+    except Exception: pass
+    return sig.get(f"bars_{tf}") or []
+
+def render_signal(sig: dict, out_dir: str, fresh: bool = False) -> tuple[str, str]:
+    """writes <out_dir>/<key>-h4.png and -d1.png (idempotent per delay_count unless fresh). returns the two paths."""
     key = sig["signal_key"]; stamp = f"{key}-d{sig.get('delay_count', 0)}"
     os.makedirs(out_dir, exist_ok=True)
     p_h4 = os.path.join(out_dir, f"{stamp}-h4.png"); p_d1 = os.path.join(out_dir, f"{stamp}-d1.png")
-    if os.path.exists(p_h4) and os.path.exists(p_d1): return p_h4, p_d1
+    if not fresh and os.path.exists(p_h4) and os.path.exists(p_d1): return p_h4, p_d1
     digits = _digits(sig)
     head = f"{sig['symbol']}  {sig['strategy']} {sig['direction']}  #{sig['signal_id']}  {sig.get('sigtime_text', '')}"
     sig_t = _epoch(sig.get("signal_time"))
     lv = sig.get("levels") or {}
-    render(sig.get("bars_h4") or [], title="H4  " + head, levels=lv, overlay=sig.get("overlay"), n_show=H4_BARS, signal_t=sig_t, digits=digits).save(p_h4 + ".tmp", "PNG"); os.replace(p_h4 + ".tmp", p_h4)
-    render(sig.get("bars_d1") or [], title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
+    render(signal_bars(sig, "h4"), title="H4  " + head, levels=lv, overlay=sig.get("overlay"), n_show=H4_BARS, signal_t=sig_t, digits=digits).save(p_h4 + ".tmp", "PNG"); os.replace(p_h4 + ".tmp", p_h4)
+    render(signal_bars(sig, "d1"), title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
     return p_h4, p_d1
 
 def _digits(sig: dict) -> int:

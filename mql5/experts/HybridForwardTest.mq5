@@ -134,6 +134,7 @@ input int    InpTaskPollSec      = 5;      // poll tasks/ at least this often (Q
 input int    InpHeartbeatSec     = 60;     // heartbeat at least this often (E5: <=60s)
 input int    InpLiveMaxAgeBars   = 3;      // G2: unanswered signal ages out after N H4 bars -> skip code 8 (live.json overrides)
 input int    InpElectionHorizonDays = 14;  // G1: NO-HOLD election gate horizon in calendar days (live.json overrides)
+input int    InpSignalBars         = 500; // bars embedded in each signal JSON (H4 + D1). 0 = none: the web app/advisor pull bars from the terminal (MetaTrader5 API)
 //--- strategy selection
 input bool   InpUseSMC      = true;     // Strategy 1: liquidity sweep + MSS (priority 1)
 input bool   InpUseFib      = true;     // Strategy 2: deep fib retracement (priority 2)
@@ -1530,11 +1531,12 @@ void WriteSignalJson(string status,string auto_reason)
    j.EndObj();
    //--- bars: last 500 H4 + 500 D1, oldest -> newest, [t,o,h,l,c,v]
    MqlRates r[]; ArraySetAsSeries(r,false);
-   int nh=CopyRates(_Symbol,PERIOD_H4,0,500,r);
+   int nb=MathMax(0,MathMin(InpSignalBars,2000));
+   int nh=(nb>0 ? CopyRates(_Symbol,PERIOD_H4,0,nb,r) : 0);
    j.Key("bars_h4"); j.BeginArr();
    for(int i=0;i<nh;i++){ j.BeginArr(); j.Int((long)r[i].time); j.Num(r[i].open,_Digits); j.Num(r[i].high,_Digits); j.Num(r[i].low,_Digits); j.Num(r[i].close,_Digits); j.Int(r[i].tick_volume); j.EndArr(); }
    j.EndArr();
-   int nd=CopyRates(_Symbol,PERIOD_D1,0,500,r);
+   int nd=(nb>0 ? CopyRates(_Symbol,PERIOD_D1,0,nb,r) : 0);
    j.Key("bars_d1"); j.BeginArr();
    for(int i=0;i<nd;i++){ j.BeginArr(); j.Int((long)r[i].time); j.Num(r[i].open,_Digits); j.Num(r[i].high,_Digits); j.Num(r[i].low,_Digits); j.Num(r[i].close,_Digits); j.Int(r[i].tick_volume); j.EndArr(); }
    j.EndArr();

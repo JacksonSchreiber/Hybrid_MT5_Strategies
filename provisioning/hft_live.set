@@ -20,3 +20,4 @@ InpUseEmaRevInv=false
 InpUseTrendCont=true
 InpOfferInverse=false
 InpTestInverse=false
+InpSignalBars=0

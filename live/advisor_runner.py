@@ -88,7 +88,7 @@ Images: `d1.png` (daily context, regime) · `h4.png` (H4 setup with the detector
 def write_bundle(sig: dict, cfg: dict) -> str:
     live_dir = cfg["advisor"]["live_dir"]; key = sig["signal_key"]
     bdir = os.path.join(live_dir, "bundles", key); os.makedirs(bdir, exist_ok=True)
-    h4, d1 = charts.render_signal(sig, os.path.join(cfg["root"], "web", "charts"))
+    h4, d1 = charts.render_signal(sig, os.path.join(cfg["root"], "web", "charts"), fresh=True)
     import shutil
     shutil.copyfile(h4, os.path.join(bdir, "h4.png")); shutil.copyfile(d1, os.path.join(bdir, "d1.png"))
     C.atomic_write_text(os.path.join(bdir, "setup.md"), build_setup_md(sig, cfg))

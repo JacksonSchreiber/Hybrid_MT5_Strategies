@@ -74,6 +74,10 @@ def dashboard(q: dict) -> str:
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
     syms = C.symbols(CFG)
     ks = C.kill_switch(CFG)
+    from live import mt5feed
+    fs = mt5feed.status()
+    if fs.get("available"):
+        out.append(f'<div class="k">terminal feed: {"connected" if fs.get("connected") else "<span class=bad>NOT CONNECTED</span>"} · {E(str(fs.get("server") or ""))} · build {fs.get("build")}</div>')
     out.append(f'<div class="card"><div class="row"><div><div class="k">Kill switch</div><div class="big {"ok" if ks else "bad"}">{"TRADING ENABLED" if ks else ("DISABLED" if ks is False else "DISABLED (no config file)")}</div></div>'
                f'<form method="post" action="/kill" class="inline" style="margin-left:auto"><input type="hidden" name="enable" value="{0 if ks else 1}"><button class="btn {"no" if ks else "go"}" onclick="return confirm(\'{"Disable" if ks else "Enable"} trading?\')">{"Disable" if ks else "Enable"}</button></form></div></div>')
     for sym in syms:
@@ -162,13 +166,16 @@ def signal_page(key: str, q: dict) -> str:
 def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None) -> str:
     """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load."""
     ov = sig.get("overlay") or {}
-    data = {"bars_h4": sig.get("bars_h4") or [], "bars_d1": sig.get("bars_d1") or [], "levels": levels or sig.get("levels") or {},
+    from live import mt5feed
+    live_feed = mt5feed.available()
+    data = {"symbol": sig["symbol"], "live": live_feed, "bars_h4": sig.get("bars_h4") or [], "bars_d1": sig.get("bars_d1") or [],
+            "levels": levels or sig.get("levels") or {},
             "overlay": {k: ov.get(k) for k in ("zone", "zone2", "leg", "aux", "swings_hi", "swings_lo")},
             "signal_t": charts._epoch(sig.get("signal_time")), "digits": charts._digits(sig), "marks": marks or []}
     tvs = C.tv_symbol(CFG, sig["symbol"]); link = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
     return (f'<div class="card" style="padding:6px"><div class="hc"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
             f'<span class="k">EMA <span style="color:#ffd700">20</span> <span style="color:#00bfff">50</span> <span style="color:#ee82ee">200</span> · zone, leg, swings from the detector</span>'
-            f'<a href="{link}" target="_blank" style="margin-left:auto">TradingView ↗</a></div><div class="hc-box" style="width:100%"></div></div>'
+            f'<span class="k hc-status" style="margin-left:auto"></span><a href="{link}" target="_blank">TradingView ↗</a></div><div class="hc-box" style="width:100%"></div></div>'
             f'<script src="/static/lw.js"></script><script src="/static/hybrid_chart.js"></script><script>HybridChart.mount(document.currentScript.previousElementSibling.previousElementSibling.previousElementSibling, {json.dumps(data, separators=(",", ":"))});</script></div>')
 
 def tv_block(symbol: str, interval: int = 240, levels: dict | None = None) -> str:
@@ -318,6 +325,12 @@ class H(BaseHTTPRequestHandler):
             if not parts: return self._send(dashboard(q))
             if parts[0] == "static" and len(parts) == 2 and parts[1] in ("lw.js", "hybrid_chart.js"):
                 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", parts[1]), "rb") as f: return self._send(f.read(), "application/javascript")
+            if parts[0] == "api" and len(parts) == 3 and parts[1] == "bars":
+                from live import mt5feed
+                sym = parts[2]; tf = q.get("tf", "h4"); n = max(1, min(2000, int(q.get("n", "500") or 500)))
+                if not C.safe_key(sym) or tf not in mt5feed.TF: return self._send("bad request", "text/plain", 400)
+                b = mt5feed.bars(sym, tf, n); k = mt5feed.tick(sym)
+                return self._send(json.dumps({"symbol": sym, "tf": tf, "bars": b, "tick": k, "ts": C.now_iso(), "live": b is not None}, separators=(",", ":")), "application/json")
             if parts[0] == "health": return self._send(json.dumps({"ok": True, "ts": C.now_iso()}), "application/json")
             if parts[0] == "signal" and len(parts) == 2: return self._send(signal_page(parts[1], q))
             if parts[0] == "position" and len(parts) == 2: return self._send(position_page(parts[1], q))
