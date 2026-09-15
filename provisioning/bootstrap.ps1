@@ -81,7 +81,19 @@ AllowedIPs = $ClientIp/32
 if (Get-Service 'WireGuardTunnel$wg0' -ErrorAction SilentlyContinue) { & "$wgDir\wireguard.exe" /uninstalltunnelservice wg0; Start-Sleep 2 }
 & "$wgDir\wireguard.exe" /installtunnelservice "$confDir\wg0.conf"
 Start-Sleep 3
-sc.exe config sshd depend= 'WireGuardTunnel$wg0' | Out-Null   # sshd binds 10.77.0.1, so it must start after the tunnel
+# sshd binds 10.77.0.1. The tunnel SERVICE reports "running" before the adapter has its address, so a plain
+# dependency is not enough (2026-09-15: sshd crashed at boot, box locked out). Three layers: delayed start,
+# restart-on-failure, and a keeper task 1 min after boot + every 5 min.
+sc.exe config sshd depend= 'WireGuardTunnel$wg0' | Out-Null
+sc.exe config sshd start= delayed-auto | Out-Null
+sc.exe failure sshd reset= 0 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+sc.exe failureflag sshd 1 | Out-Null
+$keeperPs1 = 'C:\ProgramData\hybrid\sshd-keeper.ps1'
+Set-Content -Path $keeperPs1 -Encoding ascii -Value 'if ((Get-Service sshd).Status -ne "Running") { Start-Service sshd }'
+$kAct = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $keeperPs1"
+$kT1 = New-ScheduledTaskTrigger -AtStartup; $kT1.Delay = 'PT1M'
+$kT2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskName 'hybrid-sshd-keeper' -Action $kAct -Trigger @($kT1, $kT2) -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 
 Step "4/6 firewall: default-deny inbound; allow only WireGuard UDP and SSH on $ServerIp"
 Get-NetFirewallRule -DisplayName 'Hybrid *' -ErrorAction SilentlyContinue | Remove-NetFirewallRule

@@ -12,7 +12,8 @@ commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md`
 | inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
 | clock | UTC |
 | secrets | `C:\ProgramData\hybrid\secrets\` (never in the repo), readable by `hybridops` + the service accounts only |
-| status | step 1 first run 2026-09-15 failed at `Start-Service sshd` (directives appended after the `Match` block); script fixed, re-run pending |
+| status | steps 1–2 done 2026-09-15; two reboot tests passed; external probe: no TCP port open |
+| provider console | the recovery path if SSH is ever lost (VNC in the provider panel; no RDP). Log in as Administrator, PowerShell as admin |
 
 ## Step 1 — bootstrap over RDP (the only step ever done by hand on the console)
 
@@ -33,7 +34,8 @@ Fresh box, RDP open, logged in as Administrator.
    Transcript: `C:\ProgramData\hybrid\bootstrap.log`.
 
 What it did: `hybridops` account; OpenSSH Server key-only, PowerShell as shell, listening on `10.77.0.1`
-only, `DenyUsers Administrator`, service dependency on the tunnel; WireGuard MSI (silent) + `wg0` tunnel
+only, `DenyUsers Administrator`, sshd **delayed start + restart-on-failure + `hybrid-sshd-keeper` task**
+(the tunnel service reports running before the adapter has its address; without these sshd crashes at boot); WireGuard MSI (silent) + `wg0` tunnel
 service with the engineer's public key as the only peer; firewall default-deny inbound + the two allow
 rules; UTC; Windows Update set to download-and-notify (no auto-install/reboot).
 
@@ -54,9 +56,20 @@ PersistentKeepalive = 25
 The script is idempotent: re-run it after any failure (accounts, keys and rules are reused/replaced, never duplicated).
 Re-issuing keys: generate new ones, put the public halves in `bootstrap.ps1`, re-run step 1 (idempotent).
 
-## Step 2 — lock the console (after SSH over WireGuard is confirmed)
-_To be filled in when executed: disable RDP at the service level (`TermService` disabled + the Remote
-Desktop firewall group off), external port scan from outside the tunnel must show only UDP 51820 (S1)._
+## Step 2 — lock the console (done 2026-09-15)
+
+Over SSH, run `provisioning/lockdown.ps1` (copy it with `scp -i ~/.ssh/hybrid_vps_ed25519 provisioning/lockdown.ps1
+hybridops@10.77.0.1:C:/ProgramData/hybrid/` then `ssh … 'powershell -ExecutionPolicy Bypass -File C:\ProgramData\hybrid\lockdown.ps1'`).
+Then `ssh … 'Restart-Computer -Force'`, wait ~90 s, confirm SSH returns, and probe the public IP from outside the
+tunnel: every TCP port must be closed (S1). Final state: inbound allow = `Hybrid WireGuard in`, `Hybrid SSH over
+WireGuard`, DHCP-In, ICMPv4 fragmentation-needed; `TermService` and `WinRM` disabled; `fDenyTSConnections=1`.
+
+**Incident record (2026-09-15):** first reboot after lockdown locked the box out — sshd started in the same second
+the tunnel service reported running, before `10.77.0.1` existed, and died; a timed "re-enable RDP" safety task
+also failed (PowerShell quoting inside a scheduled-task argument). Recovered via the provider console with four
+lines (`sc.exe failure sshd …`, `sc.exe failureflag sshd 1`, `Start-Service sshd`). Permanent fix is in
+`bootstrap.ps1` (delayed start, failure actions, file-based keeper task). Lesson: scheduled tasks run a `.ps1`
+file, never an inline `-Command` string.
 
 ## Step 3 — MT5 terminal, EA deploy, live `.ini` (AutoTrading armed)
 _Pending._
