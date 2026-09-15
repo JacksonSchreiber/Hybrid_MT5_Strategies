@@ -1,0 +1,32 @@
+//@version=5
+// Hybrid levels - draws the EA's entry / SL / TP1 / TP2 on your own TradingView chart.
+// Add once to your layout. Per signal: tap "Copy levels" on the signal page, open this indicator's settings,
+// paste into the Levels box (format: entry,sl,tp1,tp2 - tp2 optional), OK.
+indicator("Hybrid levels", overlay=true)
+src = input.string("", "Levels (entry,sl,tp1,tp2)")
+lbl = input.string("", "Label (optional, e.g. #12 TrendCont BUY)")
+f_num(s) =>
+    r = float(na)
+    if str.length(s) > 0
+        r := str.tonumber(str.trim(s))
+    r
+parts = str.split(src, ",")
+n = array.size(parts)
+entry = n > 0 ? f_num(array.get(parts, 0)) : na
+sl    = n > 1 ? f_num(array.get(parts, 1)) : na
+tp1   = n > 2 ? f_num(array.get(parts, 2)) : na
+tp2   = n > 3 ? f_num(array.get(parts, 3)) : na
+var line lE = na, var line lS = na, var line l1 = na, var line l2 = na, var label lb = na
+if barstate.islast
+    x0 = bar_index - 60
+    line.delete(lE), line.delete(lS), line.delete(l1), line.delete(l2), label.delete(lb)
+    if not na(entry)
+        lE := line.new(x0, entry, bar_index + 20, entry, color=color.new(color.green, 0), width=2, extend=extend.right)
+    if not na(sl)
+        lS := line.new(x0, sl, bar_index + 20, sl, color=color.new(color.red, 0), width=2, style=line.style_dashed, extend=extend.right)
+    if not na(tp1)
+        l1 := line.new(x0, tp1, bar_index + 20, tp1, color=color.new(color.blue, 0), width=1, style=line.style_dashed, extend=extend.right)
+    if not na(tp2)
+        l2 := line.new(x0, tp2, bar_index + 20, tp2, color=color.new(color.blue, 30), width=1, style=line.style_dotted, extend=extend.right)
+    if not na(entry)
+        lb := label.new(bar_index + 20, entry, (str.length(lbl) > 0 ? lbl + "  " : "") + "entry " + str.tostring(entry) + (na(sl) ? "" : "  SL " + str.tostring(sl)) + (na(tp1) ? "" : "  TP1 " + str.tostring(tp1)) + (na(tp2) ? "" : "  TP2 " + str.tostring(tp2)), style=label.style_label_left, color=color.new(color.gray, 60), textcolor=color.white, size=size.small)

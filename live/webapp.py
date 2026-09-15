@@ -115,7 +115,7 @@ def signal_page(key: str, q: dict) -> str:
                f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>')
     if s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
     d = s.get("delay_count", 0)
-    out.append(tv_block(s["symbol"], 240))
+    out.append(tv_block(s["symbol"], 240, lv))
     out.append(f'<details><summary class="k">EA charts (levels + detector overlays, as the advisor saw them)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')
     out.append(f'<div class="card"><div class="grid2"><div><span class="k">entry</span> <b class="v">{lv.get("entry")}</b>{" (STOP)" if lv.get("stop_entry") else ""}</div><div><span class="k">SL</span> <b class="v bad">{lv.get("sl")}</b></div>'
                f'<div><span class="k">TP1</span> <b class="v">{lv.get("tp1")}</b> <span class="k">{rr.get("tp1")}R</span></div><div><span class="k">TP2</span> <b class="v">{lv.get("tp2") or "-"}</b> <span class="k">{rr.get("runner")}R</span></div>'
@@ -159,17 +159,20 @@ def signal_page(key: str, q: dict) -> str:
         out.append("</table></div>")
     return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home", refresh=60 if is_open else None)
 
-def tv_block(symbol: str, interval: int = 240) -> str:
+def tv_block(symbol: str, interval: int = 240, levels: dict | None = None) -> str:
     """TradingView Advanced Chart widget (loads from tradingview.com on the viewer's device) + deep link to the TV app."""
     tvs = C.tv_symbol(CFG, symbol); link = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval={interval}"
     if not CFG.get("tv_widget", True): return f'<div class="k"><a href="{link}" target="_blank">Open {E(tvs)} in TradingView ↗</a></div>'
     conf = json.dumps({"autosize": True, "symbol": tvs, "interval": str(interval), "timezone": "Etc/UTC", "theme": "dark", "style": "1", "locale": "en",
                        "hide_side_toolbar": False, "allow_symbol_change": False, "save_image": False, "withdateranges": True, "details": False, "calendar": False,
                        "studies": ["STD;EMA"], "support_host": "https://www.tradingview.com"})
+    lv = levels or {}; csv = ",".join(str(lv[k]) for k in ("entry", "sl", "tp1", "tp2") if lv.get(k))
+    copy = (f'<button class="btn" type="button" onclick="navigator.clipboard.writeText(\'{E(csv)}\').then(function(){{this.textContent=\'copied\'}}.bind(this))">Copy levels</button>'
+            f'<span class="k">→ paste into the Hybrid levels indicator (entry,sl,tp1,tp2)</span>') if csv else ""
     return (f'<div class="card" style="padding:0;overflow:hidden"><div style="height:520px"><div class="tradingview-widget-container" style="height:100%;width:100%">'
             f'<div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>'
             f'<script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>{conf}</script></div></div>'
-            f'<div class="row" style="padding:8px"><a href="{link}" target="_blank">Open {E(tvs)} in the TradingView app ↗</a><span class="k">· widget loads from tradingview.com on this device; drawings live in your TV account</span></div></div>')
+            f'<div class="row" style="padding:8px"><a href="{link}" target="_blank">Open {E(tvs)} in the TradingView app ↗</a>{copy}</div></div>')
 
 def _acks() -> list[dict]:
     import glob
@@ -186,7 +189,7 @@ def position_page(key: str, q: dict) -> str:
                f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b class="v">{p.get("tp_live") or "-"}</b></div>'
                f'<div><span class="k">lots</span> <b class="v">{p.get("lots_live")}</b> <span class="k">of {p.get("lots_init")}</span></div><div><span class="k">bars open</span> <b class="v">{p.get("bars_open")}</b></div></div>'
                f'<div class="k">banked {p.get("banked")} · tp1_done {p.get("tp1_done")} · ratcheted {p.get("ratcheted")} · close-now {C.r_fmt(p.get("closenow_r"))} · updated {E(p.get("ts", ""))}{" · CLOSED" if closed else ""}</div></div>')
-    out.append(tv_block(p["symbol"], 240))
+    out.append(tv_block(p["symbol"], 240, {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}))
     if p.get("signal_id"): out.append(f'<div class="k"><a href="/signal/{E(p["symbol"])}-{p["signal_id"]}">→ signal #{p["signal_id"]} (EA charts, verdict)</a></div>')
     # events inside hold (next 5 days for the symbol)
     evs, _ = C.load_events(CFG); ccys = C.symbol_ccys(p["symbol"]); now = C.now_utc()
