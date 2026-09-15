@@ -73,8 +73,36 @@ lines (`sc.exe failure sshd …`, `sc.exe failureflag sshd 1`, `Start-Service ss
 `bootstrap.ps1` (delayed start, failure actions, file-based keeper task). Lesson: scheduled tasks run a `.ps1`
 file, never an inline `-Command` string.
 
-## Step 3 — MT5 terminal, EA deploy, live `.ini` (AutoTrading armed)
-_Pending._
+## Step 3 — MT5 terminal, EA deploy, live start-up (done 2026-09-15, data-feed check pending)
+
+**Session model (why):** MT5 cannot create chart windows in an SSH (session 0) context, and an EA needs a chart. So the
+terminal runs in the console session: `hybridops` auto-logs on at boot (password stored as an LSA secret by Sysinternals
+Autologon, not plaintext registry), the console locks itself 0 s after logon (`hybrid-lock-console` task) and the
+terminal starts 20 s after logon (`hybrid-mt5` task, restarts up to 3× a minute apart). The console is reachable only
+through the Contabo VNC panel. The `hybridops` password lives in `C:\ProgramData\hybrid\secrets\hybridops.password`
+(needed only to re-register tasks after a rebuild).
+
+Over SSH:
+1. `Invoke-WebRequest https://download.mql5.com/cdn/web/oanda.corporation/mt5/oanda5setup.exe -OutFile C:\ProgramData\hybrid\oanda5setup.exe`
+   then `Start-Process … -ArgumentList /auto -Wait` (exit code 1 = it could not launch the GUI; the files are installed).
+2. Autologon: `Autologon64.exe /accepteula hybridops <computer> <password>` (download from live.sysinternals.com).
+3. Tasks: `hybrid-lock-console` (at logon of hybridops: `rundll32 user32.dll,LockWorkStation`), `hybrid-mt5` (at logon
+   + 20 s: `terminal64.exe /config:C:\ProgramData\hybrid\mt5\live.ini`, no stored password = interactive session).
+4. `C:\ProgramData\hybrid\mt5\live.ini` = `provisioning/live.ini` with `Login/Password/Server` inserted under
+   `[Common]` from `secrets\mt5.json` (the template in the repo has no credentials; **a `[Common]` section without
+   them makes the terminal start logged-out**). `[Experts] Enabled=1 AllowLiveTrading=1 AllowDllImport=0` arms
+   AutoTrading (§11-8). `[StartUp]` attaches `HybridForwardTest-live` to EURUSD H4 with `MQL5\Presets\hft_live.set`.
+5. Deploy (built locally by `pipeline/mt5_build_ea.sh`, copied with `scp`): `MQL5\Experts\HybridForwardTest-live.ex5`,
+   `MQL5\Indicators\HybridTriEMA.ex5`, `MQL5\Presets\hft_live.set` (= `provisioning/hft_live.set`),
+   `Common\Files\econ_events.csv`. Data dir: `C:\Users\hybridops\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552AE0B5EAEFB04866EB`;
+   queue root: `C:\Users\hybridops\AppData\Roaming\MetaQuotes\Terminal\Common\Files\live`.
+6. Reboot; expect: `terminal64` in session 1, terminal log `authorized on <server>` + `trading has been enabled`,
+   expert log `HybridForwardTest ACTIVE [LIVE(queue)]`, `live\heartbeat_EURUSD.json` rewritten every 60 s with
+   `terminal_trade_allowed:true, mql_trade_allowed:true`.
+
+**Open (2026-09-15):** the OANDA-Demo-1 account authorizes but delivers no quotes (last server time 2024-11-12,
+no ticks, balance 0) — looks like an expired demo. Waiting on a live demo account. Also found: the EA's live cadence
+used tick time, which freezes without ticks (and every weekend); fixed to a wall clock in the EA (`LiveNow()`).
 
 ## Step 4 — web app, notifier, advisor runner, watchdog as services
 _Pending._
