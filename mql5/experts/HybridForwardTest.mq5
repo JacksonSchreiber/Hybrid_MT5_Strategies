@@ -18,6 +18,9 @@
 #property copyright "FTMO Hybrid Trading System"
 #property version   "2.00"
 #property description "Phase 2 harness: 3 real detectors + arbitration + two-target scale-out."
+//--- ensure the Strategy Tester bundles the display-only 3-EMA overlay used via iCustom (item 8).
+//--- Belt-and-braces: iCustom with a string literal auto-registers it, but this makes it explicit.
+#property tester_indicator "HybridTriEMA.ex5"
 
 #include <Trade\Trade.mqh>
 #include <Hybrid\Signal.mqh>
@@ -27,15 +30,18 @@
 #include <Hybrid\detectors\EmaDetector.mqh>
 #include <Hybrid\detectors\ShockDetector.mqh>   // Strategy 4 CANDIDATE, backtest-only (default OFF)
 #include <Hybrid\detectors\EmaRevInvDetector.mqh> // EMArev-Inverse SIGNAL LOGGER, backtest-only (default OFF)
+#include <Hybrid\detectors\TrendContDetector.mqh>  // Trend-continuation detector #3 (LIVE from window 11; frozen study-B spec, same object)
+#include <Hybrid\detectors\EmaRevQDetector.mqh>    // EMArevQ detector #4: base EMArev + slow-drift gate (coach 2026-09-09; quiet-trigger only)
 
 //--- coloured EDITABLE dialog (poll-driven) + plain fallback (early-bound)
 //--- TD_Open shows the window (Entry/SL/TP as edit boxes) and returns at once;
 //--- the EA then loops TD_Poll (pumps window msgs, reads the boxes) and pushes
 //--- R:R-locked recomputed values back via TD_SetDisplay, moving the real chart
 //--- lines live, until the user clicks Accept(1)/Skip(2). See TradeDialog.c.
+#ifndef LIVE
 #import "TradeDialog.dll"
 int  TD_Open(string title,string symbol,string strategy,string direction,
-             string sigtime,string regime,string entry,string sl,string tp,string tp2,string lots,string rr);
+             string sigtime,string regime,string protocol,string entry,string sl,string tp,string tp2,string lots,string rr);
 int  TD_Poll(double &entry,double &sl,double &tp,double &tp2,int &dirty);
 void TD_SetDisplay(string entry,string sl,string tp,string tp2,string lots,string rr,int ok);
 void TD_Close(void);
@@ -45,19 +51,43 @@ void TD_SetEvents(string abs_dates,string rel_dates); // upcoming-events list (b
 int  TD_Coach(void);        // 1 = coach mode on (scrub chart label to match)
 int  TD_TakeShotRequested(void); // 1 (once) if operator clicked "Retake H4 screenshot"
 void TD_OfferInverse(int on);    // show the INVERSE button (EMArev + gate ok) for this dialog
+void TD_OfferMarketNow(int on);  // show the "enter now at market" button (a delay reopen, item 3)
 //--- mid-trade MANAGEMENT PANEL (separate, non-modal window on its OWN thread,
 //--- so it stays live + clickable while the visual tester is PAUSED - which is
 //--- exactly when the operator decides at bar close). The EA only pushes state
 //--- and drains a latched button action; all trading stays on the MQL thread.
 int  TDM_Open(string title);                       // spawn panel; 1=up
-void TDM_Update(string state_text,double lots,int be_enabled); // push live state
-int  TDM_Poll(void);        // 0 none, 1 close, 2 close50, 3 SL->BE, 4 EXTEND (one-shot)
+void TDM_Update(string state_text,double lots,int be_enabled,int ratchet_enabled); // push live state
+int  TDM_Poll(void);        // 0 none, 1 close, 2 close50, 3 SL->BE, 4 EXTEND, 5 SL->TP1 (one-shot)
 void TDM_Close(void);       // tear down + join the panel thread
 void TDM_ShowExtend(int on);// show EXTEND button (only while managing an inverse position)
 #import
 #import "user32.dll"
 int MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType);
 #import
+#else
+//--- LIVE build (Phase 3 §10 C1 / E2): the popup DLL and user32 are NOT imported. These inline
+//--- stubs keep every call site compiling; they are unreachable in live mode (AskApproval and
+//--- ManagePanelTick never run — the file queue replaces the popup). Return values = "skip/none".
+int  TD_Open(string title,string symbol,string strategy,string direction,
+             string sigtime,string regime,string protocol,string entry,string sl,string tp,string tp2,string lots,string rr){ return 0; }
+int  TD_Poll(double &entry,double &sl,double &tp,double &tp2,int &dirty){ return 2; }
+void TD_SetDisplay(string entry,string sl,string tp,string tp2,string lots,string rr,int ok){}
+void TD_Close(){}
+int  TD_SkipReason(){ return 6; }
+void TD_SetOrderType(string s){}
+void TD_SetEvents(string abs_dates,string rel_dates){}
+int  TD_Coach(){ return 0; }
+int  TD_TakeShotRequested(){ return 0; }
+void TD_OfferInverse(int on){}
+void TD_OfferMarketNow(int on){}
+int  TDM_Open(string title){ return 0; }
+void TDM_Update(string state_text,double lots,int be_enabled,int ratchet_enabled){}
+int  TDM_Poll(){ return 0; }
+void TDM_Close(){}
+void TDM_ShowExtend(int on){}
+int  MessageBoxW(long hWnd,string lpText,string lpCaption,uint uType){ return 7; }   // IDNO
+#endif
 #define MB_YESNO        0x00000004
 #define MB_ICONQUESTION 0x00000020
 #define MB_SYSTEMMODAL  0x00001000
@@ -79,6 +109,12 @@ input long   InpMagic       = 990217;   // magic number (graded stream)
 input bool   InpOfferInverse  = false;   // offer INVERSE on EMArev alerts (a 3rd dialog choice; default OFF, opt-in)
 enum ENUM_DELAY_MODE { DM_FREEZE=0, DM_SLIDE=1 };
 input ENUM_DELAY_MODE InpDelayMode = DM_FREEZE;  // delay reopen: FREEZE detector levels (pending at orig entry) vs SLIDE to market
+//--- STUDY-ONLY (headless): when false, the EA trades the PRE-v2 exit (2026-09-08
+//--- scale-at-tp1) so a re-run reproduces the exact frozen signal set, while a shadow
+//--- observer reconstructs the doctrine-v2 R per signal + an impulse feature into a
+//--- separate sidecar (journal\v2study_*.csv). Live default TRUE = current v2 exit,
+//--- live journal + schema untouched. Set false only via V2_EXIT=false in mt5_verify.
+input bool   InpV2Exit = true;           // true: live v2 exit; false: study re-run (old exit + v2 observer sidecar)
 input long   InpInverseMagic  = 990218;  // SEPARATE magic for inverse trades (isolates them)
 input bool   InpTestInverse   = false;   // TEST-ONLY: under AA_ALL, auto-take INVERSE on EMArev (headless lifecycle check)
 input int    InpTestDelay     = 0;       // TEST-ONLY: under AA_ALL, delay each signal N bars then approve (headless delay check)
@@ -87,10 +123,22 @@ input bool   InpCleanupOnDeinit = false;// delete overlay objects on EA removal
 input string InpObjPrefix   = "HFT_";   // chart-object name prefix
 input bool   InpUseColoredDialog = true;// true: coloured TradeDialog.dll; false: MessageBoxW
 input ENUM_AUTO_APPROVE InpAutoApprove = AA_NONE; // NONE=interactive; ALL/SKIP=headless (tester only)
+//--- PHASE 3 LIVE MODE (docs/phase3-live-system-requirements.md §3/§4/§10/§11). Requires the
+//--- -live build (HybridForwardTest-live.mq5: #define LIVE, popup DLL not imported). Replaces the
+//--- popup with the local file queue under Common\Files\<InpLiveRoot>\ ; detectors/exits/journal
+//--- logic are untouched (E1). Never combine with InpAutoApprove (never auto-trade live).
+input bool   InpLiveMode         = false;  // LIVE: file-queue decision path instead of the popup (-live build only)
+input bool   InpLiveSelfTest     = false;  // LIVE self-test (TESTER ONLY): in-EA scripted task driver + assertions
+input string InpLiveRoot         = "live"; // queue root under Common\Files (self-test uses live_selftest)
+input int    InpTaskPollSec      = 5;      // poll tasks/ at least this often (Q5: <=5s)
+input int    InpHeartbeatSec     = 60;     // heartbeat at least this often (E5: <=60s)
+input int    InpLiveMaxAgeBars   = 3;      // G2: unanswered signal ages out after N H4 bars -> skip code 8 (live.json overrides)
+input int    InpElectionHorizonDays = 14;  // G1: NO-HOLD election gate horizon in calendar days (live.json overrides)
 //--- strategy selection
 input bool   InpUseSMC      = true;     // Strategy 1: liquidity sweep + MSS (priority 1)
 input bool   InpUseFib      = true;     // Strategy 2: deep fib retracement (priority 2)
-input bool   InpUseEMA      = true;     // Strategy 3: EMA20 mean reversion (priority 3)
+input bool   InpUseEMA      = false;    // Strategy 3: base EMA20 mean reversion — ALERT OFF (coach 2026-09-09): EMArev returns as EMArevQ (quiet-trigger only); base detector retired from the live lineup
+input bool   InpUseEMArevQ  = true;     // Strategy 4: EMArevQ = base EMArev + whole-climb slow-drift gate (B>=12 & D>=0.56). Live quiet-only detector (priority 3). PROTOCOL: DISCRETION, shared graded magic.
 //--- SMC params
 input double InpSmcMinRR    = 2.0;
 input double InpSmcTpR      = 3.0;
@@ -98,7 +146,7 @@ input double InpSmcTpR      = 3.0;
 input double InpFibImpulseATR = 2.0;
 input double InpFibMinRR    = 2.0;
 //--- EMA params
-input double InpEmaStretch  = 2.0;
+input double InpEmaStretch  = 1.5;      // EMArevQ stretch threshold (coach stretch-scan 2026-09-09: 1.5xATR chosen, validated +0.158R 2022+). Was 2.0.
 input double InpEmaAdxCeil  = 30.0;
 input double InpEmaMinRR    = 1.3;
 //--- Strategy 4 CANDIDATE: Shock Continuation. BACKTEST-ONLY, default OFF so the
@@ -114,6 +162,7 @@ input bool   InpShockCalGate= true;     // forward V <=6h -> do not arm (else lo
 //--- Wraps the frozen EMArev; logs inverted-continuation setups (no trades); the 6
 //--- entry x exit cells are simulated in Python. Uses the live EMArev config below.
 input bool   InpUseEmaRevInv = false;   // EMArev-Inverse candidate: log EMArev signals inverted
+input bool   InpUseTrendCont = true;    // Trend-continuation detector #3 (LIVE from window 11; frozen study-B object, unchanged)
 //--- imbalance highlights (display-only; NEVER affect trade/entry logic)
 input bool   InpShowImbal   = true;           // draw FVG / price-gap / tick-volume imbalances
 input color  InpImbColor    = clrMediumPurple;// one shared colour for all three imbalance types
@@ -155,7 +204,7 @@ input double InpBEPadPips     = 1.0;           // SL->break-even padding (pips i
 
 //--- globals
 CTrade         g_trade;
-ISignalDetector *g_detectors[5];           // [0]=SMC,[1]=Fib,[2]=EMA,[3]=Shock,[4]=EmaRevInv (both candidates, default off)
+ISignalDetector *g_detectors[8];           // priority order; active set = SMC,Fib,EMArevQ,TrendCont (base EMA/Shock/EmaRevInv default off). Sized 8 to hold every registrable detector without overflow.
 int            g_ndet       = 0;
 ENUM_TIMEFRAMES g_tf        = PERIOD_H4;
 bool            g_events_drawn = false;      // econ-event lines drawn once (first tick) [legacy, unused]
@@ -200,6 +249,8 @@ struct JournalRow
    double   lots;           // initial lots
    double   risk_px;        // |entry - original sl|
    bool     tp1_done;       // partial taken + SL moved to BE
+   bool     banked;         // v2 mechanical rule fired (50% off + SL->BE at first +1R/tp1)
+   bool     ratcheted;      // manual SL->TP1 ratchet used (item 2; one per trade, runner phase)
    double   closed_vol;     // accumulated closed volume
    string   decision;       // approved / skipped / approved_pending / expired
    int      skip_reason;    // 1-6 skip-reason code (0 = not a skip / headless)
@@ -216,6 +267,7 @@ struct JournalRow
    double   r_multiple;     // blended, volume-weighted
    string   regime;         // FROZEN D1 regime at signal time: TREND_UP/TREND_DOWN/CHOP/'' (warm-up)
    string   with_trend;     // '1' if signal dir matches trend, '0' if against, '' in CHOP/blank
+   string   decision_class; // protocol class mechanically derived from regime+strategy: TAKE / DISCRETION
    double   to_entry;       // TRUE-ORIG: detector's FIRST-presentation levels, immutable (delay audit)
    double   to_sl;
    double   to_tp1;
@@ -225,6 +277,30 @@ struct JournalRow
    double   post_dip_r;     // max R reached AFTER a recross below entry (recovery); 0 if never dipped
    int      dipped;         // 1 = went >=+0.25R then traded back below entry
    string   terminal;       // single token: TP / BE / SL / end (assignment - no string accumulation)
+   //--- STUDY-ONLY (InpV2Exit==false); all numeric (no struct-string accumulation bug):
+   double   imp_atr;        // trigger impulse: max H4 bar range over prior 3 bars / ATR(14)
+   int      imp_nbig;       // # of the prior 3 bars whose range >= 1.5*ATR(14)
+   int      cal_lab;        // 1 = a symbol-relevant HIGH-impact (V/W) event within +/-4h of the signal
+   double   v2_r;           // shadow observer: reconstructed doctrine-v2 R
+   double   v2_bank;        // v2 banked-leg R contribution (0.5 * fire-tick favR)
+   int      v2_runner;      // 1 tp2, 0 BE, 2 SL-pre-bank, 3 open-at-end, -1 unset
+   //--- TP1-RATCHET STUDY (coach pair-12 item 1, 2026-09-10). Path flags captured LIVE while
+   //--- the position is open (v2-live IS policy A; its window entry->tp2/BE contains B1/B2's
+   //--- tighter exits). Python reconstructs A/B1/B2 runner R from (banked,bank_r,tp1R,tp2R,
+   //--- touched1,redip1) + the AUTHORITATIVE terminal (TP/BE/SL). tp1R>0 only for scale-out
+   //--- detectors; single-target detectors have no TP1 -> B1/B2 N/A for them.
+   double   rt_tp1R, rt_tp2R;   // runner's TP1 / TP2 in R (0 if no such level)
+   int      rt_touched1;        // 1 = favR reached TP1(2R) level while open
+   int      rt_reached2;        // 1 = favR reached TP2 level while open (cross-check vs terminal)
+   int      rt_redip1;          // 1 = after touching TP1 and before reaching TP2, favR fell back <=TP1
+   double   rt_bankr;           // R the live +1R bank actually fired at (OpenR); -99 = never banked
+   //--- PHASE 3 LIVE columns (E3/C2/G1): appended to the live journal only; never written in the tester
+   bool     live;               // 1 = row produced by the LIVE queue path
+   long     account_id;         // AccountInfoInteger(ACCOUNT_LOGIN)
+   double   risk_pct_gate;      // the detectors' viability gate risk (InpRiskPct, 1%)
+   double   risk_mult_applied;  // per-symbol multiplier applied at sizing (C2)
+   int      auto_skip;          // 1 = automatic skip (G1 election gate) - only with skip_reason 2
+   string   entry_mode;         // market | market_now | pending_frozen | skip | auto_skip | expired
   };
 JournalRow g_rows[];
 
@@ -273,14 +349,423 @@ bool         g_delay_replaying= false;   // current HandleSignal call is a delay
 int          g_delay_count    = 0;       // how many times the CURRENT signal has been delayed (audit)
 int          g_h_ema200_d1  = INVALID_HANDLE;  // D1 200-EMA handle (regime tag)
 int          g_h_adx_d1      = INVALID_HANDLE; // D1 ADX(14) handle (regime tag)
+int          g_h_e20         = INVALID_HANDLE; // display-only 3-EMA overlay handles (item 8)
+int          g_h_e50         = INVALID_HANDLE;
+int          g_h_e200        = INVALID_HANDLE;
+#define TRIEMA_BARS 400                         // how many bars back to draw the EMA lines
+
+//--- Draw ONE EMA as connected trend segments (chart objects, which the visual tester renders
+//--- reliably and does NOT strip on a template reapply — unlike a ChartIndicatorAdd'd indicator).
+void DrawEmaLine(string tag,int handle,color col,int width)
+  {
+   if(handle==INVALID_HANDLE) return;
+   double buf[]; datetime tm[];
+   ArraySetAsSeries(buf,true); ArraySetAsSeries(tm,true);
+   int n=CopyBuffer(handle,0,0,TRIEMA_BARS,buf);
+   if(n<2) return;
+   if(CopyTime(_Symbol,PERIOD_CURRENT,0,n,tm)<2) return;
+   for(int i=1;i<n;i++)
+     {
+      if(buf[i]==EMPTY_VALUE || buf[i-1]==EMPTY_VALUE) continue;
+      string nm=StringFormat("HFT_EMA_%s_%d",tag,i);
+      if(ObjectFind(0,nm)<0)
+        {
+         ObjectCreate(0,nm,OBJ_TREND,0,tm[i],buf[i],tm[i-1],buf[i-1]);
+         ObjectSetInteger(0,nm,OBJPROP_RAY_RIGHT,false);
+         ObjectSetInteger(0,nm,OBJPROP_RAY_LEFT,false);
+         ObjectSetInteger(0,nm,OBJPROP_BACK,false);   // foreground: colored EMAs on TOP of template lines
+         ObjectSetInteger(0,nm,OBJPROP_SELECTABLE,false);
+         ObjectSetInteger(0,nm,OBJPROP_HIDDEN,true);
+         ObjectSetInteger(0,nm,OBJPROP_COLOR,col);
+         ObjectSetInteger(0,nm,OBJPROP_WIDTH,width);
+        }
+      else
+        { ObjectMove(0,nm,0,tm[i],buf[i]); ObjectMove(0,nm,1,tm[i-1],buf[i-1]); }
+     }
+  }
+//--- redraw the 3-EMA overlay; throttled to once per new bar (900 segments/tick would crawl).
+void EnsureTriEMA()
+  {
+   if(g_h_e20==INVALID_HANDLE) return;
+   static datetime last=0;
+   datetime cur=iTime(_Symbol,PERIOD_CURRENT,0);
+   if(cur==last) return;
+   last=cur;
+   DrawEmaLine("A",g_h_e20, clrGold,        1);   // EMA20  gold
+   DrawEmaLine("B",g_h_e50, clrDeepSkyBlue, 1);   // EMA50  DeepSkyBlue
+   DrawEmaLine("C",g_h_e200,clrViolet,      2);   // EMA200 violet
+   ChartRedraw(0);
+  }
 string       g_sig_regime    = "";       // regime FROZEN at the signal's first presentation
 string       g_sig_with_trend= "";       // with_trend FROZEN likewise (recompute-safe across delays)
+string       g_sig_class     = "";       // protocol class TAKE/DISCRETION, FROZEN with the tag (popup+journal+setup.md)
 double       g_to_entry=0, g_to_sl=0, g_to_tp1=0, g_to_tp2=0;  // TRUE-ORIG frozen at first presentation
 
 //+------------------------------------------------------------------+
 string DirStr(int d) { return (d>0 ? "BUY" : "SELL"); }
 string StampCompact(datetime t)
   { MqlDateTime dt; TimeToStruct(t,dt); return StringFormat("%04d%02d%02d",dt.year,dt.mon,dt.day); }
+
+//+==================================================================+
+//| PHASE 3 - LIVE MODE (Milestone 1): file queue, timer, heartbeat,  |
+//| JSON. docs/phase3-live-system-requirements.md §3/§4/§10/§11.      |
+//| Everything in this section is INERT unless InpLiveMode (and the   |
+//| -live build). Nothing here touches detectors, exits or the tester |
+//| journal path (E1: byte-identical tester behaviour).               |
+//+==================================================================+
+#define LIVE_SCHEMA_VERSION 1
+#define EA_BUILD            "phase3-m1"
+
+//--- live runtime state
+bool     g_trading_enabled  = false;   // kill switch; fail CLOSED when the file is missing/unparseable
+double   g_risk_mult        = 1.0;     // per-symbol risk multiplier (C2) - applied at order sizing ONLY
+int      g_cfg_max_age_bars = 3;       // G2 (live.json overrides the input)
+int      g_cfg_election_days= 14;      // G1 (live.json overrides the input)
+int      g_cfg_task_max_age_h=24;      // stale-task cutoff (hours)
+datetime g_live_last_poll   = 0;
+datetime g_live_last_beat   = 0;
+long     g_account_login    = 0;
+bool     g_live_inited      = false;
+bool     g_live_parked      = false;   // a published signal is awaiting a task (Slice 2)
+bool     g_rm_warned        = false;
+int      g_live_auto         = 0;       // 1 while committing an automatic skip (G1) -> journal auto=1 (Slice 5)
+//--- a PUBLISHED signal awaiting a task (G2). Lives across ticks alongside g_delayed (the cand).
+struct LivePark
+  {
+   int      sid;
+   double   orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2;
+   string   caption;
+   datetime published_bar;      // bar the signal was FIRST published on
+   datetime published_at;       // TimeCurrent() at first publish (decision latency basis)
+   int      implicit_streak;    // consecutive bar closes with no task (code 8 at max_age)
+   bool     explicit_this_bar;  // an explicit delay task arrived this bar (resets the streak)
+   double   lots;
+  };
+LivePark g_park;
+
+string LivePath(string sub){ return InpLiveRoot+"\\"+sub; }
+string SymbolRoot(){ int p=StringFind(_Symbol,"."); return (p>0 ? StringSubstr(_Symbol,0,p) : _Symbol); }
+string IsoTime(datetime t)
+  { MqlDateTime d; TimeToStruct(t,d);
+    return StringFormat("%04d-%02d-%02dT%02d:%02d:%02dZ",d.year,d.mon,d.day,d.hour,d.min,d.sec); }
+
+//--- JSON: minimal escaping writer. Files are ASCII-only (anything outside 0x20-0x7E is \uXXXX),
+//--- so FILE_ANSI round-trips them exactly on both sides of the queue.
+string JsonEsc(string s)
+  {
+   string o=""; int n=StringLen(s);
+   for(int i=0;i<n;i++)
+     {
+      ushort c=StringGetCharacter(s,i);
+      if(c=='"')       o+="\\\"";
+      else if(c=='\\') o+="\\\\";
+      else if(c=='\n') o+="\\n";
+      else if(c=='\r') o+="\\r";
+      else if(c=='\t') o+="\\t";
+      else if(c<0x20 || c>0x7E) o+=StringFormat("\\u%04x",c);
+      else o+=ShortToString(c);
+     }
+   return o;
+  }
+class CJsonW
+  {
+private:
+   string m_s; int m_depth; bool m_first[32];
+   void Sep(){ if(m_depth>0){ if(!m_first[m_depth]) m_s+=","; m_first[m_depth]=false; } }
+public:
+   CJsonW(){ m_s=""; m_depth=0; for(int i=0;i<32;i++) m_first[i]=true; }
+   void BeginObj(){ Sep(); m_s+="{"; m_depth++; m_first[m_depth]=true; }
+   void EndObj()  { m_s+="}"; m_depth--; }
+   void BeginArr(){ Sep(); m_s+="["; m_depth++; m_first[m_depth]=true; }
+   void EndArr()  { m_s+="]"; m_depth--; }
+   void Key(string k){ Sep(); m_s+="\""+JsonEsc(k)+"\":"; m_first[m_depth]=true; }
+   void Str(string v){ Sep(); m_s+="\""+JsonEsc(v)+"\""; }
+   void Num(double v,int digits){ Sep(); m_s+=DoubleToString(v,digits); }
+   void Int(long v){ Sep(); m_s+=(string)v; }
+   void Bool(bool b){ Sep(); m_s+=(b?"true":"false"); }
+   void Null(){ Sep(); m_s+="null"; }
+   void TimeIso(datetime t){ Str(IsoTime(t)); }
+   void KStr(string k,string v){ Key(k); Str(v); }
+   void KNum(string k,double v,int digits){ Key(k); Num(v,digits); }
+   void KInt(string k,long v){ Key(k); Int(v); }
+   void KBool(string k,bool b){ Key(k); Bool(b); }
+   void KTime(string k,datetime t){ Key(k); TimeIso(t); }
+   void KNull(string k){ Key(k); Null(); }
+   string Text(){ return m_s; }
+  };
+
+//--- JSON: minimal FLAT parser for task/config files (Q3/Q6). One object, optionally ONE nested
+//--- object level (flattened as "params.x"); strings with escapes, numbers, true/false/null.
+//--- Arrays and deeper nesting are rejected - nothing else is parsed (S6).
+int JSkipWs(string s,int i)
+  { int n=StringLen(s); while(i<n){ ushort c=StringGetCharacter(s,i); if(c==' '||c=='\t'||c=='\n'||c=='\r') i++; else break; } return i; }
+bool JParseStr(string s,int &i,string &out,string &err)
+  {
+   int n=StringLen(s);
+   if(i>=n || StringGetCharacter(s,i)!='"'){ err="expected string"; return false; }
+   i++; out="";
+   while(i<n)
+     {
+      ushort c=StringGetCharacter(s,i);
+      if(c=='"'){ i++; return true; }
+      if(c=='\\')
+        {
+         if(i+1>=n){ err="bad escape"; return false; }
+         ushort e=StringGetCharacter(s,i+1);
+         if(e=='"') out+="\""; else if(e=='\\') out+="\\"; else if(e=='/') out+="/";
+         else if(e=='n') out+="\n"; else if(e=='r') out+="\r"; else if(e=='t') out+="\t";
+         else if(e=='b' || e=='f') { }
+         else if(e=='u')
+           {
+            if(i+5>=n){ err="bad \\u"; return false; }
+            int cp=0;
+            for(int k=0;k<4;k++)
+              { ushort hc=StringGetCharacter(s,i+2+k);
+                int v=(hc>='0'&&hc<='9')?hc-'0':(hc>='a'&&hc<='f')?hc-'a'+10:(hc>='A'&&hc<='F')?hc-'A'+10:-1;
+                if(v<0){ err="bad \\u"; return false; } cp=cp*16+v; }
+            out+=ShortToString((ushort)cp); i+=6; continue;
+           }
+         else { err="bad escape"; return false; }
+         i+=2; continue;
+        }
+      out+=ShortToString(c); i++;
+     }
+   err="unterminated string"; return false;
+  }
+bool JParseScalar(string s,int &i,string &out,string &err)
+  {
+   int n=StringLen(s), st=i;
+   while(i<n){ ushort c=StringGetCharacter(s,i); if(c==','||c=='}'||c==']'||c==' '||c=='\t'||c=='\n'||c=='\r') break; i++; }
+   out=StringSubstr(s,st,i-st);
+   if(out==""){ err="empty value"; return false; }
+   return true;
+  }
+bool JParseObj(string s,int &i,string prefix,int depth,string &keys[],string &vals[],string &err)
+  {
+   int n=StringLen(s);
+   i=JSkipWs(s,i);
+   if(i>=n || StringGetCharacter(s,i)!='{'){ err="expected {"; return false; }
+   i++;
+   while(true)
+     {
+      i=JSkipWs(s,i); if(i>=n){ err="unterminated object"; return false; }
+      ushort c=StringGetCharacter(s,i);
+      if(c=='}'){ i++; return true; }
+      if(c==','){ i++; continue; }
+      string k; if(!JParseStr(s,i,k,err)) return false;
+      i=JSkipWs(s,i); if(i>=n || StringGetCharacter(s,i)!=':'){ err="expected :"; return false; }
+      i++; i=JSkipWs(s,i); if(i>=n){ err="missing value"; return false; }
+      c=StringGetCharacter(s,i);
+      string full=(prefix=="" ? k : prefix+"."+k);
+      if(c=='{'){ if(depth>=1){ err="nesting too deep"; return false; }
+                  if(!JParseObj(s,i,full,depth+1,keys,vals,err)) return false; continue; }
+      if(c=='['){ err="arrays not supported"; return false; }
+      string v;
+      if(c=='"'){ if(!JParseStr(s,i,v,err)) return false; }
+      else      { if(!JParseScalar(s,i,v,err)) return false; }
+      int m=ArraySize(keys); ArrayResize(keys,m+1); ArrayResize(vals,m+1); keys[m]=full; vals[m]=v;
+     }
+   err="unreachable"; return false;   // satisfies 'all control paths return' (loop exits via return)
+  }
+bool JsonFlatParse(string text,string &keys[],string &vals[],string &err)
+  { ArrayResize(keys,0); ArrayResize(vals,0); err=""; if(StringLen(text)>65536){ err="file too large"; return false; }
+    int i=0; return JParseObj(text,i,"",0,keys,vals,err); }
+string JGet(string &keys[],string &vals[],string key,string def="")
+  { for(int i=0;i<ArraySize(keys);i++) if(keys[i]==key) return vals[i]; return def; }
+
+//--- atomic file I/O (Q2): write <name>.tmp then FileMove-rename over the destination.
+//--- Readers ignore *.tmp. Proven in the headless tester by mql5/experts/LiveProbe.mq5 (Slice 0).
+bool AtomicWriteText(string rel,string body)
+  {
+   string tmp=rel+".tmp";
+   int h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE){ Print("AtomicWrite: open failed ",tmp," err=",GetLastError()); return false; }
+   FileWriteString(h,body); FileFlush(h); FileClose(h);
+   if(!FileMove(tmp,FILE_COMMON,rel,FILE_COMMON|FILE_REWRITE))
+     { Print("AtomicWrite: move failed ",rel," err=",GetLastError()); FileDelete(tmp,FILE_COMMON); return false; }
+   return true;
+  }
+string ReadTextFile(string rel)
+  {
+   int h=FileOpen(rel,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE) return "";
+   string s=""; while(!FileIsEnding(h)) s+=FileReadString(h)+"\n"; FileClose(h); return s;
+  }
+void AppendLine(string rel,string line)
+  {
+   int h=FileOpen(rel,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ);
+   if(h==INVALID_HANDLE) return;
+   FileSeek(h,0,SEEK_END); FileWriteString(h,line+"\r\n"); FileFlush(h); FileClose(h);
+  }
+//--- append-only command audit log (S8): ts|symbol|event|task_id|verb|target|result|reason|detail
+void AuditLine(string ev,string task_id,string verb,string target,string result,string reason,string detail)
+  {
+   AppendLine(LivePath("audit_"+_Symbol+".log"),
+              IsoTime(TimeCurrent())+"|"+_Symbol+"|"+ev+"|"+task_id+"|"+verb+"|"+target+"|"+result+"|"+reason+"|"+detail);
+  }
+
+void LiveEnsureDirs()
+  {
+   FolderCreate(InpLiveRoot,FILE_COMMON);
+   string d[]={"signals","tasks","tasks\\done","acks","positions","positions\\closed","state","config","journal"};
+   for(int i=0;i<ArraySize(d);i++) FolderCreate(LivePath(d[i]),FILE_COMMON);
+   FolderCreate(LivePath("state\\"+_Symbol),FILE_COMMON);
+  }
+
+//--- config: trading_enabled.json (kill switch, E10) - read EVERY second; missing/bad => disabled
+void LiveReadKillSwitch()
+  {
+   string t=ReadTextFile(LivePath("config\\trading_enabled.json"));
+   string k[],v[],err; bool en=false;
+   if(t!="" && JsonFlatParse(t,k,v,err)) en=(JGet(k,v,"trading_enabled","false")=="true");
+   if(en!=g_trading_enabled || !g_live_inited)
+     { AuditLine("kill_switch","","","",(en?"enabled":"disabled"),(t==""?"file_missing":(err!=""?"parse_error":"")),""); g_trading_enabled=en; }
+  }
+//--- config: risk_mult.json {"EURUSD":0.5,"US100":1.0,...} keyed by symbol ROOT (C2). Sizing only.
+void LiveLoadRiskMult()
+  {
+   string t=ReadTextFile(LivePath("config\\risk_mult.json"));
+   string k[],v[],err;
+   if(t=="" || !JsonFlatParse(t,k,v,err))
+     { if(!g_rm_warned){ AuditLine("config","","","","warn","risk_mult_unavailable",(t==""?"file_missing":err)+" -> 1.0"); g_rm_warned=true; }
+       g_risk_mult=1.0; return; }
+   string m=JGet(k,v,SymbolRoot(),"");
+   if(m==""){ if(!g_rm_warned){ AuditLine("config","","","","warn","risk_mult_missing",SymbolRoot()+" -> 1.0"); g_rm_warned=true; } g_risk_mult=1.0; return; }
+   double nm=StringToDouble(m); if(nm<=0.0) nm=1.0;
+   g_risk_mult=nm;
+  }
+//--- config: live.json (G1/G2 knobs); written with defaults from the inputs when missing
+void LiveLoadConfig()
+  {
+   string p=LivePath("config\\live.json");
+   string t=ReadTextFile(p); string k[],v[],err;
+   if(t=="" || !JsonFlatParse(t,k,v,err))
+     {
+      g_cfg_election_days=InpElectionHorizonDays; g_cfg_max_age_bars=InpLiveMaxAgeBars; g_cfg_task_max_age_h=24;
+      AtomicWriteText(p,StringFormat("{\"schema_version\":%d,\"election_horizon_days\":%d,\"max_age_bars\":%d,\"task_max_age_hours\":%d}",
+                                     LIVE_SCHEMA_VERSION,g_cfg_election_days,g_cfg_max_age_bars,g_cfg_task_max_age_h));
+     }
+   else
+     {
+      g_cfg_election_days =(int)StringToInteger(JGet(k,v,"election_horizon_days",(string)InpElectionHorizonDays));
+      g_cfg_max_age_bars  =(int)StringToInteger(JGet(k,v,"max_age_bars",(string)InpLiveMaxAgeBars));
+      g_cfg_task_max_age_h=(int)StringToInteger(JGet(k,v,"task_max_age_hours","24"));
+      if(g_cfg_election_days<0) g_cfg_election_days=0;
+      if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
+     }
+   LiveLoadRiskMult();
+  }
+
+//--- §11-7: aggregate risk-to-stop across EVERY open position on the account (any symbol), in
+//--- account currency. An unprotected position (SL=0) counts its full distance to zero (BUY) or
+//--- its open price as a conservative proxy (SELL) - flagged in the heartbeat alerts.
+double AggregateRiskToStop(int &unprotected)
+  {
+   double agg=0.0; unprotected=0;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong tk=PositionGetTicket(i); if(tk==0) continue;
+      string sym=PositionGetString(POSITION_SYMBOL);
+      double vol=PositionGetDouble(POSITION_VOLUME), po=PositionGetDouble(POSITION_PRICE_OPEN), sl=PositionGetDouble(POSITION_SL);
+      double ts=SymbolInfoDouble(sym,SYMBOL_TRADE_TICK_SIZE), tv=SymbolInfoDouble(sym,SYMBOL_TRADE_TICK_VALUE);
+      if(ts<=0.0 || tv<=0.0) continue;
+      double dist;
+      if(sl>0.0) dist=MathAbs(po-sl); else { dist=po; unprotected++; }
+      agg+=(dist/ts)*tv*vol;
+     }
+   return agg;
+  }
+
+//--- E5 heartbeat: heartbeat_<SYMBOL>.json (per-instance, §11-1). Includes §11-8 trade-allowed flags.
+void WriteHeartbeat(string status="running")
+  {
+   int unprot=0; double agg=AggregateRiskToStop(unprot);
+   CJsonW j; j.BeginObj();
+   j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KStr("ea_build",EA_BUILD);
+   j.KStr("symbol",_Symbol); j.KStr("status",status); j.KTime("ts",TimeCurrent());
+   j.KInt("account_login",g_account_login);
+   j.KNum("equity",AccountInfoDouble(ACCOUNT_EQUITY),2); j.KNum("balance",AccountInfoDouble(ACCOUNT_BALANCE),2);
+   j.KNum("margin_free",AccountInfoDouble(ACCOUNT_MARGIN_FREE),2);
+   j.KBool("trading_enabled",g_trading_enabled);
+   j.KBool("terminal_trade_allowed",(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED));
+   j.KBool("mql_trade_allowed",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
+   j.KNum("aggregate_risk_to_stop",agg,2);
+   j.KNum("risk_mult_applied",g_risk_mult,3);
+   j.Key("ftmo"); j.BeginObj();
+     j.KNum("initial_balance",g_ftmo_initial,2); j.KStr("day_key",g_ftmo_day_key); j.KNum("day_start_balance",g_ftmo_day_bal,2); j.KNum("day_start_equity",g_ftmo_day_eq,2);
+     j.KNum("daily_floor",FtmoDailyFloor(),2); j.KNum("max_floor",FtmoMaxFloor(),2); j.KNum("buffer",g_ftmo_buf_pct*g_ftmo_initial,2);
+     j.KNum("headroom_daily",AccountInfoDouble(ACCOUNT_EQUITY)-agg-FtmoDailyFloor(),2); j.KNum("headroom_max",AccountInfoDouble(ACCOUNT_EQUITY)-agg-FtmoMaxFloor(),2);
+   j.EndObj();
+   j.Key("open_positions"); j.BeginArr();
+   for(int i=0;i<ArraySize(g_rows);i++)
+      if(g_rows[i].posid>0 && !g_rows[i].closed && PositionSelectByTicket((ulong)g_rows[i].posid))
+        { j.BeginObj(); j.KInt("posid",g_rows[i].posid); j.KInt("signal_id",g_rows[i].id); j.KStr("strategy",g_rows[i].strategy);
+          j.KInt("direction",g_rows[i].direction); j.KNum("open_r",OpenR(i),3); j.KNum("banked_r",g_rows[i].r_multiple,3);
+          j.KNum("lots",PositionGetDouble(POSITION_VOLUME),2); j.KBool("banked",g_rows[i].banked); j.KBool("ratcheted",g_rows[i].ratcheted);
+          j.EndObj(); }
+   j.EndArr();
+   j.KInt("parked_signal_id",(g_live_parked ? g_delayed_id : 0));
+   j.KInt("last_signal_id",g_sig_seq);
+   j.KBool("in_tester",(bool)MQLInfoInteger(MQL_TESTER));
+   j.Key("alerts"); j.BeginArr();
+   if(unprot>0) j.Str(StringFormat("unprotected_position:%d",unprot));
+   for(int a=0;a<ArraySize(g_live_alerts);a++) j.Str(g_live_alerts[a]);
+   if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) j.Str("terminal_trade_not_allowed");
+   if(!(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)) j.Str("mql_trade_not_allowed");
+   j.EndArr();
+   j.EndObj();
+   AtomicWriteText(LivePath("heartbeat_"+_Symbol+".json"),j.Text());
+  }
+
+//--- LIVE init: runs from OnInit (never waits for tick 1). Mirrors the tester's first-tick block
+//--- but points the journals at live\journal\ (§11-5: never mixed with tester files; monthly
+//--- rotation lands in Slice 5) and never applies the AA_ prefix.
+void LiveInit()
+  {
+   if(g_live_inited) return;
+   g_account_login=AccountInfoInteger(ACCOUNT_LOGIN);
+   LiveEnsureDirs();
+   g_started=true;
+   g_start_time=TimeCurrent(); g_last_time=g_start_time;
+   g_journal_part    =LivePath(StringFormat("journal\\%s_%s.part.csv",_Symbol,StampCompact(g_start_time)));
+   g_actions_part    =LivePath(StringFormat("journal\\%s_%s.actions.part.csv",_Symbol,StampCompact(g_start_time)));
+   g_inv_journal_part=LivePath(StringFormat("journal\\%s_%s.inv.part.csv",_Symbol,StampCompact(g_start_time)));
+   g_inv_actions_part=LivePath(StringFormat("journal\\%s_%s.inv.actions.part.csv",_Symbol,StampCompact(g_start_time)));
+   if(!g_ev_loaded){ LoadEconEvents(); if(InpShowEvents) DrawEconEvents(); }
+   LiveLoadConfig();
+   LiveFtmoLoad();
+   if(InpLiveSelfTest) AtomicWriteText(LivePath("config\\trading_enabled.json"),"{\"trading_enabled\":true}");   // self-test owns its switch
+   LiveReadKillSwitch();
+   LiveAckOrphanedDone();
+   LiveRestoreState();          // G4: rows/actions/parked from state\, reconciled vs the terminal, orphans adopted
+   WriteJournal(g_journal_part);
+   if(InpShowSwings) DrawSwingMarkers();
+   g_live_inited=true;
+   AuditLine("restart","","","","ok","",StringFormat("build=%s tester=%d selftest=%d login=%I64d",EA_BUILD,(int)MQLInfoInteger(MQL_TESTER),(int)InpLiveSelfTest,g_account_login));
+   WriteHeartbeat();
+  }
+
+//--- G5: the 1s timer drives polling and the heartbeat independent of ticks. Throttles use
+//--- TimeCurrent() deltas (simulated seconds in the tester, wall-clock live).
+void OnTimer()
+  {
+   if(!g_active || !InpLiveMode) return;
+   if(!g_live_inited) LiveInit();
+   datetime now=TimeCurrent();
+   //--- the kill-switch FILE is re-read at the poll cadence (<=5s, same as tasks); its VALUE is honoured
+   //--- on every decision (E10). Reading it every second was 15M file reads per tester-year for nothing.
+   if(now-g_live_last_poll>=InpTaskPollSec)
+     {
+      g_live_last_poll=now;
+      LiveReadKillSwitch();
+      LiveLoadRiskMult();
+      LiveFtmoDayReset();      // no file I/O unless the FTMO day key changed
+      LiveProcessTasks();
+     }
+   //--- positions/ view: refreshed on every state change (journal hook) and at the heartbeat cadence
+   if(now-g_live_last_beat>=InpHeartbeatSec){ g_live_last_beat=now; LiveFtmoLoad(); LiveWritePositions(); WriteHeartbeat(); }   // FTMO rules re-read at heartbeat cadence (trader-editable)
+   if(InpLiveSelfTest) SelfTestTick();
+  }
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -290,18 +775,46 @@ int OnInit()
    bool dll_ok    = (bool)MQLInfoInteger(MQL_DLLS_ALLOWED);
    bool auto_mode = (InpAutoApprove!=AA_NONE);
 
-   //--- HARD RULE: auto-approve (no modal) is TESTER-ONLY; the interactive
-   //--- modal path additionally needs visual mode + DLLs. Never auto-trade live.
-   if(!in_tester)
+#ifdef LIVE
+   const bool live_build=true;
+#else
+   const bool live_build=false;
+#endif
+   //--- MODE SELECTION (Phase 3 M1 truth table; docs/phase3-live-system-requirements.md §3/§10/§11).
+   //--- Tester-era rules are unchanged; LIVE mode adds the file-queue path and must NEVER combine
+   //--- with auto-approve (the hybrid covenant: the EA cannot enter without a trader task, E7).
+   if(InpLiveMode)
      {
-      Print("HybridForwardTest runs only in the Strategy Tester - staying INERT.");
-      g_active=false; return(INIT_SUCCEEDED);
+      if(!live_build)
+        { Print("INERT: InpLiveMode requires the -live build (this build statically imports the popup DLL)."); g_active=false; return(INIT_SUCCEEDED); }
+      if(auto_mode)
+        { Print("INERT: never auto-trade live - InpLiveMode with InpAutoApprove=ALL/SKIP is refused."); g_active=false; return(INIT_SUCCEEDED); }
+      if(InpLiveSelfTest && !in_tester)
+        { Print("INERT: InpLiveSelfTest is tester-only."); g_active=false; return(INIT_SUCCEEDED); }
+      //--- §11-8: a live chart with AutoTrading disarmed stays ACTIVE so the heartbeat can REPORT
+      //--- terminal_trade_allowed / mql_trade_allowed = false (the quietest outage must be visible);
+      //--- order placement is refused at execution (trading_disabled) until it is armed.
+      if(!in_tester && (!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)))
+         Print("WARNING: live chart but AutoTrading NOT allowed (terminal=",(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED),
+               " mql=",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED),") - heartbeat will report it; approvals refused until armed.");
      }
-   if(!auto_mode && (!in_visual || !dll_ok))
+   else
      {
-      Print("Interactive mode needs visual tester + DLLs (or set InpAutoApprove=ALL/SKIP for ",
-            "headless). MQL_VISUAL_MODE=",in_visual," MQL_DLLS_ALLOWED=",dll_ok," - staying INERT.");
-      g_active=false; return(INIT_SUCCEEDED);
+      //--- HARD RULE: auto-approve (no modal) is TESTER-ONLY; the interactive
+      //--- modal path additionally needs visual mode + DLLs. Never auto-trade live.
+      if(!in_tester)
+        {
+         Print("HybridForwardTest runs only in the Strategy Tester - staying INERT.");
+         g_active=false; return(INIT_SUCCEEDED);
+        }
+      if(live_build && !auto_mode)
+        { Print("INERT: the -live build has no popup dialog - set InpLiveMode=true (queue) or InpAutoApprove=ALL/SKIP (headless)."); g_active=false; return(INIT_SUCCEEDED); }
+      if(!auto_mode && (!in_visual || !dll_ok))
+        {
+         Print("Interactive mode needs visual tester + DLLs (or set InpAutoApprove=ALL/SKIP for ",
+               "headless). MQL_VISUAL_MODE=",in_visual," MQL_DLLS_ALLOWED=",dll_ok," - staying INERT.");
+         g_active=false; return(INIT_SUCCEEDED);
+        }
      }
    g_active=true;
 
@@ -309,9 +822,11 @@ int OnInit()
    g_ndet=0;
    if(InpUseSMC) g_detectors[g_ndet++]=new CLiquiditySweepMSS(InpSmcMinRR,InpSmcTpR,InpRiskPct);
    if(InpUseFib) g_detectors[g_ndet++]=new CDeepFibRetrace(InpFibImpulseATR,InpFibMinRR,InpRiskPct);
+   if(InpUseEMArevQ) g_detectors[g_ndet++]=new CEma20MeanRevQ(InpEmaStretch,InpEmaAdxCeil,InpEmaMinRR,InpRiskPct);  // priority 3 (above base EMArev if both on)
    if(InpUseEMA) g_detectors[g_ndet++]=new CEma20MeanRev(InpEmaStretch,InpEmaAdxCeil,InpEmaMinRR,InpRiskPct);
    if(InpUseShock) g_detectors[g_ndet++]=new CShockContinuation(InpShockAtr,InpShockPullAtr,InpShockTpMult,InpShockMinRR,InpRiskPct,InpShockTrig,InpShockCalGate);
    if(InpUseEmaRevInv) g_detectors[g_ndet++]=new CEmaRevInverse(InpEmaStretch,InpEmaAdxCeil,InpEmaMinRR,InpRiskPct);
+   if(InpUseTrendCont) g_detectors[g_ndet++]=new CTrendContinuation(InpRiskPct);
    if(g_ndet==0) Print("WARNING: no detectors enabled.");
 
    //--- D1 regime indicators (coach Phase-2.5 gate): 200-EMA + ADX(14) on the daily.
@@ -328,8 +843,9 @@ int OnInit()
    g_last_bar=iTime(_Symbol,g_tf,0);
    g_started =false;
 
-   string mode=(auto_mode? (InpAutoApprove==AA_ALL?"AUTO-APPROVE(headless)":"AUTO-SKIP(headless)")
-                         : "INTERACTIVE");
+   string mode=(InpLiveMode ? (InpLiveSelfTest ? "LIVE-SELFTEST(queue,tester)" : (in_tester ? "LIVE-IN-TESTER(queue)" : "LIVE(queue)"))
+              : (auto_mode? (InpAutoApprove==AA_ALL?"AUTO-APPROVE(headless)":"AUTO-SKIP(headless)")
+                          : "INTERACTIVE"));
    Print("HybridForwardTest ACTIVE [",mode,"] on ",_Symbol," detectors=",g_ndet,
          " risk=",DoubleToString(InpRiskPct*100.0,1),"%");
    //--- build tag: if the popup misbehaves, confirm THIS line appears (fresh EA)
@@ -337,10 +853,34 @@ int OnInit()
    //--- the mid-trade panel needs the same footing as the interactive dialog
    //--- (real window + human): interactive mode, visual tester, DLLs allowed.
    //--- Headless AA_ALL/AA_SKIP runs never create a window.
-   g_can_panel = (g_active && !auto_mode && in_visual && dll_ok && InpManagePanel);
+   g_can_panel = (g_active && !auto_mode && in_visual && dll_ok && InpManagePanel && !InpLiveMode);   // live: no panel DLL
 
    Print("HFT build 2026-08-07a: mid-trade management panel (Close / Close50 / SL->BE) +"
          " day-of-week signal time (needs matching TradeDialog.dll - restart MT5 after a rebuild).");
+
+   //--- Item 8 (coach 2026-09-10): DISPLAY-ONLY three-EMA overlay (EMA20 gold / EMA50
+   //--- DeepSkyBlue / EMA200 violet) on the chart window. Added to chart 0 so it appears
+   //--- identically on the live chart (ChartScreenShot) and in the tester-window capture
+   //--- (os_shot_daemon PrintWindow). No signal/logic role. Skipped in headless AA (no chart);
+   //--- the D1 counterpart lives in inbox_bridge.render_d1 (same colours).
+   if(!auto_mode || in_visual || InpLiveMode)   // live: the signal JSON needs the EMA values (E4)
+     {
+      g_h_e20 =iMA(_Symbol,PERIOD_CURRENT, 20,0,MODE_EMA,PRICE_CLOSE);
+      g_h_e50 =iMA(_Symbol,PERIOD_CURRENT, 50,0,MODE_EMA,PRICE_CLOSE);
+      g_h_e200=iMA(_Symbol,PERIOD_CURRENT,200,0,MODE_EMA,PRICE_CLOSE);
+      if(g_h_e20==INVALID_HANDLE || g_h_e50==INVALID_HANDLE || g_h_e200==INVALID_HANDLE)
+         Print("WARNING: 3-EMA overlay iMA handle failed err=",GetLastError()," - H4 EMAs not shown.");
+      else
+         Print("HybridTriEMA overlay = object-drawn EMA20/50/200 on chart 0.");
+     }
+   //--- PHASE 3 LIVE: a 1s timer drives task polling (<=5s) + heartbeat (<=60s) independent of
+   //--- ticks (G5 - an idle symbol can go minutes without a tick). LiveInit runs NOW (not on
+   //--- tick 1) so the timer never fires before the queue dirs / config / events / state exist.
+   if(InpLiveMode)
+     {
+      if(!EventSetTimer(1)) Print("WARNING: EventSetTimer(1) failed err=",GetLastError()," - live polling/heartbeat will not run.");
+      LiveInit();
+     }
    return(INIT_SUCCEEDED);
   }
 
@@ -359,12 +899,59 @@ const double PATH_TH[7]={0.25,0.5,0.75,1.0,1.5,2.0,3.0};   // reference threshol
 //--- scale-out partial / BE move can't reset it. Journal-only, no behaviour change.
 long   g_mfe_posid=0; int g_mfe_rowidx=-1, g_mfe_dir=0; bool g_mfe_dipped=false;
 double g_mfe_entry=0, g_mfe_risk=0, g_mfe_max=0, g_mfe_pre=0, g_mfe_post=0;
+//--- STUDY-ONLY shadow-v2 observer state (globals; snapshot immutable levels at open).
+//--- 0 pre-bank, 1 runner-open, 2 done. trigR=min(1,tp1_R) if two-target else 1.0;
+//--- padR = BE-pad in R (mirrors BEPrice, so the runner's BE stop matches the live rule).
+int    g_v2_state=2; double g_v2_trigR=1.0, g_v2_tp2R=0.0, g_v2_padR=0.0, g_v2_bank=0.0, g_v2_lastfav=0.0;
+//--- TP1-ratchet study path trackers (per open position; one-setup lock => one at a time).
+double g_rt_tp1R=0.0, g_rt_tp2R=0.0; bool g_rt_touched1=false, g_rt_reached2=false, g_rt_redip1=false;
+
+//--- STUDY-ONLY trigger-impulse feature: max H4 bar range over the 3 bars preceding the
+//--- signal, in ATR(14) units (shift-1 ATR); imp_nbig counts those >= 1.5*ATR.
+void ComputeImpulse(int n)
+  {
+   g_rows[n].imp_atr=0.0; g_rows[n].imp_nbig=0;
+   double atr=SignalATR(); if(atr<=0.0) return;
+   double mx=0.0; int nb=0;
+   for(int s=1;s<=3;s++)
+     { double rg=iHigh(_Symbol,g_tf,s)-iLow(_Symbol,g_tf,s);
+       if(rg>mx) mx=rg;
+       if(rg>=1.5*atr) nb++; }
+   g_rows[n].imp_atr=mx/atr; g_rows[n].imp_nbig=nb;
+  }
+
+//--- STUDY-ONLY calendar label: 1 if a symbol-relevant HIGH-impact (class V/W) event
+//--- falls within +/-4h (+/-1 H4 bar) of the signal. Uses the EA's already-loaded,
+//--- server-time-aligned, class-baked econ cache (g_ev_*) scoped to base/quote/All.
+int CalLabeled(datetime sigtime)
+  {
+   string base,quote; SymbolCcy(base,quote);
+   for(int i=0;i<ArraySize(g_ev_t);i++)
+     {
+      if(g_ev_cls[i]!="V" && g_ev_cls[i]!="W") continue;
+      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote && g_ev_ccy[i]!="All") continue;
+      long d=(long)g_ev_t[i]-(long)sigtime; if(d<0) d=-d;
+      if(d<=4*3600) return 1;
+     }
+   return 0;
+  }
 void MfeTerminal(int idx,string term)
   {
    if(idx!=g_mfe_rowidx || g_mfe_posid==0) return;
    g_rows[idx].mfe_r=g_mfe_max; g_rows[idx].pre_dip_r=g_mfe_pre;
    g_rows[idx].post_dip_r=g_mfe_post; g_rows[idx].dipped=(g_mfe_dipped?1:0);
    g_rows[idx].terminal=term;
+   //--- STUDY-ONLY: real position closed with v2 still open (only the test-boundary
+   //--- force-close reaches here unresolved) -> mark to the last favR.
+   if(!InpV2Exit && g_v2_state<2)
+     {
+      if(g_v2_state==1)   // banked, runner open -> mark the runner half
+        { g_rows[idx].v2_bank=g_v2_bank; g_rows[idx].v2_r=g_v2_bank+0.5*g_v2_lastfav; }
+      else                // never banked -> whole position marked
+        g_rows[idx].v2_r=g_v2_lastfav;
+      g_rows[idx].v2_runner=3;
+      g_v2_state=2;
+     }
    g_mfe_posid=0; g_mfe_rowidx=-1;
   }
 void TrackAllMfePath()
@@ -376,7 +963,35 @@ void TrackAllMfePath()
    if(g_rows[oi].posid!=g_mfe_posid)
      { g_mfe_posid=g_rows[oi].posid; g_mfe_rowidx=oi; g_mfe_dir=g_rows[oi].direction;
        g_mfe_entry=g_rows[oi].entry; g_mfe_risk=g_rows[oi].risk_px;
-       g_mfe_max=0; g_mfe_pre=0; g_mfe_post=0; g_mfe_dipped=false; }
+       g_mfe_max=0; g_mfe_pre=0; g_mfe_post=0; g_mfe_dipped=false;
+       //--- TP1-RATCHET STUDY (all modes): snapshot the runner's TP1/TP2 in R at open and reset
+       //--- the path flags. tp1R>0 only when the detector has a real TP1 (scale-out); else the
+       //--- runner has no TP1 to ratchet to and B1/B2 are N/A (rt_tp1R=0 marks that in Python).
+       if(g_mfe_risk>0.0)
+         {
+          int dd=g_mfe_dir;
+          g_rt_tp1R=(g_rows[oi].tp1>0.0 ? dd*(g_rows[oi].tp1-g_mfe_entry)/g_mfe_risk : 0.0);
+          g_rt_tp2R=(g_rows[oi].tp2>0.0 ? dd*(g_rows[oi].tp2-g_mfe_entry)/g_mfe_risk
+                                        : dd*(g_rows[oi].tp -g_mfe_entry)/g_mfe_risk);
+          g_rt_touched1=false; g_rt_reached2=false; g_rt_redip1=false;
+          g_rows[oi].rt_tp1R=g_rt_tp1R; g_rows[oi].rt_tp2R=g_rt_tp2R;
+          g_rows[oi].rt_touched1=0; g_rows[oi].rt_reached2=0; g_rows[oi].rt_redip1=0;
+          g_rows[oi].rt_bankr=-99.0;   // sentinel: overwritten with OpenR when the +1R bank fires
+         }
+       //--- STUDY-ONLY: snapshot the v2 observer's immutable thresholds at open.
+       if(!InpV2Exit && g_mfe_risk>0.0)
+         {
+          int d=g_mfe_dir;
+          double tp1R=(g_rows[oi].partial_frac>0.0 && g_rows[oi].tp1>0.0
+                        ? d*(g_rows[oi].tp1-g_mfe_entry)/g_mfe_risk : 1.0);
+          g_v2_trigR=(g_rows[oi].partial_frac>0.0 && g_rows[oi].tp1>0.0 ? MathMin(1.0,tp1R) : 1.0);
+          g_v2_tp2R =(g_rows[oi].tp2>0.0 ? d*(g_rows[oi].tp2-g_mfe_entry)/g_mfe_risk
+                                         : d*(g_rows[oi].tp -g_mfe_entry)/g_mfe_risk);
+          g_v2_padR =InpBEPadPips*PipSize()/g_mfe_risk;
+          g_v2_bank=0.0; g_v2_lastfav=0.0; g_v2_state=0;
+          g_rows[oi].v2_r=0.0; g_rows[oi].v2_bank=0.0; g_rows[oi].v2_runner=-1;
+         }
+     }
    if(g_mfe_risk<=0.0) return;
    double exitpx=(g_mfe_dir>0? SymbolInfoDouble(_Symbol,SYMBOL_BID):SymbolInfoDouble(_Symbol,SYMBOL_ASK));
    double favR=((g_mfe_dir>0? exitpx-g_mfe_entry : g_mfe_entry-exitpx))/g_mfe_risk;
@@ -388,11 +1003,53 @@ void TrackAllMfePath()
      { if(favR>g_mfe_post) g_mfe_post=favR; }
    g_rows[oi].mfe_r=g_mfe_max; g_rows[oi].pre_dip_r=g_mfe_pre;
    g_rows[oi].post_dip_r=g_mfe_post; g_rows[oi].dipped=(g_mfe_dipped?1:0);
+   //--- TP1-RATCHET STUDY (all modes): update the runner's TP1/TP2 path flags from the LIVE
+   //--- favR. redip = fell back to/below TP1 AFTER touching it and BEFORE reaching TP2 (the
+   //--- prior-tick was1 guard stops the arming tick itself from counting as a redip). This is
+   //--- the ONE ordering fact the mfe_r max cannot carry.
+   if(g_rows[oi].tp1>0.0)
+     {
+      bool was1=g_rt_touched1;
+      if(favR>=g_rt_tp1R) g_rt_touched1=true;
+      if(g_rt_tp2R>0.0 && favR>=g_rt_tp2R) g_rt_reached2=true;
+      if(was1 && !g_rt_reached2 && favR<=g_rt_tp1R) g_rt_redip1=true;
+      g_rows[oi].rt_touched1=(g_rt_touched1?1:0);
+      g_rows[oi].rt_reached2=(g_rt_reached2?1:0);
+      g_rows[oi].rt_redip1=(g_rt_redip1?1:0);
+     }
+   //--- STUDY-ONLY: shadow doctrine-v2 exit. Bank 50% at the first touch of trigR
+   //--- (fire-tick favR, mirroring the live +1.0x overshoot); runner (50%) to tp2 with
+   //--- a BE stop at padR. v2's stop is never looser than the real (old-exit) stop, so
+   //--- the observer always resolves within the real position's lifetime.
+   if(!InpV2Exit && g_v2_state<2)
+     {
+      g_v2_lastfav=favR;
+      if(g_v2_state==0)
+        {
+         if(favR<=-1.0)
+           { g_rows[oi].v2_bank=0.0; g_rows[oi].v2_r=-1.0; g_rows[oi].v2_runner=2; g_v2_state=2; }
+         else if(favR>=g_v2_trigR)
+           { g_v2_bank=0.5*favR; g_v2_state=1;
+             if(favR>=g_v2_tp2R)   // bank + tp2 same tick
+               { g_rows[oi].v2_bank=g_v2_bank; g_rows[oi].v2_r=g_v2_bank+0.5*g_v2_tp2R;
+                 g_rows[oi].v2_runner=1; g_v2_state=2; } }
+        }
+      else if(g_v2_state==1)
+        {
+         if(favR>=g_v2_tp2R)
+           { g_rows[oi].v2_bank=g_v2_bank; g_rows[oi].v2_r=g_v2_bank+0.5*g_v2_tp2R;
+             g_rows[oi].v2_runner=1; g_v2_state=2; }
+         else if(favR<=g_v2_padR)   // runner stopped at break-even (pad ~0)
+           { g_rows[oi].v2_bank=g_v2_bank; g_rows[oi].v2_r=g_v2_bank;
+             g_rows[oi].v2_runner=0; g_v2_state=2; }
+        }
+     }
   }
 
 void OnTick()
   {
    if(!g_active) return;
+   EnsureTriEMA();   // item 8: keep the 3-EMA overlay on-chart (tester strips it on template reapply)
 
    //--- econ-event lines: parse the calendar once, then redraw on each new bar
    //--- (below) so the forward window rolls with the replay. ALWAYS load (the
@@ -401,7 +1058,7 @@ void OnTick()
    //--- the on-CHART lines, which would leak event names into the advisor shot.
    if(!g_ev_loaded) { LoadEconEvents(); if(InpShowEvents) DrawEconEvents(); }
 
-   if(!g_started)
+   if(!g_started && !InpLiveMode)   // live: LiveInit() already did this in OnInit (live\journal paths)
      {
       g_started=true;
       g_start_time=TimeCurrent(); g_last_time=g_start_time;
@@ -603,9 +1260,17 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].tp1_done=true; g_rows[n].decision_ms=0; g_rows[n].posid=0;
    g_rows[n].closed=true; g_rows[n].exit_time=0; g_rows[n].exit_price=0.0;
    g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
-   g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend;
+   g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend; g_rows[n].decision_class=g_sig_class;
    g_rows[n].to_entry=g_to_entry; g_rows[n].to_sl=g_to_sl; g_rows[n].to_tp1=g_to_tp1; g_rows[n].to_tp2=g_to_tp2;
    g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0; g_rows[n].terminal="";
+   g_rows[n].imp_atr=0.0; g_rows[n].imp_nbig=0; g_rows[n].cal_lab=0; g_rows[n].v2_r=0.0; g_rows[n].v2_bank=0.0; g_rows[n].v2_runner=-1;
+   //--- ArrayResize does NOT zero new struct elements: the reject path must init the runner/ratchet
+   //--- study fields too, else rejected rows carry memory garbage in rt_* (non-deterministic journal
+   //--- bytes; found by the Phase-3 M1 parity gate 2026-09-15). Behaviour-neutral: no reader uses
+   //--- these columns on a rejected row.
+   g_rows[n].banked=false; g_rows[n].closed_vol=0.0; g_rows[n].ratcheted=false; g_rows[n].rt_bankr=-99.0;
+   g_rows[n].rt_tp1R=0.0; g_rows[n].rt_tp2R=0.0; g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0;
+   g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct; g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=0; g_rows[n].entry_mode="rejected";
    Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," REJECTED: ",why);
    WriteJournal(g_journal_part);
   }
@@ -641,6 +1306,1023 @@ void ComputeRegime(int dir,string &regime,string &wt)
    else wt=(((regime=="TREND_UP") && dir>0) || ((regime=="TREND_DOWN") && dir<0)) ? "1" : "0";
   }
 
+//+------------------------------------------------------------------+
+//| Protocol decision-class (coach 2026-09-09). MECHANICAL, no drift: |
+//|   TAKE       = SweepMSS or DeepFib in a TREND regime tag.         |
+//|   DISCRETION = everything else — every TrendCont signal (all      |
+//|                regimes), EMArev, and ANY signal under CHOP or a    |
+//|                blank/warm-up tag. Blank/warm-up is DISCRETION by   |
+//|                construction (fails both TREND tests), never TAKE.  |
+//| The trader reads his obligation off the popup; he never derives   |
+//| it from the tag himself.                                          |
+//+------------------------------------------------------------------+
+string ClassifyProtocol(string strat,string regime)
+  {
+   bool is_trend =(regime=="TREND_UP" || regime=="TREND_DOWN");
+   bool take_strat=(strat=="SweepMSS" || strat=="DeepFib");
+   return (take_strat && is_trend) ? "TAKE" : "DISCRETION";
+  }
+
+//--- Market-entry re-validation (item 3, shared by the popup's Market-now click and the live
+//--- approve task): entry at the current market price must keep valid geometry, clear the
+//--- strategy's MinRR floor to the runner target, and respect the min stop distance. Same
+//--- computations and order as the original inline block; `why` names the first failure.
+bool ValidateMarketEntry(SignalCandidate &cand,double &en,double &rrn,string &why)
+  {
+   double mkn=(cand.direction>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK):SymbolInfoDouble(_Symbol,SYMBOL_BID));
+   en=NormPrice(mkn);
+   double otpn=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0 ? cand.tp2 : cand.tp);
+   rrn=(cand.direction>0 ? (otpn-en)/(en-cand.sl) : (en-otpn)/(cand.sl-en));
+   double minstopn=MinStopDist(SignalATR());
+   bool geom_ok=(cand.direction>0 ? (cand.sl<en && en<otpn) : (otpn<en && en<cand.sl));
+   why="";
+   if(!geom_ok || rrn<StratMinRR(cand.strategy) || MathAbs(en-cand.sl)<minstopn)
+     {
+      why=(!geom_ok ? "price past a level" :
+           (MathAbs(en-cand.sl)<minstopn ? "stop too tight" :
+            StringFormat("R:R %.1f < min %.1f",rrn,StratMinRR(cand.strategy))));
+      return false;
+     }
+   return true;
+  }
+
+
+//+==================================================================+
+//| PHASE 3 LIVE - Slice 2: election gate, signal publication, park/ |
+//| replay (implicit delay, code 8, SL-through invalidation).         |
+//+==================================================================+
+//--- G1: NO-HOLD (class W) row for a binding currency inside the election horizon. Symbol-scoped
+//--- via SymbolCcy (base/quote/"All"); W rows re-anchored to that day's midnight exactly as
+//--- BuildEventBlocks does. Fail CLOSED when the calendar is not loaded.
+bool ElectionGateHit(datetime now,string &ev_name,datetime &ev_t)
+  {
+   ev_name=""; ev_t=0;
+   if(!g_ev_loaded || ArraySize(g_ev_t)==0){ ev_name="events_not_loaded"; return true; }
+   if(g_cfg_election_days<=0) return false;
+   string base,quote; SymbolCcy(base,quote);
+   datetime tmax=now+(datetime)((long)g_cfg_election_days*86400);
+   for(int i=0;i<ArraySize(g_ev_t);i++)
+     {
+      if(g_ev_cls[i]!="W") continue;
+      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote && g_ev_ccy[i]!="All") continue;
+      MqlDateTime mt; TimeToStruct(g_ev_t[i],mt); mt.hour=0; mt.min=0; mt.sec=0;
+      datetime rt=StructToTime(mt);
+      if(rt>now && rt<=tmax){ ev_name=g_ev_ccy[i]+" "+g_ev_name[i]; ev_t=rt; return true; }
+     }
+   return false;
+  }
+//--- English event labels (the guide's four classes; letters are retired from displays)
+string EventLabel(string cls)
+  {
+   if(cls=="W") return "NO-HOLD (election)";
+   if(cls=="V") return "NO ENTRY <6h (big release)";
+   if(cls=="C") return "caution";
+   if(cls=="H") return "holiday/thin";
+   return "";
+  }
+//--- coarse instrument class for the advisor's library reads (mirrors pipeline/inbox_bridge.asset_class)
+string AssetClass()
+  {
+   string r=SymbolRoot(); StringToUpper(r);
+   if(StringFind(r,"OIL")>=0 || r=="WTI" || r=="BRENT" || r=="XTIUSD" || r=="XBRUSD" || r=="XNGUSD") return "energy";
+   if(StringFind(r,"XAU")==0 || StringFind(r,"XAG")==0 || r=="GOLD" || r=="SILVER") return "metal";
+   string idx[]={"US30","US100","US500","US2000","NAS100","USTEC","SPX500","NDX","SPX","GER40","DE40","UK100","JP225","EU50","AUS200","HK50"};
+   for(int i=0;i<ArraySize(idx);i++) if(r==idx[i]) return "equity index";
+   string majors[]={"EUR","GBP","USD","JPY","CHF","AUD","CAD","NZD"};
+   if(StringLen(r)==6)
+     {
+      string a=StringSubstr(r,0,3), b=StringSubstr(r,3,3); bool ma=false, mb=false;
+      for(int i=0;i<ArraySize(majors);i++){ if(a==majors[i]) ma=true; if(b==majors[i]) mb=true; }
+      if(ma && mb) return "FX major";
+      if(ma || mb) return "FX cross";
+     }
+   return "(unclassified)";
+  }
+//--- the popup's day-of-week line, reproduced for the signal file
+string SigTimeString(datetime dnow,datetime zone_to)
+  {
+   string dows[]={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+   MqlDateTime ndt; TimeToStruct(dnow,ndt);
+   string s=StringFormat("%s  %s UTC",dows[ndt.day_of_week],TimeToString(dnow,TIME_MINUTES));
+   int delays=(int)((dnow-zone_to)/PeriodSeconds(g_tf))-1;
+   if(delays>0) s+=StringFormat("  (+%d bar%s)",delays,(delays==1?"":"s"));
+   return s;
+  }
+string SessionName(datetime t)
+  { MqlDateTime d; TimeToStruct(t,d); int h=d.hour;
+    return (h<7 ? "Asia" : (h<13 ? "London" : (h<21 ? "New York" : "late/off-hours"))); }
+//--- events panel as JSON objects: the SAME filter as BuildEventBlocks (forward window, notable,
+//--- per-symbol base/quote/All), plus the English label and a `binding` flag
+//--- (W inside the election horizon, or V inside 6h).
+void BuildEventJson(datetime sig,CJsonW &j)
+  {
+   string base,quote; SymbolCcy(base,quote);
+   datetime tmax=sig+(datetime)((long)InpEvtListDays*86400);
+   int cnt=0;
+   j.Key("events"); j.BeginArr();
+   for(int i=0;i<ArraySize(g_ev_t);i++)
+     {
+      datetime t=g_ev_t[i];
+      if(t<sig || t>tmax) continue;
+      if(!g_ev_top[i]) continue;
+      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote && g_ev_ccy[i]!="All") continue;
+      datetime rt=t;
+      if(g_ev_cls[i]=="W"){ MqlDateTime mt; TimeToStruct(t,mt); mt.hour=0; mt.min=0; mt.sec=0; rt=StructToTime(mt); }
+      double hrs=((double)((long)rt-(long)sig))/3600.0; if(hrs<0.0) hrs=0.0;
+      bool binding=((g_ev_cls[i]=="W" && hrs<=g_cfg_election_days*24.0) || (g_ev_cls[i]=="V" && hrs<6.0));
+      j.BeginObj();
+      j.KTime("t_utc",t); j.KTime("anchor_utc",rt); j.KNum("hours_until",hrs,1);
+      j.KStr("ccy",g_ev_ccy[i]); j.KStr("name",g_ev_name[i]); j.KStr("cls",g_ev_cls[i]);
+      j.KStr("sig",SigTag(ClassSig(g_ev_cls[i],g_ev_name[i]))); j.KStr("label",EventLabel(g_ev_cls[i])); j.KBool("binding",binding);
+      j.EndObj();
+      if(++cnt>=InpEvtListMax) break;
+     }
+   j.EndArr();
+   j.KInt("events_count",cnt);
+  }
+//--- E4: signals/<SYMBOL>-<id>.json - everything the popup showed plus what a server-side
+//--- renderer and the live advisor bundle need (symbol, date, class:, events, exposure, deadline,
+//--- last 500 H4 + 500 D1 bars, overlay geometry, EMA20/50/200). Rewritten on every state change.
+void WriteSignalJson(string status,string auto_reason)
+  {
+   SignalCandidate c=g_delayed;
+   int id=g_park.sid;
+   datetime bar0=iTime(_Symbol,g_tf,0);
+   bool two_target=(c.partial_fraction>0.0 && c.tp1>0.0 && c.tp2>0.0);
+   double risk=MathAbs(c.entry-c.sl);
+   double rr_runner=(risk>0.0 ? MathAbs((two_target?c.tp2:c.tp)-c.entry)/risk : 0.0);
+   double rr_tp1   =(risk>0.0 && c.tp1>0.0 ? MathAbs(c.tp1-c.entry)/risk : 0.0);
+   double atr=SignalATR();
+   datetime deadline=bar0+(datetime)((long)MathMax(1,g_cfg_max_age_bars-g_park.implicit_streak)*PeriodSeconds(g_tf));
+   string evn=""; datetime evt=0; bool egate=ElectionGateHit(bar0,evn,evt);
+
+   CJsonW j; j.BeginObj();
+   j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KStr("ea_build",EA_BUILD);
+   j.KStr("symbol",_Symbol); j.KStr("symbol_root",SymbolRoot()); j.KStr("asset_class",AssetClass());
+   j.KInt("signal_id",id); j.KStr("signal_key",StringFormat("%s-%d",_Symbol,id));
+   j.KStr("status",status); j.KStr("auto_reason",auto_reason);
+   j.KTime("signal_time",c.zone_to); j.KTime("decision_bar",bar0); j.KTime("published_at",g_park.published_at);
+   j.KStr("sigtime_text",SigTimeString(bar0,c.zone_to)); j.KStr("session",SessionName(bar0));
+   j.KStr("strategy",c.strategy); j.KStr("strategy_text",c.strategy+(c.d1_context?"  [D1 aligned]":"")+(c.comment!=""?" - "+c.comment:""));
+   j.KStr("direction",DirStr(c.direction)); j.KInt("direction_sign",c.direction);
+   j.Key("levels"); j.BeginObj();
+     j.KNum("entry",c.entry,_Digits); j.KNum("sl",c.sl,_Digits); j.KNum("tp",c.tp,_Digits);
+     j.KNum("tp1",c.tp1,_Digits); j.KNum("tp2",c.tp2,_Digits); j.KNum("partial_fraction",c.partial_fraction,2);
+     j.KBool("stop_entry",c.stop_entry); j.KBool("two_target",two_target);
+   j.EndObj();
+   j.Key("true_orig"); j.BeginObj();
+     j.KNum("entry",g_to_entry,_Digits); j.KNum("sl",g_to_sl,_Digits); j.KNum("tp1",g_to_tp1,_Digits); j.KNum("tp2",g_to_tp2,_Digits);
+   j.EndObj();
+   j.Key("rr"); j.BeginObj();
+     j.KNum("detector",c.rr,2); j.KNum("runner",rr_runner,2); j.KNum("tp1",rr_tp1,2); j.KNum("floor",StratMinRR(c.strategy),2);
+   j.EndObj();
+   j.Key("sizing"); j.BeginObj();
+     j.KNum("lots",g_park.lots,2); j.KNum("risk_pct_gate",InpRiskPct,4); j.KNum("risk_mult_applied",g_risk_mult,3);
+     j.KNum("risk_pct_effective",InpRiskPct*g_risk_mult,4); j.KStr("lots_line",LotsLine(g_park.lots,c.entry,c.sl,atr));
+     j.KNum("sl_atr",(atr>0.0? risk/atr : 0.0),2); j.KNum("atr14",atr,_Digits);
+   j.EndObj();
+   j.Key("regime"); j.BeginObj();
+     j.KStr("tag",g_sig_regime); j.KStr("with_trend",g_sig_with_trend); j.KStr("pretty",RegimePretty());
+   j.EndObj();
+   j.KStr("decision_class",g_sig_class);
+   j.KStr("protocol_text",(g_sig_class=="TAKE"
+      ? "PROTOCOL: TAKE - TREND regime, gate-class strategy (both directions)"
+      : "PROTOCOL: DISCRETION - non-gate strategy or CHOP/blank; trader's read"));
+   BuildEventJson(bar0,j);
+   j.Key("election_gate"); j.BeginObj(); j.KBool("hit",egate); j.KStr("event",evn); if(evt>0) j.KTime("anchor_utc",evt); else j.KNull("anchor_utc"); j.EndObj();
+   //--- exposure: this symbol's open graded position(s) + parked state (cross-symbol view = heartbeat aggregate)
+   int unprot=0; double agg=AggregateRiskToStop(unprot);
+   j.Key("exposure"); j.BeginObj();
+     j.KNum("aggregate_risk_to_stop",agg,2); j.KInt("account_positions",PositionsTotal());
+     j.Key("open_positions"); j.BeginArr();
+     for(int i=0;i<ArraySize(g_rows);i++)
+        if(g_rows[i].posid>0 && !g_rows[i].closed && PositionSelectByTicket((ulong)g_rows[i].posid))
+          { j.BeginObj(); j.KInt("posid",g_rows[i].posid); j.KInt("signal_id",g_rows[i].id); j.KStr("strategy",g_rows[i].strategy);
+            j.KStr("direction",DirStr(g_rows[i].direction)); j.KNum("open_r",OpenR(i),3); j.EndObj(); }
+     j.EndArr();
+   j.EndObj();
+   j.KTime("deadline",deadline); j.KInt("max_age_bars",g_cfg_max_age_bars);
+   j.KInt("delay_count",g_delay_count); j.KInt("implicit_streak",g_park.implicit_streak);
+   j.Key("entry_modes"); j.BeginArr(); if(g_delay_count==0) j.Str("market"); else { j.Str("pending"); j.Str("market"); } j.EndArr();
+   j.KBool("trading_enabled",g_trading_enabled);
+   //--- overlay geometry (what DrawOverlays draws) + EMA values at the last closed bar
+   j.Key("overlay"); j.BeginObj();
+     j.Key("zone"); j.BeginObj(); j.KTime("from",c.zone_from); j.KTime("to",c.zone_to); j.KNum("hi",c.zone_hi,_Digits); j.KNum("lo",c.zone_lo,_Digits); j.EndObj();
+     j.Key("zone2"); j.BeginObj(); j.KNum("hi",c.zone2_hi,_Digits); j.KNum("lo",c.zone2_lo,_Digits); j.EndObj();
+     j.Key("leg"); j.BeginObj(); j.KTime("t0",c.leg_t0); j.KNum("p0",c.leg_p0,_Digits); j.KTime("t1",c.leg_t1); j.KNum("p1",c.leg_p1,_Digits); j.EndObj();
+     j.Key("aux"); j.BeginArr();
+     for(int i=0;i<c.aux_count && i<8;i++){ j.BeginObj(); j.KNum("price",c.aux_price[i],_Digits); j.KStr("label",c.aux_label[i]); j.EndObj(); }
+     j.EndArr();
+     j.Key("swings_hi"); j.BeginArr();
+     for(int i=0;i<c.n_swing_hi && i<10;i++){ j.BeginObj(); j.KTime("t",c.swing_hi_t[i]); j.KNum("p",c.swing_hi_p[i],_Digits); j.EndObj(); }
+     j.EndArr();
+     j.Key("swings_lo"); j.BeginArr();
+     for(int i=0;i<c.n_swing_lo && i<10;i++){ j.BeginObj(); j.KTime("t",c.swing_lo_t[i]); j.KNum("p",c.swing_lo_p[i],_Digits); j.EndObj(); }
+     j.EndArr();
+     double e20[1],e50[1],e200[1]; bool eok=(CopyBuffer(g_h_e20,0,1,1,e20)==1 && CopyBuffer(g_h_e50,0,1,1,e50)==1 && CopyBuffer(g_h_e200,0,1,1,e200)==1);
+     j.Key("ema_h4"); j.BeginObj();
+     if(eok){ j.KNum("e20",e20[0],_Digits); j.KNum("e50",e50[0],_Digits); j.KNum("e200",e200[0],_Digits); } else { j.KNull("e20"); j.KNull("e50"); j.KNull("e200"); }
+     j.EndObj();
+   j.EndObj();
+   //--- bars: last 500 H4 + 500 D1, oldest -> newest, [t,o,h,l,c,v]
+   MqlRates r[]; ArraySetAsSeries(r,false);
+   int nh=CopyRates(_Symbol,PERIOD_H4,0,500,r);
+   j.Key("bars_h4"); j.BeginArr();
+   for(int i=0;i<nh;i++){ j.BeginArr(); j.Int((long)r[i].time); j.Num(r[i].open,_Digits); j.Num(r[i].high,_Digits); j.Num(r[i].low,_Digits); j.Num(r[i].close,_Digits); j.Int(r[i].tick_volume); j.EndArr(); }
+   j.EndArr();
+   int nd=CopyRates(_Symbol,PERIOD_D1,0,500,r);
+   j.Key("bars_d1"); j.BeginArr();
+   for(int i=0;i<nd;i++){ j.BeginArr(); j.Int((long)r[i].time); j.Num(r[i].open,_Digits); j.Num(r[i].high,_Digits); j.Num(r[i].low,_Digits); j.Num(r[i].close,_Digits); j.Int(r[i].tick_volume); j.EndArr(); }
+   j.EndArr();
+   j.KInt("bars_h4_count",nh); j.KInt("bars_d1_count",nd);
+   j.EndObj();
+   AtomicWriteText(LivePath(StringFormat("signals\\%s-%d.json",_Symbol,id)),j.Text());
+  }
+//--- parked-signal state file (restored by Slice 4)
+void LiveSaveParked()
+  {
+   SignalCandidate c=g_delayed;
+   CJsonW j; j.BeginObj();
+   j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KInt("sid",g_park.sid); j.KInt("delay_count",g_delay_count);
+   j.KInt("implicit_streak",g_park.implicit_streak); j.KBool("explicit_this_bar",g_park.explicit_this_bar);
+   j.KTime("published_bar",g_park.published_bar); j.KTime("published_at",g_park.published_at); j.KNum("lots",g_park.lots,2);
+   j.KNum("orig_entry",g_park.orig_entry,_Digits); j.KNum("orig_sl",g_park.orig_sl,_Digits); j.KNum("orig_tp",g_park.orig_tp,_Digits);
+   j.KNum("orig_tp1",g_park.orig_tp1,_Digits); j.KNum("orig_tp2",g_park.orig_tp2,_Digits); j.KStr("caption",g_park.caption);
+   j.KStr("regime",g_sig_regime); j.KStr("with_trend",g_sig_with_trend); j.KStr("decision_class",g_sig_class);
+   j.KNum("to_entry",g_to_entry,_Digits); j.KNum("to_sl",g_to_sl,_Digits); j.KNum("to_tp1",g_to_tp1,_Digits); j.KNum("to_tp2",g_to_tp2,_Digits);
+   j.Key("cand"); j.BeginObj();
+     j.KStr("strategy",c.strategy); j.KInt("direction",c.direction); j.KNum("entry",c.entry,_Digits); j.KNum("sl",c.sl,_Digits);
+     j.KNum("tp",c.tp,_Digits); j.KNum("tp1",c.tp1,_Digits); j.KNum("tp2",c.tp2,_Digits); j.KNum("rr",c.rr,3);
+     j.KNum("partial_fraction",c.partial_fraction,3); j.KTime("zone_from",c.zone_from); j.KTime("zone_to",c.zone_to);
+     j.KNum("zone_hi",c.zone_hi,_Digits); j.KNum("zone_lo",c.zone_lo,_Digits); j.KBool("stop_entry",c.stop_entry);
+     j.KBool("d1_context",c.d1_context); j.KStr("comment",c.comment);
+   j.EndObj();
+   j.EndObj();
+   AtomicWriteText(LivePath("state\\"+_Symbol+"\\parked.json"),j.Text());
+  }
+void LiveUnpark()
+  {
+   g_live_parked=false; g_delay_pending=false;
+   string f=LivePath("state\\"+_Symbol+"\\parked.json");
+   if(FileIsExist(f,FILE_COMMON)) FileDelete(f,FILE_COMMON);
+  }
+//--- the live decision path (replaces the popup). Fresh signal: election gate, else publish+park.
+//--- Bar-close replay (via the OnTick delay hook): §11-3 SL-through invalidation, else an implicit
+//--- FREEZE delay (implicit=1) until a task arrives or max_age -> skipped code 8.
+void LivePresent(int id,SignalCandidate &cand,double lots,bool is_replay,
+                 double orig_entry,double orig_sl,double orig_tp,double orig_tp1,double orig_tp2)
+  {
+   string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
+   datetime bar0=iTime(_Symbol,g_tf,0);
+   if(!is_replay)
+     {
+      g_park.sid=id; g_park.orig_entry=orig_entry; g_park.orig_sl=orig_sl; g_park.orig_tp=orig_tp;
+      g_park.orig_tp1=orig_tp1; g_park.orig_tp2=orig_tp2; g_park.caption=caption; g_park.lots=lots;
+      g_park.published_bar=bar0; g_park.published_at=TimeCurrent(); g_park.implicit_streak=0; g_park.explicit_this_bar=false;
+      g_delayed=cand; g_delayed_id=id;
+      //--- G1 election / NO-HOLD hard gate (entry refusal only; fail closed on no calendar)
+      string evn=""; datetime evt=0;
+      if(ElectionGateHit(bar0,evn,evt))
+        {
+         string reason=(evn=="events_not_loaded" ? "events_not_loaded" : "election:"+evn+(evt>0?" @"+IsoTime(evt):""));
+         WriteSignalJson("auto_skipped",reason);
+         AuditLine("auto_skip","","skip",StringFormat("sig:%d",id),"skipped","election_gate",reason);
+         Print("Signal #",id," ",cand.strategy," AUTO-SKIPPED (code 2, election gate): ",reason);
+         g_live_auto=1;
+         CommitDecision(id,cand,caption,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,false,2,0,false,false,"auto_skip");
+         g_live_auto=0;
+         LiveUnpark();
+         return;
+        }
+      g_delay_pending=true; g_live_parked=true;
+      WriteSignalJson("open","");
+      LiveSaveParked();
+      AuditLine("published","","",StringFormat("sig:%d",id),"open","",StringFormat("%s %s deadline=%s",cand.strategy,DirStr(cand.direction),
+                IsoTime(bar0+(datetime)((long)g_cfg_max_age_bars*PeriodSeconds(g_tf)))));
+      Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," PUBLISHED to queue - awaiting task (max_age ",g_cfg_max_age_bars," bars).");
+      return;
+     }
+   //--- bar-close replay of a parked signal
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   bool through=(cand.direction>0 ? (bid<=cand.sl) : (ask>=cand.sl));
+   if(through)
+     {
+      WriteSignalJson("rejected","invalidated: price through frozen SL while parked");
+      AuditLine("invalidated","","",StringFormat("sig:%d",id),"rejected","sl_through","");
+      JournalReject(id,cand,"invalidated: price through frozen SL while parked (live, §11-3)");
+      LiveUnpark();
+      return;
+     }
+   if(g_park.explicit_this_bar){ g_park.explicit_this_bar=false; g_park.implicit_streak=0; }
+   else
+     {
+      g_delay_count++; g_park.implicit_streak++;
+      WriteDelayLog(id,g_delay_count,cand,"delay",1);
+      AuditLine("republished","","",StringFormat("sig:%d",id),"open","implicit_delay",StringFormat("streak=%d/%d",g_park.implicit_streak,g_cfg_max_age_bars));
+     }
+   if(g_park.implicit_streak>=g_cfg_max_age_bars)
+     {
+      WriteSignalJson("expired","no-response: max_age reached");
+      AuditLine("expired_code8","","",StringFormat("sig:%d",id),"skipped","no_response",StringFormat("bars=%d",g_park.implicit_streak));
+      Print("Signal #",id," ",cand.strategy," EXPIRED (code 8, no response in ",g_cfg_max_age_bars," bars).");
+      CommitDecision(id,cand,caption,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,false,8,0,false,false,"expired");
+      LiveUnpark();
+      return;
+     }
+   g_delayed=cand; g_delay_pending=true; g_live_parked=true;   // re-park (the hook cleared it)
+   WriteSignalJson("open","");
+   LiveSaveParked();
+  }
+
+
+
+//+==================================================================+
+//| PHASE 3 LIVE - Slice 4: restart survivability (G4) + positions/  |
+//+==================================================================+
+string g_live_alerts[];            // persistent heartbeat alerts (adopt_orphan, restore mismatch, ...)
+void LiveAlert(string a){ int n=ArraySize(g_live_alerts); for(int i=0;i<n;i++) if(g_live_alerts[i]==a) return; ArrayResize(g_live_alerts,n+1); g_live_alerts[n]=a; }
+string RowStatePath(int id){ return LivePath(StringFormat("state\\%s\\%d.json",_Symbol,id)); }
+
+//--- one row -> flat JSON (the parser supports one nested level: actions live under "actions")
+void LiveSaveRowState(int i)
+  {
+   JournalRow r=g_rows[i];
+   CJsonW j; j.BeginObj();
+   j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KStr("symbol",_Symbol);
+   j.KInt("id",r.id); j.KInt("time",(long)r.time); j.KStr("strategy",r.strategy); j.KInt("direction",r.direction);
+   j.KNum("orig_entry",r.orig_entry,_Digits); j.KNum("orig_sl",r.orig_sl,_Digits); j.KNum("orig_tp",r.orig_tp,_Digits);
+   j.KNum("orig_tp1",r.orig_tp1,_Digits); j.KNum("orig_tp2",r.orig_tp2,_Digits);
+   j.KNum("entry",r.entry,_Digits); j.KNum("sl",r.sl,_Digits); j.KNum("tp",r.tp,_Digits); j.KNum("tp1",r.tp1,_Digits); j.KNum("tp2",r.tp2,_Digits);
+   j.KNum("partial_frac",r.partial_frac,4); j.KNum("lots",r.lots,2); j.KNum("risk_px",r.risk_px,_Digits);
+   j.KBool("tp1_done",r.tp1_done); j.KBool("banked",r.banked); j.KBool("ratcheted",r.ratcheted); j.KNum("closed_vol",r.closed_vol,2);
+   j.KStr("decision",r.decision); j.KInt("skip_reason",r.skip_reason); j.KBool("edited",r.edited); j.KBool("is_pending",r.is_pending);
+   j.KInt("order_ticket",r.order_ticket); j.KInt("placed_time",(long)r.placed_time); j.KInt("decision_ms",r.decision_ms);
+   j.KInt("posid",r.posid); j.KBool("closed",r.closed); j.KInt("exit_time",(long)r.exit_time); j.KNum("exit_price",r.exit_price,_Digits);
+   j.KNum("pnl",r.pnl,2); j.KNum("r_multiple",r.r_multiple,6);
+   j.KStr("regime",r.regime); j.KStr("with_trend",r.with_trend); j.KStr("decision_class",r.decision_class);
+   j.KNum("to_entry",r.to_entry,_Digits); j.KNum("to_sl",r.to_sl,_Digits); j.KNum("to_tp1",r.to_tp1,_Digits); j.KNum("to_tp2",r.to_tp2,_Digits);
+   j.KNum("mfe_r",r.mfe_r,4); j.KNum("pre_dip_r",r.pre_dip_r,4); j.KNum("post_dip_r",r.post_dip_r,4); j.KInt("dipped",r.dipped); j.KStr("terminal",r.terminal);
+   j.KNum("imp_atr",r.imp_atr,4); j.KInt("imp_nbig",r.imp_nbig); j.KInt("cal_lab",r.cal_lab);
+   j.KNum("v2_r",r.v2_r,4); j.KNum("v2_bank",r.v2_bank,4); j.KInt("v2_runner",r.v2_runner);
+   j.KNum("rt_tp1R",r.rt_tp1R,4); j.KNum("rt_tp2R",r.rt_tp2R,4); j.KInt("rt_touched1",r.rt_touched1); j.KInt("rt_reached2",r.rt_reached2);
+   j.KInt("rt_redip1",r.rt_redip1); j.KNum("rt_bankr",r.rt_bankr,4);
+   j.KBool("live",r.live); j.KInt("account_id",r.account_id); j.KNum("risk_pct_gate",r.risk_pct_gate,4); j.KNum("risk_mult_applied",r.risk_mult_applied,3);
+   j.KInt("auto_skip",r.auto_skip); j.KStr("entry_mode",r.entry_mode);
+   j.Key("actions"); j.BeginObj();
+   int na=0;
+   for(int a=0;a<ArraySize(g_actions);a++)
+     {
+      if(g_actions[a].id!=r.id) continue;
+      string px=StringFormat("%d_",na);
+      j.KInt(px+"posid",g_actions[a].posid); j.KInt(px+"bar_time",(long)g_actions[a].bar_time); j.KStr(px+"action",g_actions[a].action);
+      j.KNum(px+"price",g_actions[a].price,_Digits); j.KNum(px+"lots_before",g_actions[a].lots_before,2); j.KNum(px+"lots_after",g_actions[a].lots_after,2);
+      j.KNum(px+"sl_after",g_actions[a].sl_after,_Digits); j.KNum(px+"banked_r",g_actions[a].banked_r,4); j.KNum(px+"open_r",g_actions[a].open_r,4);
+      na++;
+     }
+   j.KInt("n",na);
+   j.EndObj();
+   j.EndObj();
+   AtomicWriteText(RowStatePath(r.id),j.Text());
+  }
+//--- write every open row + any row whose state file does not exist yet (closed rows freeze after one write)
+void LiveSaveAllState()
+  {
+   for(int i=0;i<ArraySize(g_rows);i++)
+     {
+      if(g_rows[i].symbol!=_Symbol) continue;
+      if(!g_rows[i].closed || !FileIsExist(RowStatePath(g_rows[i].id),FILE_COMMON)) LiveSaveRowState(i);
+      else if(g_rows[i].closed && g_rows[i].posid>0)
+        {   // closed row: make sure the final state (terminal, R) is on disk once, then freeze
+         string k[],v[],e; string t=ReadTextFile(RowStatePath(g_rows[i].id));
+         if(JsonFlatParse(t,k,v,e) && JGet(k,v,"closed","false")!="true") LiveSaveRowState(i);
+        }
+     }
+   AtomicWriteText(LivePath("state\\"+_Symbol+"\\seq.json"),StringFormat("{\"schema_version\":%d,\"sig_seq\":%d}",LIVE_SCHEMA_VERSION,g_sig_seq));
+   LiveWritePositions();
+  }
+//--- positions/<SYM>-<posid>.json for the web app; moved to positions\closed\ on full close
+void LiveWritePositions()
+  {
+   for(int i=0;i<ArraySize(g_rows);i++)
+     {
+      if(g_rows[i].posid<=0 || g_rows[i].symbol!=_Symbol) continue;
+      string f=LivePath(StringFormat("positions\\%s-%I64d.json",_Symbol,g_rows[i].posid));
+      bool open=(!g_rows[i].closed && PositionSelectByTicket((ulong)g_rows[i].posid));
+      if(!open)
+        {
+         if(FileIsExist(f,FILE_COMMON)) FileMove(f,FILE_COMMON,LivePath(StringFormat("positions\\closed\\%s-%I64d.json",_Symbol,g_rows[i].posid)),FILE_COMMON|FILE_REWRITE);
+         continue;
+        }
+      double oR=OpenR(i);
+      CJsonW j; j.BeginObj();
+      j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KStr("symbol",_Symbol); j.KInt("posid",g_rows[i].posid); j.KInt("signal_id",g_rows[i].id);
+      j.KStr("strategy",g_rows[i].strategy); j.KStr("direction",DirStr(g_rows[i].direction)); j.KStr("decision_class",g_rows[i].decision_class);
+      j.KNum("entry",g_rows[i].entry,_Digits); j.KNum("sl_risk_basis",g_rows[i].sl,_Digits);
+      j.KNum("sl_live",PositionGetDouble(POSITION_SL),_Digits); j.KNum("tp_live",PositionGetDouble(POSITION_TP),_Digits);
+      j.KNum("tp1",g_rows[i].tp1,_Digits); j.KNum("tp2",g_rows[i].tp2,_Digits);
+      j.KNum("lots_init",g_rows[i].lots,2); j.KNum("lots_live",PositionGetDouble(POSITION_VOLUME),2);
+      j.KNum("open_r",oR,3); j.KNum("banked_r",g_rows[i].r_multiple,3); j.KNum("closenow_r",oR+g_rows[i].r_multiple,3);
+      j.KBool("banked",g_rows[i].banked); j.KBool("tp1_done",g_rows[i].tp1_done); j.KBool("ratcheted",g_rows[i].ratcheted);
+      j.KBool("be_placeable",BEPlaceable(i)); j.KBool("ratchet_placeable",RatchetPlaceable(i));
+      j.KInt("opened_at",(long)PositionGetInteger(POSITION_TIME)); j.KInt("bars_open",(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/PeriodSeconds(g_tf)));
+      j.KTime("ts",TimeCurrent());
+      j.EndObj();
+      AtomicWriteText(f,j.Text());
+     }
+  }
+//--- restore one row from its state file into g_rows[] (+ its actions into g_actions[])
+bool LiveLoadRowState(string rel)
+  {
+   string k[],v[],e; string t=ReadTextFile(rel);
+   if(!JsonFlatParse(t,k,v,e)) { Print("state: parse failed ",rel," ",e); return false; }
+   if(JGet(k,v,"symbol","")!=_Symbol) return false;
+   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+   JournalRow r;
+   r.id=(int)StringToInteger(JGet(k,v,"id","0")); r.time=(datetime)StringToInteger(JGet(k,v,"time","0")); r.symbol=_Symbol;
+   r.strategy=JGet(k,v,"strategy",""); r.direction=(int)StringToInteger(JGet(k,v,"direction","0"));
+   r.orig_entry=StringToDouble(JGet(k,v,"orig_entry")); r.orig_sl=StringToDouble(JGet(k,v,"orig_sl")); r.orig_tp=StringToDouble(JGet(k,v,"orig_tp"));
+   r.orig_tp1=StringToDouble(JGet(k,v,"orig_tp1")); r.orig_tp2=StringToDouble(JGet(k,v,"orig_tp2"));
+   r.entry=StringToDouble(JGet(k,v,"entry")); r.sl=StringToDouble(JGet(k,v,"sl")); r.tp=StringToDouble(JGet(k,v,"tp"));
+   r.tp1=StringToDouble(JGet(k,v,"tp1")); r.tp2=StringToDouble(JGet(k,v,"tp2")); r.partial_frac=StringToDouble(JGet(k,v,"partial_frac"));
+   r.lots=StringToDouble(JGet(k,v,"lots")); r.risk_px=StringToDouble(JGet(k,v,"risk_px"));
+   r.tp1_done=(JGet(k,v,"tp1_done")=="true"); r.banked=(JGet(k,v,"banked")=="true"); r.ratcheted=(JGet(k,v,"ratcheted")=="true");
+   r.closed_vol=StringToDouble(JGet(k,v,"closed_vol")); r.decision=JGet(k,v,"decision",""); r.skip_reason=(int)StringToInteger(JGet(k,v,"skip_reason","0"));
+   r.edited=(JGet(k,v,"edited")=="true"); r.is_pending=(JGet(k,v,"is_pending")=="true"); r.order_ticket=StringToInteger(JGet(k,v,"order_ticket","0"));
+   r.placed_time=(datetime)StringToInteger(JGet(k,v,"placed_time","0")); r.decision_ms=StringToInteger(JGet(k,v,"decision_ms","0"));
+   r.posid=StringToInteger(JGet(k,v,"posid","0")); r.closed=(JGet(k,v,"closed")=="true");
+   r.exit_time=(datetime)StringToInteger(JGet(k,v,"exit_time","0")); r.exit_price=StringToDouble(JGet(k,v,"exit_price"));
+   r.pnl=StringToDouble(JGet(k,v,"pnl")); r.r_multiple=StringToDouble(JGet(k,v,"r_multiple"));
+   r.regime=JGet(k,v,"regime",""); r.with_trend=JGet(k,v,"with_trend",""); r.decision_class=JGet(k,v,"decision_class","");
+   r.to_entry=StringToDouble(JGet(k,v,"to_entry")); r.to_sl=StringToDouble(JGet(k,v,"to_sl")); r.to_tp1=StringToDouble(JGet(k,v,"to_tp1")); r.to_tp2=StringToDouble(JGet(k,v,"to_tp2"));
+   r.mfe_r=StringToDouble(JGet(k,v,"mfe_r")); r.pre_dip_r=StringToDouble(JGet(k,v,"pre_dip_r")); r.post_dip_r=StringToDouble(JGet(k,v,"post_dip_r"));
+   r.dipped=(int)StringToInteger(JGet(k,v,"dipped","0")); r.terminal=JGet(k,v,"terminal","");
+   r.imp_atr=StringToDouble(JGet(k,v,"imp_atr")); r.imp_nbig=(int)StringToInteger(JGet(k,v,"imp_nbig","0")); r.cal_lab=(int)StringToInteger(JGet(k,v,"cal_lab","0"));
+   r.v2_r=StringToDouble(JGet(k,v,"v2_r")); r.v2_bank=StringToDouble(JGet(k,v,"v2_bank")); r.v2_runner=(int)StringToInteger(JGet(k,v,"v2_runner","-1"));
+   r.rt_tp1R=StringToDouble(JGet(k,v,"rt_tp1R")); r.rt_tp2R=StringToDouble(JGet(k,v,"rt_tp2R")); r.rt_touched1=(int)StringToInteger(JGet(k,v,"rt_touched1","0"));
+   r.rt_reached2=(int)StringToInteger(JGet(k,v,"rt_reached2","0")); r.rt_redip1=(int)StringToInteger(JGet(k,v,"rt_redip1","0")); r.rt_bankr=StringToDouble(JGet(k,v,"rt_bankr","-99"));
+   r.live=(JGet(k,v,"live")=="true"); r.account_id=StringToInteger(JGet(k,v,"account_id","0")); r.risk_pct_gate=StringToDouble(JGet(k,v,"risk_pct_gate","0.01"));
+   r.risk_mult_applied=StringToDouble(JGet(k,v,"risk_mult_applied","1")); r.auto_skip=(int)StringToInteger(JGet(k,v,"auto_skip","0")); r.entry_mode=JGet(k,v,"entry_mode","");
+   g_rows[n]=r;
+   int na=(int)StringToInteger(JGet(k,v,"actions.n","0"));
+   for(int a=0;a<na;a++)
+     {
+      string px=StringFormat("actions.%d_",a);
+      int m=ArraySize(g_actions); ArrayResize(g_actions,m+1);
+      g_actions[m].id=r.id; g_actions[m].posid=StringToInteger(JGet(k,v,px+"posid","0")); g_actions[m].bar_time=(datetime)StringToInteger(JGet(k,v,px+"bar_time","0"));
+      g_actions[m].action=JGet(k,v,px+"action",""); g_actions[m].price=StringToDouble(JGet(k,v,px+"price")); g_actions[m].lots_before=StringToDouble(JGet(k,v,px+"lots_before"));
+      g_actions[m].lots_after=StringToDouble(JGet(k,v,px+"lots_after")); g_actions[m].sl_after=StringToDouble(JGet(k,v,px+"sl_after"));
+      g_actions[m].banked_r=StringToDouble(JGet(k,v,px+"banked_r")); g_actions[m].open_r=StringToDouble(JGet(k,v,px+"open_r"));
+     }
+   return true;
+  }
+//--- terminal = truth for EXISTENCE; file = truth for flags/R. Replays history OUT deals through the
+//--- same ApplyExitDeal math for rows that finished while the EA was down; binds/expires pendings.
+void LiveReconcile()
+  {
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0)step=0.01;
+   for(int i=0;i<ArraySize(g_rows);i++)
+     {
+      if(g_rows[i].symbol!=_Symbol || g_rows[i].closed) continue;
+      //--- pending never bound: filled while down? cancelled/expired?
+      if(g_rows[i].is_pending && g_rows[i].posid<=0 && g_rows[i].order_ticket>0)
+        {
+         if(OrderSelect((ulong)g_rows[i].order_ticket)) continue;   // still resting
+         if(HistoryOrderSelect((ulong)g_rows[i].order_ticket))
+           {
+            long st=HistoryOrderGetInteger((ulong)g_rows[i].order_ticket,ORDER_STATE);
+            if(st==ORDER_STATE_FILLED)
+              {
+               long pid=(long)HistoryOrderGetInteger((ulong)g_rows[i].order_ticket,ORDER_POSITION_ID);
+               g_rows[i].posid=pid;
+               if(HistorySelectByPosition(pid))
+                  for(int d=0;d<HistoryDealsTotal();d++)
+                    { ulong dk=HistoryDealGetTicket(d);
+                      if(HistoryDealGetInteger(dk,DEAL_ENTRY)==DEAL_ENTRY_IN){ double fill=HistoryDealGetDouble(dk,DEAL_PRICE); if(fill>0.0){ g_rows[i].entry=fill; g_rows[i].risk_px=MathAbs(fill-g_rows[i].sl); } break; } }
+               AuditLine("restore","","",StringFormat("sig:%d",g_rows[i].id),"pending_filled_while_down","",StringFormat("posid=%I64d",pid));
+              }
+            else { g_rows[i].decision="expired"; g_rows[i].closed=true; AuditLine("restore","","",StringFormat("sig:%d",g_rows[i].id),"pending_gone","",StringFormat("state=%d",st)); continue; }
+           }
+         else continue;
+        }
+      if(g_rows[i].posid<=0) continue;
+      if(PositionSelectByTicket((ulong)g_rows[i].posid)) continue;   // still open: flags from the file stand
+      //--- position gone: replay ALL its OUT deals from history (reset the accumulators first)
+      if(!HistorySelectByPosition(g_rows[i].posid)){ AuditLine("restore","","",StringFormat("sig:%d",g_rows[i].id),"warn","no_history",StringFormat("posid=%I64d",g_rows[i].posid)); LiveAlert(StringFormat("restore_no_history:%d",g_rows[i].id)); continue; }
+      g_rows[i].pnl=0.0; g_rows[i].r_multiple=0.0; g_rows[i].closed_vol=0.0;
+      int nd=HistoryDealsTotal(); int applied=0;
+      for(int d=0;d<nd;d++)
+        {
+         ulong dk=HistoryDealGetTicket(d);
+         if(HistoryDealGetInteger(dk,DEAL_POSITION_ID)!=g_rows[i].posid) continue;
+         if(HistoryDealGetInteger(dk,DEAL_ENTRY)!=DEAL_ENTRY_OUT) continue;
+         ApplyExitDeal(i,dk); applied++;
+        }
+      AuditLine("restore","","",StringFormat("sig:%d",g_rows[i].id),(g_rows[i].closed?"closed_while_down":"partial_while_down"),"",StringFormat("deals=%d R=%.2f",applied,g_rows[i].r_multiple));
+     }
+  }
+//--- positions with our magic + symbol and NO row: adopt conservatively (G4) and alert
+void AdoptOrphans()
+  {
+   for(int p=PositionsTotal()-1;p>=0;p--)
+     {
+      ulong tk=PositionGetTicket(p); if(tk==0) continue;
+      if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+      long pid=(long)PositionGetInteger(POSITION_IDENTIFIER);
+      if(RowIdxByPosid(pid)>=0) continue;
+      int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+      JournalRow r;
+      g_sig_seq++; r.id=g_sig_seq; r.time=(datetime)PositionGetInteger(POSITION_TIME); r.symbol=_Symbol; r.strategy="ADOPTED";
+      r.direction=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY ? 1 : -1);
+      r.entry=PositionGetDouble(POSITION_PRICE_OPEN); r.sl=PositionGetDouble(POSITION_SL); r.tp=PositionGetDouble(POSITION_TP);
+      r.orig_entry=r.entry; r.orig_sl=r.sl; r.orig_tp=r.tp; r.orig_tp1=0; r.orig_tp2=0; r.tp1=0; r.tp2=0; r.partial_frac=0.0;
+      r.lots=PositionGetDouble(POSITION_VOLUME); r.risk_px=MathAbs(r.entry-r.sl);
+      r.tp1_done=true; r.banked=false; r.ratcheted=false; r.closed_vol=0.0; r.decision="approved"; r.skip_reason=0; r.edited=false;
+      r.is_pending=false; r.order_ticket=0; r.placed_time=0; r.decision_ms=0; r.posid=pid; r.closed=false;
+      r.exit_time=0; r.exit_price=0.0; r.pnl=0.0; r.r_multiple=0.0; r.regime=""; r.with_trend=""; r.decision_class="";
+      r.to_entry=r.entry; r.to_sl=r.sl; r.to_tp1=0; r.to_tp2=0; r.mfe_r=0; r.pre_dip_r=0; r.post_dip_r=0; r.dipped=0; r.terminal="";
+      r.imp_atr=0; r.imp_nbig=0; r.cal_lab=0; r.v2_r=0; r.v2_bank=0; r.v2_runner=-1; r.rt_tp1R=0; r.rt_tp2R=0; r.rt_touched1=0; r.rt_reached2=0; r.rt_redip1=0; r.rt_bankr=-99.0;
+      r.live=true; r.account_id=g_account_login; r.risk_pct_gate=InpRiskPct; r.risk_mult_applied=g_risk_mult; r.auto_skip=0; r.entry_mode="adopted";
+      g_rows[n]=r;
+      AuditLine("adopt_orphan","","",StringFormat("pos:%I64d",pid),"adopted","",StringFormat("sig=%d %s lots=%.2f sl=%s",r.id,DirStr(r.direction),r.lots,DoubleToString(r.sl,_Digits)));
+      LiveAlert(StringFormat("adopt_orphan:%I64d",pid));
+      Print("LIVE: ADOPTED orphan position ",pid," as signal #",r.id," (un-banked, no BE, no ratchet) - coach alerted.");
+     }
+  }
+//--- OnInit restore: seq -> rows/actions -> parked -> reconcile -> adopt. Runs BEFORE the first journal write.
+void LiveRestoreState()
+  {
+   string sk[],sv[],se; string st=ReadTextFile(LivePath("state\\"+_Symbol+"\\seq.json"));
+   if(JsonFlatParse(st,sk,sv,se)){ int q=(int)StringToInteger(JGet(sk,sv,"sig_seq","0")); if(q>g_sig_seq) g_sig_seq=q; }
+   string fname; int nrows=0;
+   long hf=FileFindFirst(LivePath("state\\"+_Symbol+"\\*.json"),fname,FILE_COMMON);
+   if(hf!=INVALID_HANDLE)
+     {
+      string names[]; int nn=0;
+      do { if(fname!="parked.json" && fname!="seq.json" && StringFind(fname,".tmp")<0){ ArrayResize(names,nn+1); names[nn++]=fname; } } while(FileFindNext(hf,fname));
+      FileFindClose(hf);
+      //--- numeric order by id so g_rows[] keeps its historical order
+      for(int i=0;i<nn;i++) for(int j=i+1;j<nn;j++) if(StringToInteger(names[j])<StringToInteger(names[i])){ string t=names[i]; names[i]=names[j]; names[j]=t; }
+      for(int i=0;i<nn;i++) if(LiveLoadRowState(LivePath("state\\"+_Symbol+"\\"+names[i]))) nrows++;
+     }
+   //--- parked signal
+   string pk[],pv[],pe; string pt=ReadTextFile(LivePath("state\\"+_Symbol+"\\parked.json"));
+   bool parked=false;
+   if(pt!="" && JsonFlatParse(pt,pk,pv,pe))
+     {
+      SignalCandidate c; c.valid=true;
+      c.strategy=JGet(pk,pv,"cand.strategy",""); c.direction=(int)StringToInteger(JGet(pk,pv,"cand.direction","0"));
+      c.entry=StringToDouble(JGet(pk,pv,"cand.entry")); c.sl=StringToDouble(JGet(pk,pv,"cand.sl")); c.tp=StringToDouble(JGet(pk,pv,"cand.tp"));
+      c.tp1=StringToDouble(JGet(pk,pv,"cand.tp1")); c.tp2=StringToDouble(JGet(pk,pv,"cand.tp2")); c.rr=StringToDouble(JGet(pk,pv,"cand.rr"));
+      c.partial_fraction=StringToDouble(JGet(pk,pv,"cand.partial_fraction")); c.zone_from=IsoToTime(JGet(pk,pv,"cand.zone_from","")); c.zone_to=IsoToTime(JGet(pk,pv,"cand.zone_to",""));
+      c.zone_hi=StringToDouble(JGet(pk,pv,"cand.zone_hi")); c.zone_lo=StringToDouble(JGet(pk,pv,"cand.zone_lo"));
+      c.stop_entry=(JGet(pk,pv,"cand.stop_entry")=="true"); c.d1_context=(JGet(pk,pv,"cand.d1_context")=="true"); c.comment=JGet(pk,pv,"cand.comment","");
+      g_delayed=c; g_delayed_id=(int)StringToInteger(JGet(pk,pv,"sid","0")); g_delay_count=(int)StringToInteger(JGet(pk,pv,"delay_count","0"));
+      g_park.sid=g_delayed_id; g_park.implicit_streak=(int)StringToInteger(JGet(pk,pv,"implicit_streak","0")); g_park.explicit_this_bar=(JGet(pk,pv,"explicit_this_bar")=="true");
+      g_park.published_bar=IsoToTime(JGet(pk,pv,"published_bar","")); g_park.published_at=IsoToTime(JGet(pk,pv,"published_at","")); g_park.lots=StringToDouble(JGet(pk,pv,"lots"));
+      g_park.orig_entry=StringToDouble(JGet(pk,pv,"orig_entry")); g_park.orig_sl=StringToDouble(JGet(pk,pv,"orig_sl")); g_park.orig_tp=StringToDouble(JGet(pk,pv,"orig_tp"));
+      g_park.orig_tp1=StringToDouble(JGet(pk,pv,"orig_tp1")); g_park.orig_tp2=StringToDouble(JGet(pk,pv,"orig_tp2")); g_park.caption=JGet(pk,pv,"caption","");
+      g_sig_regime=JGet(pk,pv,"regime",""); g_sig_with_trend=JGet(pk,pv,"with_trend",""); g_sig_class=JGet(pk,pv,"decision_class","");
+      g_to_entry=StringToDouble(JGet(pk,pv,"to_entry")); g_to_sl=StringToDouble(JGet(pk,pv,"to_sl")); g_to_tp1=StringToDouble(JGet(pk,pv,"to_tp1")); g_to_tp2=StringToDouble(JGet(pk,pv,"to_tp2"));
+      g_delay_pending=true; g_live_parked=true; parked=true;   // the next new bar replays it (implicit delay / code 8 as usual)
+     }
+   LiveReconcile();
+   AdoptOrphans();
+   AuditLine("restore","","","","ok","",StringFormat("rows=%d actions=%d parked=%d sig_seq=%d",nrows,ArraySize(g_actions),(int)parked,g_sig_seq));
+   if(nrows>0 || parked) Print("LIVE: restored ",nrows," row(s), ",ArraySize(g_actions)," action(s), parked=",parked," sig_seq=",g_sig_seq);
+  }
+//--- self-test: snapshot -> wipe in-memory state -> restore from disk -> compare; also drops one open
+//--- row's state file first so orphan adoption is exercised. Audits `restart_check ok|mismatch`.
+void LiveSimulateRestart()
+  {
+   int n0=ArraySize(g_rows); int na0=ArraySize(g_actions);
+   string sig=""; for(int i=0;i<n0;i++) sig+=StringFormat("%d:%s:%I64d:%d%d%d:%.4f;",g_rows[i].id,g_rows[i].decision,g_rows[i].posid,(int)g_rows[i].banked,(int)g_rows[i].tp1_done,(int)g_rows[i].ratcheted,g_rows[i].r_multiple);
+   LiveSaveAllState();
+   int drop=-1; for(int i=0;i<n0;i++) if(g_rows[i].posid>0 && !g_rows[i].closed && PositionSelectByTicket((ulong)g_rows[i].posid)){ drop=i; break; }
+   int dropped_id=(drop>=0 ? g_rows[drop].id : 0); long dropped_pid=(drop>=0 ? g_rows[drop].posid : 0);
+   if(drop>=0) FileDelete(RowStatePath(dropped_id),FILE_COMMON);
+   int seq0=g_sig_seq; bool parked0=g_live_parked;
+   ArrayResize(g_rows,0); ArrayResize(g_actions,0); g_live_parked=false; g_delay_pending=false;
+   LiveRestoreState();
+   string sig1=""; for(int i=0;i<ArraySize(g_rows);i++) sig1+=StringFormat("%d:%s:%I64d:%d%d%d:%.4f;",g_rows[i].id,g_rows[i].decision,g_rows[i].posid,(int)g_rows[i].banked,(int)g_rows[i].tp1_done,(int)g_rows[i].ratcheted,g_rows[i].r_multiple);
+   //--- expected: every non-dropped row identical; the dropped open position re-appears as ADOPTED
+   bool adopted=false; for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].strategy=="ADOPTED" && g_rows[i].posid==dropped_pid) adopted=true;
+   int expect_rows=n0; bool ok=(ArraySize(g_rows)==expect_rows) && (parked0==g_live_parked) && (drop<0 || adopted) && (g_sig_seq==seq0+(drop>=0?1:0));
+   string detail=StringFormat("rows %d->%d actions %d->%d dropped=%d adopted=%d parked %d->%d seq %d->%d",n0,ArraySize(g_rows),na0,ArraySize(g_actions),dropped_id,(int)adopted,(int)parked0,(int)g_live_parked,seq0,g_sig_seq);
+   if(ok && drop<0 && sig1!=sig) ok=false;
+   AuditLine("restart_check","","","",(ok?"ok":"mismatch"),"",detail);
+   Print("LIVE self-test restart_check ",(ok?"OK":"MISMATCH")," - ",detail);
+   LiveSaveAllState();
+  }
+
+//+==================================================================+
+//| PHASE 3 LIVE - Slice 3: task queue consumer (S6/S7/S8, Q3/Q4/Q5) |
+//| claim -> validate -> execute -> ack, append-only audit.           |
+//+==================================================================+
+datetime IsoToTime(string iso)   // "YYYY-MM-DDTHH:MM:SSZ" -> datetime (0 on failure)
+  {
+   if(StringLen(iso)<19) return 0;
+   string t=StringSubstr(iso,0,19); StringReplace(t,"-","."); StringReplace(t,"T"," ");
+   return StringToTime(t);
+  }
+bool TaskIdOk(string id)
+  {
+   int n=StringLen(id); if(n<8 || n>64) return false;
+   for(int i=0;i<n;i++){ ushort c=StringGetCharacter(id,i);
+     if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-')) return false; }
+   return true;
+  }
+int RowIdxByPosid(long posid)
+  { for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].posid==posid && !g_rows[i].closed) return i; return -1; }
+int RowIdxBySid(int sid)
+  { for(int i=ArraySize(g_rows)-1;i>=0;i--) if(g_rows[i].id==sid) return i; return -1; }
+//--- FTMO guards (G3/§11-7). config\account.json = the rules; state\account.json = what we observed.
+double g_ftmo_initial=0.0, g_ftmo_daily_pct=0.05, g_ftmo_max_pct=0.10, g_ftmo_buf_pct=0.005;
+int    g_ftmo_reset_hour=0; string g_ftmo_day_ref="balance", g_ftmo_daily_base="initial";
+string g_ftmo_day_key=""; double g_ftmo_day_bal=0.0, g_ftmo_day_eq=0.0;
+string FtmoDayKey(datetime t){ MqlDateTime d; TimeToStruct(t-(datetime)(g_ftmo_reset_hour*3600),d); return StringFormat("%04d-%02d-%02d",d.year,d.mon,d.day); }
+void LiveFtmoSaveState()
+  { AtomicWriteText(LivePath("state\\account.json"),StringFormat("{\"schema_version\":%d,\"login\":%I64d,\"initial_balance\":%.2f,\"day_key\":\"%s\",\"day_start_balance\":%.2f,\"day_start_equity\":%.2f,\"set_at\":\"%s\"}",
+      LIVE_SCHEMA_VERSION,g_account_login,g_ftmo_initial,g_ftmo_day_key,g_ftmo_day_bal,g_ftmo_day_eq,IsoTime(TimeCurrent()))); }
+void LiveFtmoLoad()
+  {
+   string p=LivePath("config\\account.json"); string t=ReadTextFile(p); string k[],v[],e;
+   if(t=="" || !JsonFlatParse(t,k,v,e))
+     { AtomicWriteText(p,"{\"schema_version\":1,\"initial_balance\":0,\"daily_loss_pct\":0.05,\"max_loss_pct\":0.10,\"buffer_pct\":0.005,\"day_reset_mode\":\"server_midnight\",\"day_reset_hour\":0,\"day_ref\":\"balance\",\"daily_base\":\"initial\"}");
+       t=ReadTextFile(p); JsonFlatParse(t,k,v,e); }
+   g_ftmo_daily_pct=StringToDouble(JGet(k,v,"daily_loss_pct","0.05")); g_ftmo_max_pct=StringToDouble(JGet(k,v,"max_loss_pct","0.10"));
+   g_ftmo_buf_pct=StringToDouble(JGet(k,v,"buffer_pct","0.005")); g_ftmo_reset_hour=(int)StringToInteger(JGet(k,v,"day_reset_hour","0"));
+   g_ftmo_day_ref=JGet(k,v,"day_ref","balance"); g_ftmo_daily_base=JGet(k,v,"daily_base","initial");
+   double cfg_init=StringToDouble(JGet(k,v,"initial_balance","0"));
+   //--- observed state (initial balance captured ONCE on the first live run and never re-captured)
+   string st=ReadTextFile(LivePath("state\\account.json")); string sk[],sv[],se;
+   if(st!="" && JsonFlatParse(st,sk,sv,se))
+     { g_ftmo_initial=StringToDouble(JGet(sk,sv,"initial_balance","0")); g_ftmo_day_key=JGet(sk,sv,"day_key","");
+       g_ftmo_day_bal=StringToDouble(JGet(sk,sv,"day_start_balance","0")); g_ftmo_day_eq=StringToDouble(JGet(sk,sv,"day_start_equity","0")); }
+   if(cfg_init>0.0) g_ftmo_initial=cfg_init;                                   // config wins when set
+   if(g_ftmo_initial<=0.0){ g_ftmo_initial=AccountInfoDouble(ACCOUNT_BALANCE); AuditLine("config","","","","info","ftmo_initial_captured",DoubleToString(g_ftmo_initial,2)); }
+   LiveFtmoDayReset();
+  }
+//--- snapshot day-start balance/equity at the FTMO day boundary (persisted: a mid-day restart never re-snapshots)
+void LiveFtmoDayReset()
+  {
+   string key=FtmoDayKey(TimeCurrent());
+   if(key==g_ftmo_day_key && g_ftmo_day_bal>0.0) return;
+   g_ftmo_day_key=key; g_ftmo_day_bal=AccountInfoDouble(ACCOUNT_BALANCE); g_ftmo_day_eq=AccountInfoDouble(ACCOUNT_EQUITY);
+   LiveFtmoSaveState();
+   AuditLine("ftmo_day","","","",key,"",StringFormat("day_start_balance=%.2f day_start_equity=%.2f",g_ftmo_day_bal,g_ftmo_day_eq));
+  }
+double FtmoDayRef(){ return (g_ftmo_day_ref=="equity" ? g_ftmo_day_eq : (g_ftmo_day_ref=="max" ? MathMax(g_ftmo_day_bal,g_ftmo_day_eq) : g_ftmo_day_bal)); }
+double FtmoDailyFloor(){ double base=(g_ftmo_daily_base=="day_start" ? FtmoDayRef() : g_ftmo_initial); return FtmoDayRef()-g_ftmo_daily_pct*base; }
+double FtmoMaxFloor()  { return g_ftmo_initial*(1.0-g_ftmo_max_pct); }
+//--- pre-order: equity - aggregate risk-to-stop (all symbols, §11-7) - this position's full -1R must stay above
+//--- both floors plus the safety buffer, else reject with the named reason (and audit it).
+bool FtmoHeadroomOK(double lots,double entry,double sl,string &why,string task_id="")
+  {
+   why="";
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE), tv=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   double this_risk=(ts>0.0 && tv>0.0 ? (MathAbs(entry-sl)/ts)*tv*lots : 0.0);
+   int unprot=0; double agg=AggregateRiskToStop(unprot);
+   double eq=AccountInfoDouble(ACCOUNT_EQUITY), buf=g_ftmo_buf_pct*g_ftmo_initial;
+   double after=eq-agg-this_risk;
+   if(after<FtmoDailyFloor()+buf) why=StringFormat("ftmo_daily_headroom:after=%.2f floor=%.2f buf=%.2f agg=%.2f this=%.2f",after,FtmoDailyFloor(),buf,agg,this_risk);
+   else if(after<FtmoMaxFloor()+buf) why=StringFormat("ftmo_max_headroom:after=%.2f floor=%.2f buf=%.2f agg=%.2f this=%.2f",after,FtmoMaxFloor(),buf,agg,this_risk);
+   if(why!=""){ AuditLine("ftmo_reject",task_id,"approve","","rejected",why,""); return false; }
+   return true;
+  }
+
+void WriteAck(string task_id,string verb,string target_key,long target_id,string result,string reason,int row_idx)
+  {
+   CJsonW j; j.BeginObj();
+   j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KStr("ea_build",EA_BUILD);
+   j.KStr("task_id",task_id); j.KStr("symbol",_Symbol); j.KStr("verb",verb);
+   j.KInt(target_key,target_id); j.KStr("result",result); j.KStr("reason",reason); j.KTime("executed_at",TimeCurrent());
+   j.Key("refs"); j.BeginObj();
+   if(row_idx>=0)
+     { j.KInt("signal_id",g_rows[row_idx].id); j.KInt("posid",g_rows[row_idx].posid); j.KInt("order_ticket",g_rows[row_idx].order_ticket);
+       j.KNum("lots",g_rows[row_idx].lots,2); j.KStr("decision",g_rows[row_idx].decision); j.KNum("entry",g_rows[row_idx].entry,_Digits);
+       j.KNum("sl",g_rows[row_idx].sl,_Digits); j.KNum("tp",g_rows[row_idx].tp,_Digits);
+       if(PositionSelectByTicket((ulong)g_rows[row_idx].posid)){ j.KNum("pos_sl",PositionGetDouble(POSITION_SL),_Digits); j.KNum("pos_volume",PositionGetDouble(POSITION_VOLUME),2); } }
+   j.EndObj();
+   j.EndObj();
+   AtomicWriteText(LivePath("acks\\"+task_id+".json"),j.Text());
+  }
+
+//--- Execute one claimed task. Returns result ("accepted"/"rejected"/"expired"), sets reason + row.
+string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string &reason,int &row_idx)
+  {
+   reason=""; row_idx=-1;
+   datetime now=TimeCurrent();
+   //--- signal verbs --------------------------------------------------------
+   if(verb=="approve" || verb=="skip" || verb=="delay")
+     {
+      int sid=(int)StringToInteger(JGet(k,v,"signal_id","0"));
+      if(sid<=0){ reason="bad_params"; return "rejected"; }
+      if(!g_live_parked || sid!=g_park.sid){ reason=(RowIdxBySid(sid)>=0 ? "signal_not_open" : "unknown_signal"); return "rejected"; }
+      SignalCandidate cand=g_delayed; string caption=g_park.caption;
+      if(verb=="delay")
+        {
+         g_delay_count++; WriteDelayLog(sid,g_delay_count,cand,"delay",0);
+         g_park.explicit_this_bar=true; g_park.implicit_streak=0;
+         g_delayed=cand; LiveSaveParked(); WriteSignalJson("open","");
+         reason="ok"; return "accepted";
+        }
+      if(verb=="skip")
+        {
+         int rc=(int)StringToInteger(JGet(k,v,"params.reason_code","0"));
+         if(rc<1 || rc>6){ reason="bad_params"; return "rejected"; }
+         WriteSignalJson("skipped",StringFormat("skip:%d",rc));
+         CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
+                        false,rc,(long)(now-g_park.published_at)*1000,false,false,"skip");
+         LiveUnpark(); row_idx=RowIdxBySid(sid); reason="ok"; return "accepted";
+        }
+      //--- approve: every doctrine gate the popup relied on, re-checked HERE (S7)
+      if(!g_trading_enabled){ reason="trading_disabled"; return "rejected"; }
+      if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)){ reason="trading_disabled"; return "rejected"; }
+      if(!g_ev_loaded){ reason="events_not_loaded"; return "rejected"; }
+      string evn=""; datetime evt=0;
+      if(ElectionGateHit(now,evn,evt)){ reason="election_gate:"+evn; return "rejected"; }
+      if(HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
+      string em=JGet(k,v,"params.entry_mode",(g_delay_count>0 ? "pending" : "market"));
+      if(em=="market_now") em="market";
+      string entry_mode;
+      if(em=="market")
+        {
+         double en=0.0, rrn=0.0, mkt=0.0; string why="";
+         if(!ValidateMarketEntry(cand,en,rrn,why))
+           { reason=(StringFind(why,"price past")>=0 ? "geom_invalid" : (StringFind(why,"stop too")>=0 ? "stop_too_tight" : "rr_below_floor"))+":"+why; return "rejected"; }
+         cand.entry=en; entry_mode=(g_delay_count>0 ? "market_now" : "market");
+        }
+      else if(em=="pending")
+        {
+         if(g_delay_count<=0){ reason="bad_params:pending_only_at_reopen"; return "rejected"; }
+         bool two=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
+         double otp=(two? cand.tp2 : cand.tp);
+         if(!ValidGeom(cand.direction,cand.entry,cand.sl,otp)){ reason="geom_invalid"; return "rejected"; }
+         double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+         if(cand.direction>0 ? bid<=cand.sl : ask>=cand.sl){ reason="geom_invalid:price_through_sl"; return "rejected"; }
+         entry_mode="pending_frozen";
+        }
+      else { reason="bad_params:entry_mode"; return "rejected"; }
+      double lots=SizeByRisk(cand.entry,cand.sl);
+      if(lots<=0.0){ reason="lots_zero"; return "rejected"; }
+      string fwhy="";
+      if(!FtmoHeadroomOK(lots,cand.entry,cand.sl,fwhy,task_id)){ reason=fwhy; return "rejected"; }
+      //--- commit exactly as the tester would after an Accept click
+      CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
+                     true,0,(long)(now-g_park.published_at)*1000,false,false,entry_mode);
+      row_idx=RowIdxBySid(sid);
+      if(row_idx>=0 && g_rows[row_idx].decision=="approved" && g_rows[row_idx].posid==0 && g_rows[row_idx].order_ticket==0)
+        { WriteSignalJson("approved","order_failed"); LiveUnpark(); reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+      WriteSignalJson((row_idx>=0 && g_rows[row_idx].decision=="approved_pending") ? "approved_pending" : "approved","");
+      LiveUnpark(); reason="ok"; return "accepted";
+     }
+   //--- position verbs --------------------------------------------------------
+   if(verb=="close" || verb=="close50" || verb=="sl_be" || verb=="ratchet_tp1")
+     {
+      long posid=StringToInteger(JGet(k,v,"position_id","0"));
+      if(posid<=0){ reason="bad_params"; return "rejected"; }
+      int idx=RowIdxByPosid(posid); row_idx=idx;
+      if(idx<0){ reason="unknown_position"; return "rejected"; }
+      if(!PositionSelectByTicket((ulong)posid)){ reason="position_closed"; return "rejected"; }
+      double vol0=PositionGetDouble(POSITION_VOLUME), sl0=PositionGetDouble(POSITION_SL);
+      if(verb=="close")
+        {
+         ManualClose(idx);
+         if(PositionSelectByTicket((ulong)posid)){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason="ok"; return "accepted";
+        }
+      if(verb=="close50")
+        {
+         double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0)step=0.01;
+         double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0)vmin=0.01;
+         double pv=MathFloor((vol0*0.5)/step)*step;
+         if(pv<vmin || (vol0-pv)<vmin){ reason="min_lot_split"; return "rejected"; }
+         ManualClose50(idx);
+         bool ok=(PositionSelectByTicket((ulong)posid) && PositionGetDouble(POSITION_VOLUME)<vol0-1e-9);
+         if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason="ok"; return "accepted";
+        }
+      if(verb=="sl_be")
+        {
+         //--- the +0.5R floor and the stops-level band were only ever a greyed button: enforce here (§10 small item)
+         double oR=OpenR(idx);
+         if(oR<BE_FLOOR_R){ reason=StringFormat("be_floor:open_r=%.2f<%.2f",oR,BE_FLOOR_R); AuditLine("gate",task_id,verb,StringFormat("pos:%I64d",posid),"BEPlaceable=false","be_floor",""); return "rejected"; }
+         if(!BEPlaceable(idx)){ reason="be_stops_level"; AuditLine("gate",task_id,verb,StringFormat("pos:%I64d",posid),"BEPlaceable=false","be_stops_level",""); return "rejected"; }
+         double be=NormPrice(BEPrice(idx));
+         if(sl0>0.0 && (g_rows[idx].direction>0 ? be<=sl0 : be>=sl0)){ reason="be_would_loosen"; return "rejected"; }
+         AuditLine("gate",task_id,verb,StringFormat("pos:%I64d",posid),"BEPlaceable=true","","");
+         ManualBE(idx);
+         bool ok=(PositionSelectByTicket((ulong)posid) && MathAbs(PositionGetDouble(POSITION_SL)-be)<=_Point*1.5);
+         if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason="ok"; return "accepted";
+        }
+      if(verb=="ratchet_tp1")
+        {
+         bool ok_gate=RatchetPlaceable(idx);
+         AuditLine("gate",task_id,verb,StringFormat("pos:%I64d",posid),(ok_gate?"RatchetPlaceable=true":"RatchetPlaceable=false"),"","");
+         if(!ok_gate)
+           {
+            if(g_rows[idx].ratcheted) reason="ratchet_already_used";
+            else if(!g_rows[idx].banked) reason="ratchet_not_banked";
+            else if(g_rows[idx].tp1<=0.0) reason="ratchet_no_tp1";
+            else if(sl0>0.0 && (g_rows[idx].direction>0 ? g_rows[idx].tp1<=sl0 : g_rows[idx].tp1>=sl0)) reason="ratchet_would_loosen";
+            else reason="ratchet_not_past_tp1";
+            return "rejected";
+           }
+         ManualRatchetTP1(idx);
+         bool ok=(PositionSelectByTicket((ulong)posid) && MathAbs(PositionGetDouble(POSITION_SL)-NormPrice(g_rows[idx].tp1))<=_Point*1.5);
+         if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason="ok"; return "accepted";
+        }
+     }
+   reason="unknown_verb"; return "rejected";
+  }
+
+//--- Q5: scan tasks\, CLAIM (move to done) before anything else, dedupe on an existing ack,
+//--- validate the envelope, execute, ack, audit. Files for other symbols are left untouched.
+void LiveProcessTasks()
+  {
+   string names[]; int nn=0; string fname;
+   long hf=FileFindFirst(LivePath("tasks\\*.json"),fname,FILE_COMMON);
+   if(hf==INVALID_HANDLE) return;
+   do { if(StringFind(fname,".tmp")<0){ ArrayResize(names,nn+1); names[nn++]=fname; } } while(FileFindNext(hf,fname));
+   FileFindClose(hf);
+   if(nn==0) return;
+   //--- process in ISSUE order (issued_at, then name as a deterministic tie-break) - a burst of
+   //--- tasks written seconds apart (e.g. sl_be, close50, close) must execute in the order issued,
+   //--- never alphabetically (found by the self-test: "close" sorted before "close50").
+   string keys[]; ArrayResize(keys,nn);
+   for(int i=0;i<nn;i++)
+     {
+      string k0[],v0[],e0; string t0=ReadTextFile(LivePath("tasks\\"+names[i]));
+      string iso=(JsonFlatParse(t0,k0,v0,e0) ? JGet(k0,v0,"issued_at","") : "");
+      if(StringLen(iso)<19) iso="9999-99-99T99:99:99Z";   // unparseable -> last
+      keys[i]=iso+"|"+names[i];
+     }
+   ArraySort(keys);
+   for(int i=0;i<nn;i++) names[i]=StringSubstr(keys[i],StringFind(keys[i],"|")+1);
+   for(int i=0;i<nn;i++)
+     {
+      string rel=LivePath("tasks\\"+names[i]);
+      string text=ReadTextFile(rel);
+      string k[],v[],err;
+      bool parsed=JsonFlatParse(text,k,v,err);
+      string tsym=JGet(k,v,"symbol",""), task_id=JGet(k,v,"task_id",""), verb=JGet(k,v,"verb","");
+      if(parsed && tsym!="" && tsym!=_Symbol) continue;                       // another instance's task
+      string done=LivePath("tasks\\done\\"+names[i]);
+      if(!FileMove(rel,FILE_COMMON,done,FILE_COMMON|FILE_REWRITE)){ Print("task claim failed ",names[i]," err=",GetLastError()); continue; }
+      if(!parsed || !TaskIdOk(task_id))
+        { string tid=(TaskIdOk(task_id)? task_id : "malformed-"+StringSubstr(names[i],0,MathMin(40,StringLen(names[i])-5)));
+          AuditLine("rejected",tid,verb,"","rejected",(parsed?"bad_task_id":"malformed_json"),err);
+          WriteAck(tid,verb,"signal_id",0,"rejected",(parsed?"bad_task_id":"malformed_json:"+err),-1); continue; }
+      if(FileIsExist(LivePath("acks\\"+task_id+".json"),FILE_COMMON))
+        { AuditLine("duplicate",task_id,verb,"","ignored","already_acked",""); continue; }
+      AuditLine("claimed",task_id,verb,JGet(k,v,"signal_id",JGet(k,v,"position_id","")),"","",names[i]);
+      string result,reason; int row_idx=-1;
+      string target_key=(verb=="close"||verb=="close50"||verb=="sl_be"||verb=="ratchet_tp1") ? "position_id" : "signal_id";
+      long target_id=StringToInteger(JGet(k,v,target_key,"0"));
+      if(JGet(k,v,"schema_version","")!=(string)LIVE_SCHEMA_VERSION){ result="rejected"; reason="schema_version_unsupported"; }
+      else if(tsym!=_Symbol){ result="rejected"; reason="symbol_mismatch"; }
+      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"){ result="rejected"; reason="unknown_verb"; }
+      else
+        {
+         datetime issued=IsoToTime(JGet(k,v,"issued_at",""));
+         if(issued>0 && TimeCurrent()-issued>(long)g_cfg_task_max_age_h*3600){ result="expired"; reason="stale_task"; }
+         else result=LiveExecuteTask(k,v,task_id,verb,reason,row_idx);
+        }
+      AuditLine((result=="accepted"?"executed":"rejected"),task_id,verb,StringFormat("%s:%I64d",target_key,target_id),result,reason,
+                (row_idx>=0? StringFormat("posid=%I64d ticket=%I64d decision=%s",g_rows[row_idx].posid,g_rows[row_idx].order_ticket,g_rows[row_idx].decision):""));
+      WriteAck(task_id,verb,target_key,target_id,result,reason,row_idx);
+      AuditLine("acked",task_id,verb,StringFormat("%s:%I64d",target_key,target_id),result,reason,"");
+     }
+  }
+//--- restart hygiene: a task claimed (in done\) but never acked was interrupted mid-execution
+void LiveAckOrphanedDone()
+  {
+   string fname; long hf=FileFindFirst(LivePath("tasks\\done\\*.json"),fname,FILE_COMMON);
+   if(hf==INVALID_HANDLE) return;
+   do {
+      if(StringFind(fname,".tmp")>=0) continue;
+      string k[],v[],err; string text=ReadTextFile(LivePath("tasks\\done\\"+fname));
+      if(!JsonFlatParse(text,k,v,err)) continue;
+      string tid=JGet(k,v,"task_id",""); if(!TaskIdOk(tid)) continue;
+      if(JGet(k,v,"symbol","")!=_Symbol) continue;
+      if(FileIsExist(LivePath("acks\\"+tid+".json"),FILE_COMMON)) continue;
+      AuditLine("rejected",tid,JGet(k,v,"verb",""),"","expired","restart_during_execution",fname);
+      WriteAck(tid,JGet(k,v,"verb",""),"signal_id",StringToInteger(JGet(k,v,"signal_id","0")),"expired","restart_during_execution",-1);
+   } while(FileFindNext(hf,fname));
+   FileFindClose(hf);
+  }
+
+//+==================================================================+
+//| SELF-TEST driver (InpLiveSelfTest, TESTER ONLY): scripted tasks   |
+//| against our own queue so the whole loop runs at tester speed.     |
+//| Minimal set now (Slice 3); extended in Slice 6.                   |
+//+==================================================================+
+int      st_sid_done   = 0;      // last signal ordinal a decision task was written for
+int      st_sid_delay  = 0;      // ordinal that received a delay (awaits pending approve)
+bool     st_startup    = false;  // illegal-task batch written once
+long     st_pos_posid  = 0;      // position under management
+int      st_pos_stage  = 0;
+datetime st_pos_t0     = 0;
+datetime st_pos_last   = 0;      // last position-verb task time (stages are spaced >= 2 polls apart)
+bool     st_dup_done   = false;
+bool     st_restart_done = false; bool st_ftmo_restored=false; bool st_kill_restored=false; bool st_mult_restored=false; bool st_agg_checked=false;
+void SelfTestWriteTask(string task_id,string target_key,long target_id,string verb,string params_json)
+  {
+   string body=StringFormat("{\"schema_version\":%d,\"task_id\":\"%s\",\"symbol\":\"%s\",\"%s\":%I64d,\"verb\":\"%s\",\"params\":%s,\"issued_at\":\"%s\",\"issued_by\":\"selftest\"}",
+                            LIVE_SCHEMA_VERSION,task_id,_Symbol,target_key,target_id,verb,params_json,IsoTime(TimeCurrent()));
+   AtomicWriteText(LivePath("tasks\\"+task_id+".json"),body);
+  }
+void SelfTestTick()
+  {
+   datetime now=TimeCurrent();
+   //--- startup: the deliberately illegal batch (each must be rejected with its named reason)
+   if(!st_startup && now-g_start_time>=60)
+     {
+      st_startup=true;
+      AtomicWriteText(LivePath("tasks\\st-bad-schema.json"),StringFormat("{\"schema_version\":99,\"task_id\":\"st-bad-schema\",\"symbol\":\"%s\",\"signal_id\":1,\"verb\":\"approve\",\"params\":{},\"issued_at\":\"%s\",\"issued_by\":\"selftest\"}",_Symbol,IsoTime(now)));
+      SelfTestWriteTask("st-bad-verb","signal_id",1,"nuke","{}");
+      SelfTestWriteTask("st-unknown-sig","signal_id",9999,"approve","{\"entry_mode\":\"market\"}");
+      SelfTestWriteTask("st-unknown-pos","position_id",424242,"close","{}");
+      AtomicWriteText(LivePath("tasks\\st-malformed.json"),"{ this is not json");
+      AtomicWriteText(LivePath("tasks\\st-stale-task1.json"),StringFormat("{\"schema_version\":1,\"task_id\":\"st-stale-task1\",\"symbol\":\"%s\",\"signal_id\":1,\"verb\":\"skip\",\"params\":{\"reason_code\":1},\"issued_at\":\"2000-01-01T00:00:00Z\",\"issued_by\":\"selftest\"}",_Symbol));
+     }
+   //--- decision tasks by signal ordinal, 30 sim-seconds after publish
+   if(g_live_parked && g_park.sid!=st_sid_done && now-g_park.published_at>=30)
+     {
+      int kk=g_park.sid, m=kk%4;
+      if(m==1)
+        {
+         if(kk==9)   // §11-7 scenario: with a 0.1% daily limit even a 1% trade breaches -> ftmo_daily_headroom
+           { AtomicWriteText(LivePath("config\\account.json"),"{\"schema_version\":1,\"initial_balance\":0,\"daily_loss_pct\":0.001,\"max_loss_pct\":0.10,\"buffer_pct\":0.0,\"day_reset_mode\":\"server_midnight\",\"day_reset_hour\":0,\"day_ref\":\"balance\",\"daily_base\":\"initial\"}");
+             LiveFtmoLoad();
+             SelfTestWriteTask(StringFormat("st-%d-approve-ftmo",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
+         else if(kk==5)   // E10 kill switch: OFF -> approve must be refused `trading_disabled`; restored ON by the cleanup below
+           { AtomicWriteText(LivePath("config\\trading_enabled.json"),"{\"trading_enabled\":false}");
+             SelfTestWriteTask(StringFormat("st-%d-approve-killed",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
+         else if(kk==13)  // C2 risk multiplier: 0.5 for this symbol -> journal risk_mult_applied=0.500, lots halved
+           { AtomicWriteText(LivePath("config\\risk_mult.json"),StringFormat("{\"%s\":0.5}",SymbolRoot()));
+             SelfTestWriteTask(StringFormat("st-%d-approve-half",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
+         else { SelfTestWriteTask(StringFormat("st-%d-approve",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
+        }
+      else if(m==2) { SelfTestWriteTask(StringFormat("st-%d-skip",kk),"signal_id",kk,"skip","{\"reason_code\":3}"); st_sid_done=kk; }
+      else if(m==3) { if(g_delay_count==0 && st_sid_delay!=kk){ SelfTestWriteTask(StringFormat("st-%d-delay",kk),"signal_id",kk,"delay","{}"); st_sid_delay=kk; }
+                      else if(g_delay_count>0){ SelfTestWriteTask(StringFormat("st-%d-approve-pending",kk),"signal_id",kk,"approve","{\"entry_mode\":\"pending\"}"); st_sid_done=kk; } }
+      else          { st_sid_done=kk; }   // m==0: no task -> must expire code 8
+     }
+   //--- FTMO scenario cleanup: once the tightened approve is acked, restore the default rules and skip that signal
+   if(!st_ftmo_restored && g_live_parked && g_park.sid==9 && FileIsExist(LivePath("acks\\st-9-approve-ftmo.json"),FILE_COMMON))
+     { st_ftmo_restored=true; AtomicWriteText(LivePath("config\\account.json"),"{\"schema_version\":1,\"initial_balance\":0,\"daily_loss_pct\":0.05,\"max_loss_pct\":0.10,\"buffer_pct\":0.005,\"day_reset_mode\":\"server_midnight\",\"day_reset_hour\":0,\"day_ref\":\"balance\",\"daily_base\":\"initial\"}");
+       LiveFtmoLoad(); SelfTestWriteTask("st-9-skip","signal_id",9,"skip","{\"reason_code\":6}"); }
+   //--- kill-switch cleanup: once the refused approve is acked, switch ON and approve for real (must be accepted)
+   if(!st_kill_restored && g_live_parked && g_park.sid==5 && FileIsExist(LivePath("acks\\st-5-approve-killed.json"),FILE_COMMON))
+     { st_kill_restored=true; AtomicWriteText(LivePath("config\\trading_enabled.json"),"{\"trading_enabled\":true}");
+       SelfTestWriteTask("st-5-approve","signal_id",5,"approve","{\"entry_mode\":\"market\"}"); }
+   //--- risk_mult cleanup: after the halved approve is acked, restore 1.0 (the multiplier is sizing-only, C2)
+   if(!st_mult_restored && FileIsExist(LivePath("acks\\st-13-approve-half.json"),FILE_COMMON))
+     { st_mult_restored=true; AtomicWriteText(LivePath("config\\risk_mult.json"),StringFormat("{\"%s\":1.0}",SymbolRoot())); }
+   //--- duplicate task_id: re-issue the FIRST approve after it was acked (expect audit `duplicate`, no 2nd ack/exec)
+   if(!st_dup_done && st_sid_done>=1 && FileIsExist(LivePath("acks\\st-1-approve.json"),FILE_COMMON))
+     { st_dup_done=true; SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\"}"); }
+   //--- position management on the first open graded position
+   int idx=ActiveRowIdx();
+   if(idx>=0 && g_rows[idx].posid!=st_pos_posid){ st_pos_posid=g_rows[idx].posid; st_pos_stage=0; st_pos_t0=now; st_pos_last=now; }
+   if(idx>=0 && st_pos_posid==g_rows[idx].posid && now-st_pos_last>=2*InpTaskPollSec)   // one stage per >=2 polls
+     {
+      long pid=g_rows[idx].posid; int secs=(int)(now-st_pos_t0); int bars=secs/PeriodSeconds(g_tf);
+      bool wrote=true;
+      if(st_pos_stage==0 && secs>=60)
+        { if(!st_agg_checked && PositionSelectByTicket((ulong)pid))
+            {   // §11-7: the aggregate term must see this position (it is the only one on the account here)
+             st_agg_checked=true; int unp=0; double agg=AggregateRiskToStop(unp);
+             double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE), tv=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+             double expct=(ts>0.0 ? MathAbs(PositionGetDouble(POSITION_PRICE_OPEN)-PositionGetDouble(POSITION_SL))/ts*tv*PositionGetDouble(POSITION_VOLUME) : 0.0);
+             bool okagg=(agg>0.0 && expct>0.0 && MathAbs(agg-expct)/expct<0.05);
+             AuditLine("agg_check","","",StringFormat("pos:%I64d",pid),(okagg?"ok":"zero"),"",StringFormat("agg=%.2f expected=%.2f unprotected=%d",agg,expct,unp));
+            }
+          SelfTestWriteTask(StringFormat("st-pos%I64d-slbe-early",pid),"position_id",pid,"sl_be","{}");
+          SelfTestWriteTask(StringFormat("st-pos%I64d-ratchet-early",pid),"position_id",pid,"ratchet_tp1","{}"); st_pos_stage=1; }
+      else if(st_pos_stage==1 && !st_restart_done && bars>=1 && ArraySize(g_rows)>=8)   // drill on a later position so rows span months
+        { LiveSimulateRestart(); st_restart_done=true; idx=ActiveRowIdx(); if(idx<0) return; }
+      //--- state-triggered ACCEPT paths (the early tasks above prove the gates refuse; these prove they admit)
+      else if(st_pos_stage==1 && BEPlaceable(idx) && !g_rows[idx].banked && !g_rows[idx].ratcheted)   // pre-bank: SL still at the original stop, so BE is a genuine tighten
+        { SelfTestWriteTask(StringFormat("st-pos%I64d-slbe-ok",pid),"position_id",pid,"sl_be","{}"); st_pos_stage=3; }
+      else if(st_pos_stage<=3 && !g_rows[idx].ratcheted && RatchetPlaceable(idx))
+        { SelfTestWriteTask(StringFormat("st-pos%I64d-ratchet-ok",pid),"position_id",pid,"ratchet_tp1","{}"); st_pos_stage=(st_pos_stage<3?2:3); }
+      else if(st_pos_stage==1 && g_rows[idx].banked)
+        { SelfTestWriteTask(StringFormat("st-pos%I64d-ratchet",pid),"position_id",pid,"ratchet_tp1","{}"); st_pos_stage=2; }
+      else if(st_pos_stage<=2 && bars>=4)
+        { SelfTestWriteTask(StringFormat("st-pos%I64d-slbe",pid),"position_id",pid,"sl_be","{}"); st_pos_stage=3; }
+      else if(st_pos_stage==3 && bars>=6)
+        { SelfTestWriteTask(StringFormat("st-pos%I64d-close50",pid),"position_id",pid,"close50","{}"); st_pos_stage=4; }
+      else if(st_pos_stage==4 && bars>=8)
+        { SelfTestWriteTask(StringFormat("st-pos%I64d-close",pid),"position_id",pid,"close","{}"); st_pos_stage=5; }
+      else wrote=false;
+      if(wrote) st_pos_last=now;
+     }
+  }
+
 void HandleSignal(SignalCandidate &cand)
   {
    int id;
@@ -650,6 +2332,7 @@ void HandleSignal(SignalCandidate &cand)
 
    if(!is_replay) g_delay_count=0;   // fresh signal: reset the per-signal delay clock
    if(!is_replay) ComputeRegime(cand.direction,g_sig_regime,g_sig_with_trend);   // FREEZE at signal time
+   if(!is_replay) g_sig_class=ClassifyProtocol(cand.strategy,g_sig_regime);       // protocol class, FROZEN with the tag (same on every delay re-present)
    if(!is_replay){ g_to_entry=NormPrice(cand.entry); g_to_sl=NormPrice(cand.sl);
                    g_to_tp1=NormPrice(cand.tp1); g_to_tp2=NormPrice(cand.tp2); }  // (1a) TRUE-ORIG freeze
    //--- (b) DELAY MODE (coach 2026-09-08): SLIDE re-anchors the whole plan to market (below);
@@ -662,7 +2345,7 @@ void HandleSignal(SignalCandidate &cand)
    //--- shift keeps the stop distance intact, so it can never degenerate; delays stay
    //--- UNLIMITED and never auto-cancel. Skipped for pending/STOP setups (entry is a breakout
    //--- LEVEL, not the market). g_delayed is updated so the next delay slides from here.
-   if(is_replay && !cand.stop_entry && InpDelayMode==DM_SLIDE)
+   if(is_replay && !cand.stop_entry && InpDelayMode==DM_SLIDE && !InpLiveMode)   // live = FREEZE always
      {
       double mk=(cand.direction>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
                                   : SymbolInfoDouble(_Symbol,SYMBOL_BID));
@@ -736,19 +2419,80 @@ void HandleSignal(SignalCandidate &cand)
    WriteD1Series(id);
    WritePendingSetup(id,cand,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2);
 
+   //--- PHASE 3 LIVE (Slice 2): no popup. Publish the signal to the file queue and PARK it on the
+   //--- delay machinery; a task (Slice 3) or the bar-close replay (implicit delay / code 8) resumes
+   //--- it through CommitDecision. Everything above this line ran exactly as in the tester.
+   if(InpLiveMode){ LivePresent(id,cand,lots,is_replay,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2); return; }
+
    string caption=StringFormat("Signal #%d  -  %s  %s",id,cand.strategy,DirStr(cand.direction));
    long decision_ms=0; int skip_reason=0; bool entry_edited=false; bool want_inv=false; bool want_delay=false;
-   bool approved=AskApproval(id,cand,lots,caption,decision_ms,skip_reason,entry_edited,offer_inv,want_inv,want_delay);
-   //--- DELAY: defer this signal one bar (repeatable). No journal, no order - the same
-   //--- candidate (unchanged levels) is re-presented next bar by the OnTick hook above.
-   if(want_delay)
+   bool want_market=false;
+   //--- default at a reopen = pending@frozen; overwritten to "market_now" on a placed market entry.
+   string entry_mode=(g_delay_count>0 ? "pending_frozen" : "market");
+   bool approved=false;
+   string mkt_warn="";      // set when a market-now click is declined; shown in the re-opened popup
+   //--- Approval LOOP: a sub-floor MARKET-NOW re-opens the SAME dialog immediately (same bar) with
+   //--- the reason shown, instead of silently deferring a bar (which read as a Delay). It still
+   //--- never PLACES a sub-floor market trade (coach: re-check the MinRR floor at click time).
+   while(true)
      {
-      g_delayed=cand; g_delayed_id=id; g_delay_pending=true;
-      g_delay_count++;                                   // (a) auditable: count + log this delay
-      WriteDelayLog(id,g_delay_count,cand);
-      Print("Signal #",id," DELAYED (#",g_delay_count,") - re-asking next bar; entry recomputes to market at reopen, SL/TP frozen.");
-      return;   // KEEP the inverse preview: the same signal is re-presented next bar
+      want_inv=false; want_delay=false; want_market=false;
+      string capw=(mkt_warn=="" ? caption : caption+"   [!] "+mkt_warn);
+      approved=AskApproval(id,cand,lots,capw,decision_ms,skip_reason,entry_edited,offer_inv,want_inv,want_delay,want_market);
+      //--- DELAY: defer this signal one bar (repeatable). No journal, no order - the same
+      //--- candidate (unchanged levels) is re-presented next bar by the OnTick hook above.
+      if(want_delay)
+        {
+         g_delayed=cand; g_delayed_id=id; g_delay_pending=true;
+         g_delay_count++;                                   // (a) auditable: count + log this delay
+         WriteDelayLog(id,g_delay_count,cand,"delay");
+         Print("Signal #",id," DELAYED (#",g_delay_count,") - re-asking next bar; SL/TP frozen; at reopen choose pending@frozen or market-now.");
+         return;   // KEEP the inverse preview: the same signal is re-presented next bar
+        }
+      //--- MARKET-NOW (item 3): at a delay reopen the trader chose to enter at market. Structural
+      //--- SL/TP are kept (NEVER slid); entry -> market; lots resize to 1% off the real entry-SL
+      //--- distance. The MinRR floor is RE-CHECKED at click time: if the market entry fails the
+      //--- floor (or the stop is too tight) it is DECLINED and the dialog re-opens right away with
+      //--- the reason -- never a silent sub-floor fill, and no longer a silent one-bar defer.
+      if(want_market)
+        {
+         double en=0.0, rrn=0.0; string why="";
+         if(!ValidateMarketEntry(cand,en,rrn,why))   // geom / MinRR floor / min-stop, re-checked at click (shared with the live approve validator)
+           {
+            Print("Signal #",id," MARKET-NOW declined (",why,") @ ",DoubleToString(en,_Digits),
+                  " - re-asking; choose Pending @ frozen or Skip.");
+            WriteDelayLog(id,g_delay_count,cand,"market_refused");   // audit (same-bar re-ask)
+            mkt_warn="Market entry declined: "+why;
+            continue;                                                // re-open the SAME dialog now
+           }
+         //--- surface the lots change: the popup showed the frozen-entry size, but market-now
+         //--- resizes to 1% off the (wider/narrower) real entry-SL distance.
+         Print("Signal #",id," MARKET-NOW @ ",DoubleToString(en,_Digits),
+               " (frozen entry ",DoubleToString(orig_entry,_Digits),") - lots ",
+               DoubleToString(lots,2)," -> ",DoubleToString(SizeByRisk(en,cand.sl),2),
+               " (R:R ",DoubleToString(rrn,2),").");
+         cand.entry=en; entry_mode="market_now"; approved=true;   // enter at market; structural SL/TP intact
+        }
+      break;   // Accept / Skip / Inverse / placed market-now -> leave the loop
      }
+   CommitDecision(id,cand,caption,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,
+                  approved,skip_reason,decision_ms,entry_edited,want_inv,entry_mode);
+  }
+
+//+------------------------------------------------------------------+
+//| COMMIT half of HandleSignal, extracted VERBATIM (Phase 3 M1 Slice 2)  |
+//| so the live task consumer can resume a PARKED signal on a later     |
+//| timer tick with exactly the code the tester runs: edit-detect ->    |
+//| row append -> order placement -> journal. Called by the interactive |
+//| path right after its approval loop (same args, same order), and by  |
+//| LiveExecuteTask for approve/skip/code-8/auto-skip.                  |
+//+------------------------------------------------------------------+
+void CommitDecision(int id,SignalCandidate &cand,string caption,
+                    double orig_entry,double orig_sl,double orig_tp,double orig_tp1,double orig_tp2,
+                    bool approved,int skip_reason,long decision_ms,bool entry_edited,bool want_inv,
+                    string entry_mode)
+  {
+   if(g_delay_count>0 && approved) WriteDelayLog(id,g_delay_count,cand,entry_mode);   // journal the final entry mode
    //--- decision resolved to a FADE or SKIP (not delay, not inverse): drop the orange
    //--- INVERSE preview lines so they never linger on a chart where a graded fade is
    //--- now open (would read as live orders). Kept when INVERSE was chosen - there the
@@ -759,7 +2503,7 @@ void HandleSignal(SignalCandidate &cand)
        for(int q=0;q<ArraySize(iobj);q++) ObjectDelete(0,pp+iobj[q]); }
    //--- the dialog may have retuned Entry/SL/TP (R:R held) - re-size on the
    //--- final risk distance so the placed order + journal use edited levels.
-   lots=SizeByRisk(cand.entry,cand.sl);
+   double lots=SizeByRisk(cand.entry,cand.sl);
    //--- authoritative "operator edited a level" flag, taken from the COMMITTED
    //--- cand vs the detector's proposal BEFORE any fill overwrites cand.entry.
    //--- (Can't infer this in review from orig_entry vs entry: entry is later
@@ -773,7 +2517,12 @@ void HandleSignal(SignalCandidate &cand)
    //--- internal field the approve-commit reassigns to the runner for scale-out (so it
    //--- != the detector's orig tp even when nothing was edited) - exclude it for two-
    //--- target setups; only entry/SL/tp1/tp2 are user-editable there.
-   bool any_edited=(MathAbs(cand.entry-orig_entry)>etol
+   //--- market-now (item 3) legitimately moves cand.entry to the market price; that is a
+   //--- protocol entry MODE, not an operator edit, so it must NOT set edited=1 (the coach's
+   //--- grading reads edited as "operator changed a level"). Exclude the entry term on that path;
+   //--- SL/TP edits (if any) still count. entry_mode="market_now" is the audit trail for it.
+   bool mkt_now=(entry_mode=="market_now");
+   bool any_edited=((!mkt_now && MathAbs(cand.entry-orig_entry)>etol)
                     || MathAbs(cand.sl-orig_sl)>etol
                     || (two_target
                         ? (MathAbs(cand.tp1-orig_tp1)>etol || MathAbs(cand.tp2-orig_tp2)>etol)
@@ -788,14 +2537,24 @@ void HandleSignal(SignalCandidate &cand)
    g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=order_tp;
    g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=(two_target?cand.partial_fraction:0.0);
    g_rows[n].lots=lots; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
-   g_rows[n].tp1_done=(!two_target); g_rows[n].closed_vol=0.0;
+   g_rows[n].tp1_done=(!two_target); g_rows[n].banked=false; g_rows[n].closed_vol=0.0;
+   //--- ArrayResize does NOT zero new struct elements: init the item-1/2 fields explicitly so a
+   //--- fresh row never inherits a stale ratcheted=true (button permanently greyed) or rt_ garbage.
+   g_rows[n].ratcheted=false; g_rows[n].rt_bankr=-99.0;
+   g_rows[n].rt_tp1R=0.0; g_rows[n].rt_tp2R=0.0;
+   g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0;
    g_rows[n].decision_ms=decision_ms; g_rows[n].skip_reason=0; g_rows[n].edited=any_edited;
    g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0;
    g_rows[n].posid=0; g_rows[n].closed=false;
-   g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend;
+   g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend; g_rows[n].decision_class=g_sig_class;
    g_rows[n].to_entry=g_to_entry; g_rows[n].to_sl=g_to_sl; g_rows[n].to_tp1=g_to_tp1; g_rows[n].to_tp2=g_to_tp2;
    g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0; g_rows[n].terminal="";
+   g_rows[n].imp_atr=0.0; g_rows[n].imp_nbig=0; g_rows[n].cal_lab=0; g_rows[n].v2_r=0.0; g_rows[n].v2_bank=0.0; g_rows[n].v2_runner=-1;
+   if(!InpV2Exit){ ComputeImpulse(n); g_rows[n].cal_lab=CalLabeled(g_rows[n].time); }   // STUDY-ONLY features (no live footprint)
    g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
+   //--- PHASE 3 LIVE columns (never written in the tester; see WriteJournal)
+   g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct;
+   g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=(g_live_auto?1:0); g_rows[n].entry_mode=entry_mode;
 
    if(want_inv)
      {
@@ -811,7 +2570,12 @@ void HandleSignal(SignalCandidate &cand)
    if(approved)
      {
       g_rows[n].decision="approved";
-      if(lots<=0.0)
+      if(InpLiveMode && !g_trading_enabled)
+        {   // belt-and-braces (the task validator already refuses): never place while the kill switch is off
+         Print("Signal #",id," LIVE: kill switch OFF - order suppressed at placement.");
+         AuditLine("kill_switch","","approve",StringFormat("sig:%d",id),"suppressed","trading_disabled","");
+        }
+      else if(lots<=0.0)
         {
          Print("Signal #",id," approved but lots<=0 - NOT placing (check ",_Symbol," specs).");
         }
@@ -922,7 +2686,13 @@ void HandleSignal(SignalCandidate &cand)
   }
 
 //+------------------------------------------------------------------+
-//| Per-tick two-target management: at TP1 bank a partial + move to BE |
+//| Per-tick MECHANICAL EXIT (Doctrine v2, coach 2026-09-09): at the      |
+//| first touch of +1R open profit -- OR tp1 if it sits nearer than +1R -- |
+//| close 50% and move the stop to break-even. Applies to ALL THREE       |
+//| strategies (SweepMSS single-target included), fires ONCE per position  |
+//| (g_rows[].banked), journaled as an auto action. The remaining 50% runs |
+//| to whatever TP the order already carries (tp2 for scale-out setups,    |
+//| the single tp otherwise) -- "whichever level is hit first governs."    |
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
   {
@@ -935,27 +2705,76 @@ void ManageOpenPositions()
      {
       if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending")
          || g_rows[i].posid<=0) continue;
-      if(g_rows[i].closed || g_rows[i].tp1_done) continue;
-      if(g_rows[i].partial_frac<=0.0 || g_rows[i].tp1<=0.0) continue;
+
+      //--- STUDY-ONLY (InpV2Exit==false): reproduce the PRE-v2 exit (2026-09-08
+      //--- scale-at-tp1, UNPADDED POSITION_PRICE_OPEN BE) EXACTLY, so the frozen signal
+      //--- set + one-setup-lock timing are byte-identical while the shadow observer
+      //--- (TrackAllMfePath) reconstructs the doctrine-v2 R alongside. Do NOT "improve".
+      if(!InpV2Exit)
+        {
+         if(g_rows[i].closed || g_rows[i].tp1_done) continue;
+         if(g_rows[i].partial_frac<=0.0 || g_rows[i].tp1<=0.0) continue;
+         if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;
+         int dir0=g_rows[i].direction;
+         bool reached0=(dir0>0 ? bid>=g_rows[i].tp1 : ask<=g_rows[i].tp1);
+         if(!reached0) continue;
+         double lots0=g_rows[i].lots;
+         double pv0=MathFloor((g_rows[i].partial_frac*lots0)/step)*step;
+         double be0=PositionGetDouble(POSITION_PRICE_OPEN);   // unpadded (defines real close -> lock)
+         if(pv0>=vmin && (lots0-pv0)>=vmin)
+           {
+            if(g_trade.PositionClosePartial((ulong)g_rows[i].posid,pv0))
+               Print("Signal #",g_rows[i].id," [study old-exit] TP1 -> banked ",
+                     DoubleToString(pv0,2)," lots, SL->BE, runner TP2");
+            g_trade.PositionModify((ulong)g_rows[i].posid,be0,g_rows[i].tp2);
+           }
+         g_rows[i].tp1_done=true;
+         continue;
+        }
+
+      if(g_rows[i].closed || g_rows[i].banked) continue;      // one-time; NOT gated on tp1_done
+      if(g_rows[i].risk_px<=0.0) continue;
       if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;   // already gone
 
       int dir=g_rows[i].direction;
-      bool reached=(dir>0 ? bid>=g_rows[i].tp1 : ask<=g_rows[i].tp1);
+      //--- the +1R price, and (for scale-out setups) tp1 if it is the nearer level.
+      double r1  =(dir>0 ? g_rows[i].entry+g_rows[i].risk_px : g_rows[i].entry-g_rows[i].risk_px);
+      double trig=r1; bool via_tp1=false;
+      if(g_rows[i].partial_frac>0.0 && g_rows[i].tp1>0.0)
+        {
+         bool tp1_nearer=(dir>0 ? g_rows[i].tp1<=r1 : g_rows[i].tp1>=r1);
+         if(tp1_nearer){ trig=g_rows[i].tp1; via_tp1=true; }
+        }
+      bool reached=(dir>0 ? bid>=trig : ask<=trig);
       if(!reached) continue;
 
-      double lots=g_rows[i].lots;
-      double pv=MathFloor((g_rows[i].partial_frac*lots)/step)*step;
-      double be=PositionGetDouble(POSITION_PRICE_OPEN);
+      double lots=PositionGetDouble(POSITION_VOLUME);       // live remaining volume
+      double be  =NormPrice(BEPrice(i));                    // padded BE (same basis as manual)
+      double rtp =PositionGetDouble(POSITION_TP);           // preserve the runner's TP
+      double px  =(dir>0 ? bid : ask);
+      double orr =OpenR(i);                                 // R at trigger (full vol, ~+1.0R)
+      double pv  =MathFloor((0.5*lots)/step)*step;          // mechanical 50%
+      string tag =(via_tp1 ? "AUTO_TP1" : "AUTO_1R");
       if(pv>=vmin && (lots-pv)>=vmin)
         {
          if(g_trade.PositionClosePartial((ulong)g_rows[i].posid,pv))
-            Print("Signal #",g_rows[i].id," TP1 hit -> banked ",DoubleToString(pv,2),
-                  " lots, SL -> breakeven, runner to TP2");
+            Print("Signal #",g_rows[i].id," ",tag," -> banked ",DoubleToString(pv,2),
+                  " lots (50%), SL -> BE, runner to TP");
          else
-            Print("Signal #",g_rows[i].id," partial close FAILED: ",g_trade.ResultRetcode());
-         g_trade.PositionModify((ulong)g_rows[i].posid,be,g_rows[i].tp2);
+            Print("Signal #",g_rows[i].id," ",tag," partial close FAILED: ",g_trade.ResultRetcode());
+         g_trade.PositionModify((ulong)g_rows[i].posid,be,rtp);
+         LogManualAction(i,tag,px,lots,lots-pv,be,orr);
         }
-      g_rows[i].tp1_done=true;
+      else
+        {
+         //--- volume too small to split: honour the doctrine's stop half (SL->BE),
+         //--- skip the partial, and label it so the ledger shows the degenerate case.
+         if(g_trade.PositionModify((ulong)g_rows[i].posid,be,rtp))
+            Print("Signal #",g_rows[i].id," ",tag," (min-lot) -> SL only to BE, no partial");
+         LogManualAction(i,tag+"_BE_ONLY",be,lots,lots,be,orr);
+        }
+      g_rows[i].banked=true; g_rows[i].tp1_done=true;
+      g_rows[i].rt_bankr=orr;   // TP1-ratchet study: the R the +1R bank actually fired at (per-unit)
      }
   }
 
@@ -987,12 +2806,21 @@ double BEPrice(int idx)
    return (g_rows[idx].direction>0 ? g_rows[idx].entry+pad : g_rows[idx].entry-pad);
   }
 
-//--- is SL->BE currently placeable? PositionModify rejects an SL inside the
-//--- broker's stops-level band, so the button is gated on it (otherwise the
-//--- click silently does nothing).
+//--- +0.5R BE floor is a LIVE HARDWARE GATE (coach 2026-09-10, on trader's word): the SL->BE
+//--- button is disabled while Open R < +0.5R. Five lifetime stop-touch charges + the -2.00R trial
+//--- delta moved the guard out of the grading report into the button. Uses the SAME OpenR metric
+//--- the grader logs (actions.csv open_r), so the live gate enforces exactly what
+//--- be_counterfactual measures (FLOOR=0.5). The reversal-bar condition stays a grading judgment;
+//--- the SL->TP1 runner button is untouched.
+const double BE_FLOOR_R=0.5;
+
+//--- is SL->BE currently placeable? Gated on (a) the +0.5R Open-R floor above, and (b) the
+//--- broker's stops-level band (PositionModify rejects an SL inside it, so the click would
+//--- silently do nothing).
 bool BEPlaceable(int idx)
   {
    if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return false;
+   if(OpenR(idx)<BE_FLOOR_R) return false;               // +0.5R live floor (coach 2026-09-10)
    double be=BEPrice(idx);
    double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
    double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
@@ -1017,20 +2845,62 @@ double OpenR(int idx)
   }
 
 //--- persist the manual-actions log (sibling to the journal CSV).
+string ActionRowLine(ManualAction &a)
+  {
+   return StringFormat("%d,%d,%s,%s,%s,%s,%s,%s,%.2f,%.2f",
+         a.id,a.posid,TimeToString(a.bar_time,TIME_DATE|TIME_SECONDS),a.action,
+         DoubleToString(a.price,_Digits),DoubleToString(a.lots_before,2),
+         DoubleToString(a.lots_after,2),DoubleToString(a.sl_after,_Digits),
+         a.banked_r,a.open_r);
+  }
+void WriteLiveActions()
+  {
+   string months[]; int nm=0;
+   for(int i=0;i<ArraySize(g_actions);i++)
+     { string m=StampMonth(g_actions[i].bar_time); bool have=false; for(int q=0;q<nm;q++) if(months[q]==m) have=true;
+       if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
+   for(int q=0;q<nm;q++)
+     {
+      string body="signal_id,posid,bar_time,action,price,lots_before,lots_after,sl_after,banked_r,open_r\n";
+      for(int i=0;i<ArraySize(g_actions);i++) if(StampMonth(g_actions[i].bar_time)==months[q]) body+=ActionRowLine(g_actions[i])+"\n";
+      AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.actions.csv",_Symbol,months[q])),body);
+     }
+  }
 void WriteActions(string path)
   {
+   if(InpLiveMode){ WriteLiveActions(); LiveSaveAllState(); return; }
    if(path=="") return;
    int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
    if(h==INVALID_HANDLE){ Print("WARNING: cannot open actions log '",path,"' err=",GetLastError()); return; }
    FileWriteString(h,"signal_id,posid,bar_time,action,price,lots_before,lots_after,sl_after,banked_r,open_r\n");
-   for(int i=0;i<ArraySize(g_actions);i++)
+   for(int i=0;i<ArraySize(g_actions);i++) FileWriteString(h,ActionRowLine(g_actions[i])+"\n");
+   FileFlush(h); FileClose(h);
+  }
+
+//--- STUDY-ONLY sidecar (InpV2Exit==false only): shadow doctrine-v2 reconstruction +
+//--- trigger-impulse feature, per signal. Never written on the live path.
+void WriteV2Study(string path)
+  {
+   if(path=="") return;
+   int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE){ Print("WARNING: cannot open v2 study '",path,"' err=",GetLastError()); return; }
+   FileWriteString(h,"signal_id,signal_time,symbol,strategy,direction,decision,closed,"
+                     "tp1r,tp2r,trigr,mfe_r,pre_dip_r,post_dip_r,dipped,"
+                     "v2_bank,v2_runner,v2_r,imp_atr,imp_nbig,cal_lab,old_r\n");
+   for(int i=0;i<ArraySize(g_rows);i++)
      {
-      ManualAction a=g_actions[i];
-      FileWriteString(h,StringFormat("%d,%d,%s,%s,%s,%s,%s,%s,%.2f,%.2f\n",
-         a.id,a.posid,TimeToString(a.bar_time,TIME_DATE|TIME_SECONDS),a.action,
-         DoubleToString(a.price,_Digits),DoubleToString(a.lots_before,2),
-         DoubleToString(a.lots_after,2),DoubleToString(a.sl_after,_Digits),
-         a.banked_r,a.open_r));
+      JournalRow r=g_rows[i];
+      double risk=r.risk_px; int d=r.direction;
+      double tp1r =(r.tp1>0.0 && risk>0.0 ? d*(r.tp1-r.entry)/risk : 0.0);
+      double tp2r =(risk>0.0 ? d*((r.tp2>0.0? r.tp2 : r.tp)-r.entry)/risk : 0.0);
+      double trigr=((r.partial_frac>0.0 && r.tp1>0.0) ? MathMin(1.0,tp1r) : 1.0);
+      FileWriteString(h,StringFormat(
+         "%d,%s,%s,%s,%s,%s,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.4f,%d,%.4f,%.3f,%d,%d,%s\n",
+         r.id,TimeToString(r.time,TIME_DATE|TIME_SECONDS),r.symbol,r.strategy,DirStr(r.direction),
+         r.decision,(r.closed?1:0),
+         tp1r,tp2r,trigr,r.mfe_r,r.pre_dip_r,r.post_dip_r,r.dipped,
+         r.v2_bank,r.v2_runner,r.v2_r,r.imp_atr,r.imp_nbig,r.cal_lab,
+         (r.closed?DoubleToString(r.r_multiple,3):"")));
      }
    FileFlush(h); FileClose(h);
   }
@@ -1238,14 +3108,18 @@ string InvPanelStateText()
 
 //--- append one manual-intervention row + rewrite the actions CSV.
 void LogManualAction(int idx,string what,double price,double lots_before,
-                     double lots_after,double sl_after)
+                     double lots_after,double sl_after,double open_r_override=-999.0)
   {
    int n=ArraySize(g_actions); ArrayResize(g_actions,n+1);
    g_actions[n].id=g_rows[idx].id; g_actions[n].posid=g_rows[idx].posid;
    g_actions[n].bar_time=iTime(_Symbol,g_tf,0); g_actions[n].action=what;
    g_actions[n].price=price; g_actions[n].lots_before=lots_before;
    g_actions[n].lots_after=lots_after; g_actions[n].sl_after=sl_after;
-   g_actions[n].banked_r=g_rows[idx].r_multiple; g_actions[n].open_r=OpenR(idx);
+   //--- open_r_override lets a caller record the R AT the moment of decision (the
+   //--- mechanical +1R bank logs it BEFORE the partial close so the value is the
+   //--- full-position ~+1.0R, matching the manual SL_BE basis; default recomputes).
+   g_actions[n].banked_r=g_rows[idx].r_multiple;
+   g_actions[n].open_r=(open_r_override>-998.0 ? open_r_override : OpenR(idx));
    WriteActions(g_actions_part);
   }
 
@@ -1282,7 +3156,10 @@ void ManualClose50(int idx)
    double px=(g_rows[idx].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID)
                                      : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
    LogManualAction(idx,"CLOSE50",px,vol,vol-pv,sl);
-   g_rows[idx].tp1_done=true;   // manual scale-out replaces the auto one (no double-close)
+   //--- mark BOTH: banked suppresses the v2 mechanical +1R rule (its gate), tp1_done
+   //--- keeps the legacy readers (terminal classifier, panel) consistent. A manual
+   //--- 50% is the discretionary substitute for the auto bank -> no double-close.
+   g_rows[idx].banked=true; g_rows[idx].tp1_done=true;
    if(g_trade.PositionClosePartial((ulong)g_rows[idx].posid,pv))
       Print("Signal #",g_rows[idx].id," MANUAL CLOSE 50% -> banked ",DoubleToString(pv,2),
             " lots (auto scale-out disabled)");
@@ -1292,8 +3169,9 @@ void ManualClose50(int idx)
 
 //--- manual SL->break-even (+ pad). NEVER writes g_rows[].sl - that is the risk
 //--- basis for every R number; only the position's live stop moves. TP is read
-//--- back + passed unchanged (no mid-trade TP moves). tp1_done is left alone so
-//--- the auto scale-out (which also moves SL->BE at TP1) still runs.
+//--- back + passed unchanged (no mid-trade TP moves). banked/tp1_done are left
+//--- alone: a manual BE does not consume the v2 mechanical +1R bank (which still
+//--- takes its 50% + BE at +1R if the trade gets there).
 void ManualBE(int idx)
   {
    if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return;
@@ -1308,6 +3186,48 @@ void ManualBE(int idx)
    else
       Print("Signal #",g_rows[idx].id," SL->BE FAILED: ",g_trade.ResultRetcode()," (too close to market?)");
   }
+//--- MANUAL SL->TP1 RATCHET (coach pair-12 item 2, 2026-09-10). Discretionary lock of the runner
+//--- stop at TP1 (the +2R structural level). RUNNER PHASE ONLY (banked), ONE per trade, TP1 MAX
+//--- (the stop goes to tp1 exactly, never past). The held-BE counterfactual (what the runner would
+//--- have done with the stop left at BE) is computed post-hoc by ratchet_counterfactual.py from the
+//--- journalled RATCHET_TP1 action, exactly as be_counterfactual.py does for SL_BE.
+bool RatchetPlaceable(int idx)
+  {
+   if(g_rows[idx].ratcheted) return false;            // one per trade
+   if(!g_rows[idx].banked)    return false;            // runner phase only (+1R bank fired)
+   double tp1=g_rows[idx].tp1;
+   if(tp1<=0.0) return false;                          // no TP1 level (single-target detector)
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return false;
+   //--- MUST TIGHTEN, never loosen. Guard against any state where the current stop already sits
+   //--- at/beyond tp1 (a very tight tp1 vs a padded BE, or a future stop-management step): moving
+   //--- the stop to tp1 there would ratchet it the WRONG way. Refuse unless tp1 improves the stop.
+   double cur_sl=PositionGetDouble(POSITION_SL);
+   if(cur_sl>0.0 && (g_rows[idx].direction>0 ? tp1<=cur_sl : tp1>=cur_sl)) return false;
+   double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   //--- TP1 must sit a valid stop-distance below (long) / above (short) the market: i.e. price has
+   //--- run past TP1 so locking the stop there is a real ratchet, not an invalid above-market stop.
+   if(g_rows[idx].direction>0) return (bid-tp1)>=stops;
+   return (tp1-ask)>=stops;
+  }
+void ManualRatchetTP1(int idx)
+  {
+   if(!RatchetPlaceable(idx)) { Print("Signal #",g_rows[idx].id," SL->TP1 not available (runner phase, once, price past TP1)."); return; }
+   if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return;
+   double tp1=NormPrice(g_rows[idx].tp1);
+   double tp =PositionGetDouble(POSITION_TP);
+   double vol=PositionGetDouble(POSITION_VOLUME);
+   double px =(g_rows[idx].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID)
+                                      : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   if(g_trade.PositionModify((ulong)g_rows[idx].posid,tp1,tp))
+     {
+      g_rows[idx].ratcheted=true;
+      LogManualAction(idx,"RATCHET_TP1",px,vol,vol,tp1,OpenR(idx));   // held-BE counterfactual is post-hoc
+      Print("Signal #",g_rows[idx].id," MANUAL SL->TP1 ratchet @ ",DoubleToString(tp1,_Digits));
+     }
+   else
+      Print("Signal #",g_rows[idx].id," SL->TP1 FAILED: ",g_trade.ResultRetcode());
+  }
 
 //--- the panel's live state block (multiline; \r\n for the Win32 EDIT).
 string PanelStateText(int idx,bool be_ok)
@@ -1319,13 +3239,21 @@ string PanelStateText(int idx,bool be_ok)
    double oR =OpenR(idx);
    double bR =g_rows[idx].r_multiple;
    string s="";
+   //--- live day-of-week + time (tester "now"): the trader wanted the current weekday on the
+   //--- management panel while a position is open, mirroring the signal popup's day line.
+   MqlDateTime nowdt; TimeToStruct(TimeCurrent(),nowdt);
+   string dows[]={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+   s+=StringFormat("%s  %s UTC\r\n",dows[nowdt.day_of_week],TimeToString(TimeCurrent(),TIME_MINUTES));
    s+=StringFormat("%s  %s   #%d\r\n",g_rows[idx].strategy,DirStr(g_rows[idx].direction),g_rows[idx].id);
    s+=StringFormat("Lots: %s  (init %s)\r\n",DoubleToString(vol,2),DoubleToString(g_rows[idx].lots,2));
    s+=StringFormat("Entry: %s\r\n",DoubleToString(g_rows[idx].entry,_Digits));
    s+=StringFormat("SL: %s    TP: %s\r\n",DoubleToString(psl,_Digits),DoubleToString(ptp,_Digits));
    s+=StringFormat("Open R: %+.2f    Banked R: %+.2f\r\n",oR,bR);
    s+=StringFormat("Close-now total: %+.2f R\r\n",oR+bR);
-   s+=(be_ok? "Ready." : "SL->BE unavailable (too close to market)");
+   s+=(be_ok ? "Ready."
+             : (oR<BE_FLOOR_R
+                ? StringFormat("SL->BE locked until Open R >= +%.2f (now %+.2f)",BE_FLOOR_R,oR)
+                : "SL->BE unavailable (too close to market)"));
    return s;
   }
 
@@ -1371,6 +3299,7 @@ void ManagePanelTick()
       if(act==1)      ManualClose(idx);
       else if(act==2) ManualClose50(idx);
       else if(act==3) ManualBE(idx);
+      else if(act==5) ManualRatchetTP1(idx);   // item 2: discretionary SL->TP1 ratchet
       idx=ActiveRowIdx();
       if(idx<0){ TDM_Close(); g_panel_open=false; return; }
      }
@@ -1383,13 +3312,14 @@ void ManagePanelTick()
       if(manage_inv)
         {
          double vol=(PositionSelectByTicket((ulong)g_inv_posid)? PositionGetDouble(POSITION_VOLUME):0.0);
-         TDM_Update(InvPanelStateText(),vol,1);   // BE always offered for the inverse
+         TDM_Update(InvPanelStateText(),vol,1,0);   // BE always offered for the inverse; no ratchet
         }
       else
         {
          bool be_ok=BEPlaceable(idx);
+         bool rt_ok=RatchetPlaceable(idx);
          double vol=(PositionSelectByTicket((ulong)g_rows[idx].posid)? PositionGetDouble(POSITION_VOLUME):0.0);
-         TDM_Update(PanelStateText(idx,be_ok),vol,be_ok?1:0);
+         TDM_Update(PanelStateText(idx,be_ok),vol,be_ok?1:0,rt_ok?1:0);
         }
       last_push=now;
      }
@@ -1441,6 +3371,8 @@ double StratMinRR(string strat)
    if(strat=="SweepMSS") return InpSmcMinRR;
    if(strat=="DeepFib")  return InpFibMinRR;
    if(strat=="EMArev")   return InpEmaMinRR;
+   if(strat=="EMArevQ")  return InpEmaMinRR;   // same mean-reversion R:R floor as base EMArev
+   if(strat=="TrendCont") return 1.0;          // ratified default made explicit (§10 small item)
    return 1.0;
   }
 
@@ -1516,7 +3448,11 @@ void WriteD1Series(int id)
    if(!InpShotOnDecision) return;
    MqlRates r[];
    ArraySetAsSeries(r,false);                       // index 0 = OLDEST -> ascending
-   int n=CopyRates(_Symbol,PERIOD_D1,0,200,r);
+   //--- 500 D1 bars (was 200): render_d1 shows the last ~130 but computes EMA20/50/200 over the
+   //--- FULL dump, so EMA200 has ~370 bars of warmup before the visible window (seed residue
+   //--- ~2.5%) and reads the same as a live, fully-warmed D1 chart. CopyRates returns fewer near
+   //--- a symbol's data start; render_d1 degrades gracefully (EMA just less warm). (item 8)
+   int n=CopyRates(_Symbol,PERIOD_D1,0,500,r);
    if(n<=0){ Print("Signal #",id," D1 series copy failed err=",GetLastError()); return; }
    FolderCreate("journal\\d1",FILE_COMMON);
    string f=StringFormat("journal\\d1\\%s_%s_%d.csv",_Symbol,StampCompact(g_start_time),id);
@@ -1541,20 +3477,26 @@ void WriteD1Series(int id)
 //--- (signal_id, seq, bar, levels-as-shown), so a journal is never silently missing a
 //--- deferral. Sidecar keyed by run stamp; delay-specific schema (NOT the graded 28-col
 //--- journal). One row per delay; unlimited delays per signal (trader ruling 2026-09).
-void WriteDelayLog(int id,int seq,SignalCandidate &cand)
+void WriteDelayLog(int id,int seq,SignalCandidate &cand,string entry_mode="delay",int implicit=0)
   {
-   FolderCreate("journal",FILE_COMMON);
-   string f=StringFormat("journal\\%s_%s.delays.csv",_Symbol,StampCompact(g_start_time));
+   string f;
+   if(InpLiveMode) f=LivePath(StringFormat("journal\\%s_%s.delays.csv",_Symbol,StampMonth(iTime(_Symbol,g_tf,0))));   // §11-5/E3: live = monthly, never mixed with tester files
+   else { FolderCreate("journal",FILE_COMMON); f=StringFormat("journal\\%s_%s.delays.csv",_Symbol,StampCompact(g_start_time)); }
    bool exists=FileIsExist(f,FILE_COMMON);
    int h=FileOpen(f,FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
    if(h==INVALID_HANDLE){ Print("Signal #",id," delay-log open failed err=",GetLastError()); return; }
    FileSeek(h,0,SEEK_END);
-   if(!exists) FileWriteString(h,"signal_id,delay_seq,bar_time,symbol,strategy,direction,entry,sl,tp,tp1,tp2\r\n");
-   FileWriteString(h,StringFormat("%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
+   //--- entry_mode (item 3): "delay" per re-present; "pending_frozen" / "market_now" at the final
+   //--- entry after a delay; "market_refused" when a market-now click failed the MinRR floor.
+   //--- live journals append an `implicit` column (G2: 1 = the EA delayed on the trader's behalf at
+   //--- bar close, 0 = an explicit delay task). Tester header/rows are byte-identical (no column).
+   if(!exists) FileWriteString(h,"signal_id,delay_seq,bar_time,symbol,strategy,direction,entry,sl,tp,tp1,tp2,entry_mode"+(InpLiveMode?",implicit":"")+"\r\n");
+   FileWriteString(h,StringFormat("%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s",
       id,seq,TimeToString(iTime(_Symbol,g_tf,0),TIME_DATE|TIME_MINUTES),_Symbol,cand.strategy,
       (cand.direction>0?"BUY":"SELL"),
       DoubleToString(cand.entry,_Digits),DoubleToString(cand.sl,_Digits),DoubleToString(cand.tp,_Digits),
-      DoubleToString(cand.tp1,_Digits),DoubleToString(cand.tp2,_Digits)));
+      DoubleToString(cand.tp1,_Digits),DoubleToString(cand.tp2,_Digits),entry_mode)
+      +(InpLiveMode?StringFormat(",%d",implicit):"")+"\r\n");
    FileClose(h);
   }
 
@@ -1568,7 +3510,7 @@ void WritePendingSetup(int id,SignalCandidate &cand,
    if(h==INVALID_HANDLE)
      { Print("Signal #",id," pending sidecar open failed err=",GetLastError()); return; }
    FileWriteString(h,"signal_id,signal_time,symbol,strategy,direction,"
-                     "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,regime,with_trend\r\n");
+                     "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,regime,with_trend,decision_class\r\n");
    //--- signal_time = the DECISION bar (current), NOT the trigger. The blind advisor
    //--- bundle (setup.md time-of-day + hours_until countdown) is derived from this,
    //--- and it must match the popup's "Time" field and the chart it screenshots -
@@ -1576,11 +3518,11 @@ void WritePendingSetup(int id,SignalCandidate &cand,
    //--- written with the advanced bar, keeping the advisor in step with the trader.
    //--- (The GRADED journal keeps cand.zone_to as the signal time - grading refs the
    //--- trigger; this sidecar is real-time advisor delivery only, never graded.)
-   FileWriteString(h,StringFormat("%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
+   FileWriteString(h,StringFormat("%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\r\n",
       id,TimeToString(iTime(_Symbol,g_tf,0),TIME_DATE|TIME_MINUTES),_Symbol,cand.strategy,
       (cand.direction>0?"BUY":"SELL"),
       DoubleToString(oe,_Digits),DoubleToString(osl,_Digits),DoubleToString(ot,_Digits),
-      DoubleToString(ot1,_Digits),DoubleToString(ot2,_Digits),g_sig_regime,g_sig_with_trend));
+      DoubleToString(ot1,_Digits),DoubleToString(ot2,_Digits),g_sig_regime,g_sig_with_trend,g_sig_class));
    FileClose(h);
   }
 
@@ -1641,9 +3583,10 @@ string RegimePretty()
   }
 
 bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
-                       int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv,bool &want_delay)
+                       int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv,bool &want_delay,
+                       bool &want_market)
   {
-   skip_reason=0; entry_edited=false; want_inv=false; want_delay=false;
+   skip_reason=0; entry_edited=false; want_inv=false; want_delay=false; want_market=false;
    int    dir=cand.direction;
    bool   scaleout=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
    double frac=cand.partial_fraction;
@@ -1684,7 +3627,7 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
    //--- kept short so it fits the fixed-width value field without clipping the time.
    int delays=(int)((dnow-cand.zone_to)/PeriodSeconds(g_tf))-1;
    if(delays>0) sigtime+=StringFormat("  (+%d bar%s)",delays,(delays==1?"":"s"));
-   if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),sigtime,RegimePretty(),
+   if(TD_Open(caption,_Symbol,stratArg,DirStr(dir),sigtime,RegimePretty(),g_sig_class,
               DoubleToString(ce,_Digits),DoubleToString(cs,_Digits),DoubleToString(c1,_Digits),tp2str,
               LotsLine(lots0,ce,cs,atr),rrs)!=1)
      {
@@ -1692,6 +3635,9 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
       return false;
      }
    TD_OfferInverse(offer_inv?1:0);   // 3rd choice, only for EMArev past the fwd-V gate
+   //--- item 3: at a delay REOPEN (g_delay_count>0), offer "enter NOW at market" beside Accept
+   //--- (=pending @ frozen). Not for breakout STOP setups (entry is a level, not the market).
+   TD_OfferMarketNow((g_delay_count>0 && !cand.stop_entry)?1:0);
    //--- decision-time chart snapshot (overlays already drawn; dialog not in shot)
    DecisionScreenshot(id);
    //--- popup upcoming-events list (both date forms for the coach-mode toggle).
@@ -1778,6 +3724,7 @@ bool InteractiveDialog(int id,SignalCandidate &cand,string caption,string plan,
 
    if(r==3){ want_inv=true;   return false; } // INVERSE chosen: not a graded fade (handled by caller)
    if(r==4){ want_delay=true; return false; } // DELAY chosen: re-ask next bar (caller defers)
+   if(r==5){ want_market=true; return false; }// MARKET-NOW chosen at reopen (handled by caller)
 
    if(r==1)   // approved: commit the (possibly edited) levels; NEVER collapse
      {
@@ -1816,9 +3763,10 @@ void UiSpin(int ms)
 //| Modal / auto-approve. Returns true on approve.                    |
 //+------------------------------------------------------------------+
 bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &decision_ms,
-                 int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv,bool &want_delay)
+                 int &skip_reason,bool &entry_edited,bool offer_inv,bool &want_inv,bool &want_delay,
+                 bool &want_market)
   {
-   skip_reason=0; entry_edited=false; want_inv=false; want_delay=false;
+   skip_reason=0; entry_edited=false; want_inv=false; want_delay=false; want_market=false;
    //--- headless automated verification: no DLL, no modal (never edits entry).
    //--- INVERSE is interactive-only: headless never chooses it.
    if(InpAutoApprove==AA_ALL)
@@ -1854,7 +3802,7 @@ bool AskApproval(int id,SignalCandidate &cand,double lots,string caption,long &d
      {
       //--- editable, R:R-locked, live-updating dialog (may mutate cand levels);
       //--- returns the skip-reason code and whether the entry was edited (pending).
-      yes=InteractiveDialog(id,cand,caption,plan,skip_reason,entry_edited,offer_inv,want_inv,want_delay);
+      yes=InteractiveDialog(id,cand,caption,plan,skip_reason,entry_edited,offer_inv,want_inv,want_delay,want_market);
      }
    else
      {
@@ -1897,7 +3845,7 @@ double MarginCapLots(double entry,double sl,double lots)
 
 double SizeByRisk(double entry,double sl)
   {
-   double lots=LotsForRisk(_Symbol,entry,sl,InpRiskPct);   // shared math (floored, no clamp)
+   double lots=LotsForRisk(_Symbol,entry,sl,InpRiskPct*g_risk_mult);   // shared math (floored, no clamp); g_risk_mult=1.0 unless LIVE (C2: sizing only, detectors untouched)
    double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
    if(lots<=0.0)
      {
@@ -2764,6 +4712,14 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       if(g_rows[i].posid==posid && !g_rows[i].closed) { idx=i; break; }
    if(idx<0) return;
 
+   ApplyExitDeal(idx,deal);
+   WriteJournal(g_journal_part);
+  }
+//--- Graded-close accounting for ONE DEAL_ENTRY_OUT deal of row idx (extracted verbatim from
+//--- OnTradeTransaction, Phase 3 M1 Slice 4) so the restart reconcile can replay history deals
+//--- through exactly the same math.
+void ApplyExitDeal(int idx,ulong deal)
+  {
    double dvol  =HistoryDealGetDouble(deal,DEAL_VOLUME);
    double dprice=HistoryDealGetDouble(deal,DEAL_PRICE);
    double dprof =HistoryDealGetDouble(deal,DEAL_PROFIT)
@@ -2799,24 +4755,16 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    else
       Print("Signal #",g_rows[idx].id," partial exit ",DoubleToString(dvol,2),
             " @ ",DoubleToString(dprice,_Digits)," (Rsofar=",DoubleToString(g_rows[idx].r_multiple,2),")");
-   WriteJournal(g_journal_part);
   }
 
 //+------------------------------------------------------------------+
-void WriteJournal(string path)
+string StampMonth(datetime t)
+  { MqlDateTime dt; TimeToStruct(t,dt); return StringFormat("%04d%02d",dt.year,dt.mon); }
+//--- one journal row as CSV (shared by the tester file and the live monthly files)
+string JournalRowLine(JournalRow &r)
   {
-   int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
-   if(h==INVALID_HANDLE) { Print("WARNING: cannot open journal '",path,"' err=",GetLastError()); return; }
-   FileWriteString(h,
-      "signal_id,signal_time,symbol,strategy,direction,"
-      "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
-      "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
-      "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal\n");
-   for(int i=0;i<ArraySize(g_rows);i++)
-     {
-      JournalRow r=g_rows[i];
-      string line=StringFormat(
-         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s\n",
+   return StringFormat(
+         "%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%s,%s,%s,%d,%d,%d,%s",
          r.id,TimeToString(r.time,TIME_DATE|TIME_SECONDS),r.symbol,r.strategy,DirStr(r.direction),
          DoubleToString(r.orig_entry,_Digits),DoubleToString(r.orig_sl,_Digits),DoubleToString(r.orig_tp,_Digits),
          (r.orig_tp1>0?DoubleToString(r.orig_tp1,_Digits):""),(r.orig_tp2>0?DoubleToString(r.orig_tp2,_Digits):""),
@@ -2833,9 +4781,47 @@ void WriteJournal(string path)
          (r.to_tp1>0?DoubleToString(r.to_tp1,_Digits):""),(r.to_tp2>0?DoubleToString(r.to_tp2,_Digits):""),
          (r.closed?DoubleToString(r.mfe_r,2):""),
          (r.closed?DoubleToString(r.pre_dip_r,2):""),(r.closed?DoubleToString(r.post_dip_r,2):""),
-         r.dipped,r.terminal);
-      FileWriteString(h,line);
+         r.dipped,r.terminal,r.decision_class,
+         (r.closed?DoubleToString(r.rt_tp1R,3):""),(r.closed?DoubleToString(r.rt_tp2R,3):""),
+         r.rt_touched1,r.rt_reached2,r.rt_redip1,(r.closed?DoubleToString(r.rt_bankr,3):""));
+  }
+#define JOURNAL_HEADER "signal_id,signal_time,symbol,strategy,direction," \
+      "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots," \
+      "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done," \
+      "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal,decision_class," \
+      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"
+//--- LIVE (E3/G5/§11-5): monthly SYMBOL_YYYYMM.csv under live\journal, rows keyed by signal month, every
+//--- present month rewritten atomically on every call (rows are few; simplicity over cleverness), with the
+//--- five live columns appended. No .part, no finaliser. Tester bytes are produced by the branch below.
+void WriteLiveJournals()
+  {
+   string months[]; int nm=0;
+   for(int i=0;i<ArraySize(g_rows);i++)
+     { string m=StampMonth(g_rows[i].time); bool have=false; for(int q=0;q<nm;q++) if(months[q]==m) have=true;
+       if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
+   for(int q=0;q<nm;q++)
+     {
+      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto\n";
+      for(int i=0;i<ArraySize(g_rows);i++)
+        {
+         if(StampMonth(g_rows[i].time)!=months[q]) continue;
+         body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d\n",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip);
+        }
+      AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }
+  }
+void WriteJournal(string path)
+  {
+   if(InpLiveMode){ WriteLiveJournals(); LiveSaveAllState(); return; }   // live: monthly + atomic, no .part (also the init-time write)
+   int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE) { Print("WARNING: cannot open journal '",path,"' err=",GetLastError()); return; }
+   FileWriteString(h,
+      "signal_id,signal_time,symbol,strategy,direction,"
+      "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
+      "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
+      "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal,decision_class,"
+      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr\n");
+   for(int i=0;i<ArraySize(g_rows);i++) FileWriteString(h,JournalRowLine(g_rows[i])+"\n");
    FileFlush(h); FileClose(h);
   }
 
@@ -2851,6 +4837,14 @@ double OnTester()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   //--- PHASE 3 LIVE: stop the timer and leave a final heartbeat so the watchdog can tell a
+   //--- clean stop from a hang (status "stopped" vs a stale "running" beat).
+   if(InpLiveMode && g_live_inited)
+     {
+      EventKillTimer();
+      AuditLine("stop","","","","ok","",StringFormat("reason=%d",reason));
+      WriteHeartbeat("stopped");
+     }
    //--- tear the management panel down first (joins its thread) so nothing
    //--- outlives the test run.
    if(g_panel_open){ TDM_Close(); g_panel_open=false; }
@@ -2860,16 +4854,31 @@ void OnDeinit(const int reason)
       // §3.8: AA-mode (headless) journals carry the "AA_" prefix so mt5_verify's
       // baseline can never overwrite the trader's own journal for the same window.
       string jpfx=(InpAutoApprove!=AA_NONE ? "AA_" : "");
-      string finalp=StringFormat("journal\\%s%s_%s_%s.csv",
-                                 jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+      //--- PHASE 3 LIVE: journals stay under live\journal (§11-5, never mixed with tester files);
+      //--- monthly rotation replaces this finaliser in Slice 5. Tester path/bytes unchanged.
+      if(InpLiveMode)
+        {   // live journals are monthly + atomic; nothing to rename. Flush once more and leave.
+         WriteLiveJournals(); if(ArraySize(g_actions)>0) WriteLiveActions();
+         Print("Live journals flushed: <Terminal>\\Common\\Files\\",InpLiveRoot,"\\journal\\ (",ArraySize(g_rows)," signals, monthly files)");
+        }
+      else
+        {
+      string finalp=StringFormat("journal\\%s%s_%s_%s.csv",jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
       WriteJournal(finalp);
       if(g_journal_part!="" && g_journal_part!=finalp) FileDelete(g_journal_part,FILE_COMMON);
       Print("Journal finalised: <Terminal>\\Common\\Files\\",finalp," (",ArraySize(g_rows)," signals)");
+      //--- STUDY-ONLY: emit the shadow-v2 + impulse sidecar next to the journal.
+      if(!InpV2Exit)
+        {
+         string v2p=StringFormat("journal\\v2study_%s_%s_%s.csv",
+                                 _Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+         WriteV2Study(v2p);
+         Print("v2 study sidecar: <Terminal>\\Common\\Files\\",v2p," (",ArraySize(g_rows)," rows)");
+        }
       //--- finalise the manual-actions log alongside the journal (if any fired)
       if(ArraySize(g_actions)>0)
         {
-         string af=StringFormat("journal\\%s%s_%s_%s.actions.csv",
-                                jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
+         string af=StringFormat("journal\\%s%s_%s_%s.actions.csv",jpfx,_Symbol,StampCompact(g_start_time),StampCompact(g_last_time));
          WriteActions(af);
          if(g_actions_part!="" && g_actions_part!=af) FileDelete(g_actions_part,FILE_COMMON);
          Print("Manual-actions log finalised: <Terminal>\\Common\\Files\\",af," (",ArraySize(g_actions)," actions)");
@@ -2890,6 +4899,7 @@ void OnDeinit(const int reason)
             if(g_inv_actions_part!="" && g_inv_actions_part!=iaf) FileDelete(g_inv_actions_part,FILE_COMMON);
            }
         }
+        }   // !InpLiveMode finaliser
       if(InpCleanupOnDeinit) ObjectsDeleteAll(0,InpObjPrefix);
      }
    for(int i=0;i<g_ndet;i++)
