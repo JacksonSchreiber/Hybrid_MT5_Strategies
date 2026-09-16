@@ -40,13 +40,14 @@ textarea,select,input{width:100%;background:#0b0f14;color:var(--txt);border:1px 
 JS = """
 function tick(){document.querySelectorAll('[data-deadline]').forEach(function(el){var d=new Date(el.dataset.deadline);var s=Math.floor((d-Date.now())/1000);
  if(s<=0){el.textContent='EXPIRED';el.className='cd bad';return;}var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;el.textContent=(h>0?h+'h ':'')+m+'m '+x+'s';el.className='cd '+(s<3600?'warn':'ok');});}
-setInterval(tick,1000);tick();
+function utc(){var d=new Date();var p=function(n){return (n<10?'0':'')+n};var el=document.getElementById('utc');if(el)el.textContent=p(d.getUTCHours())+':'+p(d.getUTCMinutes())+':'+p(d.getUTCSeconds())+' UTC';}
+setInterval(function(){tick();utc();},1000);tick();utc();
 var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.querySelector('textarea:focus')){setTimeout(function(){if(!document.querySelector('textarea:focus'))location.reload();},parseInt(meta.content)*1000);}
 """
 
 def page(title: str, body: str, active: str = "", refresh: int | None = None) -> str:
     tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
-    nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs)
+    nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs) + '<span id="utc" class="k" style="margin-left:auto;align-self:center;white-space:nowrap;font-variant-numeric:tabular-nums"></span>'
     m = f'<meta name="autorefresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{E(title)}</title>{m}<style>{CSS}</style></head><body><nav>{nav}</nav><main>{body}</main><script>{JS}</script></body></html>')
@@ -89,12 +90,6 @@ def dashboard(q: dict) -> str:
     out.append(f'<div class="card"><div class="row"><div><div class="k">Backup</div><div class="big {bcls}">{E(btxt)}</div><div class="k">{E(lb["name"]) if lb else "zip of the last 30 days: journals, queue, state, verdicts, calendar, MT5 presets"}</div></div>'
                f'<a class="btn" href="/backup.zip" style="margin-left:auto" onclick="setTimeout(function(){{location.reload()}},4000)">Download backup (30 d)</a>'
                f'<form method="post" action="/telegram_test" class="inline"><button class="btn">Telegram test</button></form></div></div>')
-    for sym in syms:
-        hb = C.heartbeat(CFG, sym); age = C.heartbeat_age_s(hb)
-        alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]
-        flags = "" if not hb else ("" if hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed") else ' <span class="pill bad">AutoTrading OFF</span>')
-        out.append(f'<div class="card"><div class="row"><span class="big">{E(sym)}</span><span class="pill {"ok" if alive else "bad"}">{"EA alive" if alive else "EA STALE / STOPPED"}</span>{flags}<span class="k">beat {C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</span></div>'
-                   + (ftmo_block(hb) if hb else "") + (f'<div class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</div>' if hb and hb.get("alerts") else "") + '</div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
     out.append("<h2>Pending signals</h2>")
@@ -109,6 +104,15 @@ def dashboard(q: dict) -> str:
     for p in pos:
         out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"><div class="row"><span class="big">{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
                    f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
+    out.append('<h2>Instances</h2>')
+    for sym in syms:
+        hb = C.heartbeat(CFG, sym); age = C.heartbeat_age_s(hb)
+        alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]
+        flags = "" if not hb else ("" if hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed") else ' <span class="pill bad">AutoTrading OFF</span>')
+        tvs = C.tv_symbol(CFG, sym); tvl = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
+        out.append(f'<div class="card"><div class="row"><span class="big">{E(sym)}</span><span class="pill {"ok" if alive else "bad"}">{"EA alive" if alive else "EA STALE / STOPPED"}</span>{flags}<span class="k">beat {C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</span>'
+                   f'<a class="btn" href="{tvl}" target="_blank" style="margin-left:auto;padding:6px 10px;font-size:13px">TradingView ↗</a></div>'
+                   + (ftmo_block(hb) if hb else "") + (f'<div class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</div>' if hb and hb.get("alerts") else "") + '</div>')
     # recent decided signals
     out.append("<h2>Recent signals</h2><div class='card'><table><tr><th>#</th><th>signal</th><th>status</th><th>time</th></tr>")
     for s in [x for x in sigs if x.get("status") != "open"][:12]:
