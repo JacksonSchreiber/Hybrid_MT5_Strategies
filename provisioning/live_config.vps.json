@@ -32,7 +32,8 @@
     "mt5_task": "hybrid-mt5",
     "mt5_process": "terminal64",
     "web_task": "hybrid-web",
-    "advisor_task": "hybrid-advisor"
+    "advisor_task": "hybrid-advisor",
+    "feed_task": "hybrid-feed"
   },
   "logs_dir": "C:\\ProgramData\\hybrid\\logs",
   "calendar": {
@@ -48,5 +49,9 @@
     "US500.sim",
     "USOIL.sim",
     "XAUUSD.sim"
-  ]
+  ],
+  "feed": {
+    "port": 8081,
+    "url": "http://127.0.0.1:8081"
+  }
 }

@@ -18,7 +18,17 @@ _cache: dict[tuple, tuple[float, list]] = {}
 TF = {"h4": "TIMEFRAME_H4", "d1": "TIMEFRAME_D1", "h1": "TIMEFRAME_H1", "m15": "TIMEFRAME_M15"}
 TERMINAL_PATH = r"C:\Program Files\OANDA MetaTrader 5\terminal64.exe"
 
-def available() -> bool: return _mt5 is not None
+FEED_URL = ""          # when set (web app / advisor), bars come from the feed daemon over localhost instead of in-process
+def configure_url(url: str | None) -> None:
+    global FEED_URL; FEED_URL = url or ""
+
+def _remote(path: str, timeout: float = 4.0):
+    import json as _j, urllib.request as _u
+    try:
+        with _u.urlopen(FEED_URL.rstrip("/") + path, timeout=timeout) as r: return _j.load(r)
+    except Exception: return None
+
+def available() -> bool: return bool(FEED_URL) or _mt5 is not None
 
 def configure(path: str | None) -> None:
     global TERMINAL_PATH
@@ -29,9 +39,24 @@ def _ensure() -> bool:
     if _mt5 is None: return False
     if _inited: return True
     if time.time() - _init_fail_at < 15: return False      # don't hammer a stopped terminal
+    if not console_terminal_running():                      # NEVER let initialize() launch its own headless terminal
+        _init_fail_at = time.time(); return False
     ok = _mt5.initialize(path=TERMINAL_PATH)                # attaches to the running terminal (same user)
     if not ok: _init_fail_at = time.time(); return False
     _inited = True; return True
+
+def console_terminal_running() -> bool:
+    """true when terminal64.exe runs in an interactive session (session != 0). A session-0 copy is a stray
+    launched by the MetaTrader5 package and must not be attached to."""
+    import os as _o, subprocess as _s
+    if _o.name != "nt": return True
+    try:
+        out = _s.run(["tasklist", "/FI", "IMAGENAME eq terminal64.exe", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=15).stdout
+        for line in out.splitlines():
+            f = [x.strip('"') for x in line.split('","')]
+            if len(f) >= 4 and f[0].lower() == "terminal64.exe" and f[3] not in ("0", "Services"): return True
+    except Exception: return True
+    return False
 
 def _reset() -> None:
     global _inited
@@ -41,6 +66,8 @@ def _reset() -> None:
 
 def bars(symbol: str, tf: str = "h4", n: int = 500, max_age_s: float = 2.0) -> list[list] | None:
     """[[t_epoch,o,h,l,c,v]] oldest->newest, or None when the terminal is unavailable."""
+    if FEED_URL:
+        r = _remote(f"/bars?symbol={symbol}&tf={tf}&n={n}"); return (r or {}).get("bars")
     key = (symbol, tf, n)
     with _lock:
         c = _cache.get(key)
@@ -58,6 +85,8 @@ def bars(symbol: str, tf: str = "h4", n: int = 500, max_age_s: float = 2.0) -> l
         return out
 
 def tick(symbol: str) -> dict | None:
+    if FEED_URL:
+        r = _remote(f"/tick?symbol={symbol}", 3.0); return (r or {}).get("tick")
     with _lock:
         if not _ensure(): return None
         try: k = _mt5.symbol_info_tick(symbol)
@@ -66,6 +95,8 @@ def tick(symbol: str) -> dict | None:
         return {"t": int(k.time), "bid": float(k.bid), "ask": float(k.ask)}
 
 def status() -> dict:
+    if FEED_URL:
+        return _remote("/status", 3.0) or {"available": True, "connected": False, "daemon": "unreachable"}
     with _lock:
         if not _ensure(): return {"available": available(), "connected": False}
         try:

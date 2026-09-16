@@ -11,7 +11,7 @@ $app = 'C:\ProgramData\hybrid\live'
 $cfg = "$app\live_config.json"
 $logs = 'C:\ProgramData\hybrid\logs'; New-Item -ItemType Directory -Force -Path $logs | Out-Null
 $pw = (Get-Content 'C:\ProgramData\hybrid\secrets\hybridops.password' -Raw).Trim()
-$svc = @{ 'hybrid-web' = 'webapp.py'; 'hybrid-monitor' = 'monitor.py'; 'hybrid-advisor' = 'advisor_runner.py' }
+$svc = @{ 'hybrid-web' = 'webapp.py'; 'hybrid-monitor' = 'monitor.py'; 'hybrid-advisor' = 'advisor_runner.py'; 'hybrid-feed' = 'feedd.py' }
 foreach ($name in $svc.Keys) {
   $cmd = "$app\$name.cmd"
   @("@echo off", "cd /d `"$app`"", "`"$py`" -X utf8 -u `"$app\live\$($svc[$name])`" --config `"$cfg`" >> `"$logs\$name.task.log`" 2>&1") | Set-Content -Path $cmd -Encoding ascii
@@ -24,7 +24,7 @@ foreach ($name in $svc.Keys) {
 # running. Boot triggers of user tasks proved unreliable on 2026-09-16 (web+monitor did not launch after a reboot).
 $keeper = 'C:\ProgramData\hybrid\services-keeper.ps1'
 Set-Content -Path $keeper -Encoding ascii -Value @'
-foreach ($t in "hybrid-web","hybrid-monitor","hybrid-advisor") { $s = (Get-ScheduledTask $t -ErrorAction SilentlyContinue).State; if ($s -and $s -ne "Running") { Start-ScheduledTask $t } }
+foreach ($t in "hybrid-web","hybrid-monitor","hybrid-advisor","hybrid-feed") { $s = (Get-ScheduledTask $t -ErrorAction SilentlyContinue).State; if ($s -and $s -ne "Running") { Start-ScheduledTask $t } }
 '@
 $kAct = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $keeper"
 $kT1 = New-ScheduledTaskTrigger -AtStartup; $kT1.Delay = 'PT90S'

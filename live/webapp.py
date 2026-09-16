@@ -33,7 +33,7 @@ form.inline{display:inline}img.chart{width:100%;height:auto;border-radius:6px;bo
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--dim);font-weight:500}
 pre{white-space:pre-wrap;word-break:break-word;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;background:#0b0f14;padding:10px;border-radius:6px;border:1px solid var(--line);margin:6px 0}
 textarea,select,input{width:100%;background:#0b0f14;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:16px}
-.ev.bind{color:var(--dn);font-weight:600}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}@media(max-width:640px){.grid2{grid-template-columns:1fr}}
+.ev.bind{color:var(--dn);font-weight:600}.ev.amber{color:var(--warn);font-weight:600}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}@media(max-width:640px){.grid2{grid-template-columns:1fr}}
 .flash{padding:10px;border-radius:6px;margin:8px 0}.flash.ok{background:#12301a;border:1px solid #2ea043}.flash.bad{background:#3a1d1d;border:1px solid #a33}
 .cd{font-weight:600}
 """
@@ -138,7 +138,7 @@ def signal_page(key: str, q: dict) -> str:
     evs = s.get("events") or []
     out.append('<div class="card"><h2>Events (next 14 d)</h2>')
     for e in evs[:20]:
-        out.append(f'<div class="ev {"bind" if e.get("binding") else ""}">{E(C.fmt_dt(C.parse_iso(e.get("t_utc"))))} · {E(e.get("ccy", ""))} {E(e.get("name", ""))} <span class="k">[{E(e.get("cls", ""))} {E(e.get("label", ""))}]</span>{" BINDING" if e.get("binding") else ""}</div>')
+        out.append(f'<div class="ev {ev_cls(e.get("hours_until"), e.get("cls"), e.get("binding"))}">{E(C.fmt_dt(C.parse_iso(e.get("t_utc"))))} · {E(e.get("ccy", ""))} {E(e.get("name", ""))} <span class="k">[{E(e.get("cls", ""))} {E(e.get("label", ""))}]</span>{" BINDING" if e.get("binding") else ""}</div>')
     if not evs: out.append('<div class="k">no notable events inside the window</div>')
     _, cov = C.load_events(CFG); st = C.parse_iso(s.get("signal_time"))
     if cov and st and cov < st + timedelta(days=14): out.append(f'<div class="warn">calendar coverage ends {cov.strftime("%Y-%m-%d")} — later events unknown</div>')
@@ -158,7 +158,7 @@ def signal_page(key: str, q: dict) -> str:
     if is_open:
         modes = s.get("entry_modes") or ["market"]
         out.append(f'<div class="card"><h2>Decide</h2><form method="post" action="/task"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="approve">'
-                   + (f'<select name="entry_mode">' + "".join(f'<option value="{m}">{ {"market": "market now", "pending": "pending at the frozen entry"}.get(m, m)}</option>' for m in modes) + "</select>" if len(modes) > 1 else '<input type="hidden" name="entry_mode" value="market">')
+                   + f'<select name="entry_mode"><option value="market">Enter NOW at market (SL/TP as shown)</option><option value="pending">Pending order at the original entry {lv.get("entry")} (waits for price to come back)</option></select>'
                    + '<div style="margin-top:8px"><button class="btn go" style="width:100%">APPROVE</button></div></form>'
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
                    + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form>'
@@ -203,6 +203,16 @@ def tv_block(symbol: str, interval: int = 240, levels: dict | None = None) -> st
             f'<script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>{conf}</script></div></div>'
             f'<div class="row" style="padding:8px"><a href="{link}" target="_blank">Open {E(tvs)} in the TradingView app ↗</a>{copy}</div></div>')
 
+def ev_cls(hours_until, cls: str | None, binding: bool | None) -> str:
+    """the popup's rule (TradeDialog.c): red bold inside 6 h, amber bold 6-12 h; W/binding red; H grey."""
+    try: h = float(hours_until)
+    except (TypeError, ValueError): h = None
+    if binding or cls == "W": return "bind"
+    if h is not None and 0 <= h < 6 and cls in ("V", "C"): return "bind"
+    if h is not None and 6 <= h < 12 and cls in ("V", "C"): return "amber"
+    if cls == "H": return "k"
+    return ""
+
 def _acks() -> list[dict]:
     import glob
     return [a for a in (C.load_json(p) for p in glob.glob(os.path.join(CFG["root"], "acks", "*.json"))) if a]
@@ -227,7 +237,7 @@ def position_page(key: str, q: dict) -> str:
     evs, _ = C.load_events(CFG); ccys = C.symbol_ccys(p["symbol"]); now = C.now_utc()
     soon = [e for e in evs if e["ccy"] in ccys and now <= e["t"] <= now + timedelta(days=5) and e["cls"] in ("V", "W")][:8]
     if soon:
-        out.append('<div class="card"><h2>Events inside the hold (5 d)</h2>' + "".join(f'<div class="ev {"bind" if e["cls"] == "W" else ""}">{E(C.fmt_dt(e["t"]))} · {E(e["ccy"])} {E(e["name"])} <span class="k">[{e["cls"]} {E(e["label"])}]</span></div>' for e in soon) + "</div>")
+        out.append('<div class="card"><h2>Events inside the hold (5 d)</h2>' + "".join(f'<div class="ev {ev_cls((e["t"] - now).total_seconds() / 3600, e["cls"], e["cls"] == "W")}">{E(C.fmt_dt(e["t"]))} · {E(e["ccy"])} {E(e["name"])} <span class="k">[{e["cls"]} {E(e["label"])}]</span></div>' for e in soon) + "</div>")
     if not closed:
         def b(verb, label, enabled, cls=""):
             return (f'<form method="post" action="/task" class="inline"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="{verb}">'
@@ -271,7 +281,7 @@ def events_page(q: dict) -> str:
     for e in win:
         d = e["t"].strftime("%a %d %b")
         if d != day: out.append(f"<h2>{E(d)}</h2>"); day = d
-        cls = e["cls"]; mark = "bind" if cls in ("V", "W") else ""
+        cls = e["cls"]; mark = ev_cls((e["t"] - now).total_seconds() / 3600, cls, cls == "W")
         out.append(f'<div class="ev {mark}">{e["t"].strftime("%H:%M")} · {E(e["ccy"])} {E(e["name"])} <span class="k">[{E(cls or "-")}{(" " + E(e["label"])) if e["label"] else ""}]</span></div>')
     if not win: out.append('<div class="card k">no events in the window</div>')
     return page("Events", "".join(out), "events")

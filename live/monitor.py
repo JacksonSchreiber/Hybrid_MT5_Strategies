@@ -116,9 +116,13 @@ class Monitor:
 
     def processes(self):
         if os.name != "nt": return
-        try: out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {self.m['mt5_process']}.exe"], capture_output=True, text=True, timeout=20).stdout
+        try: out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {self.m['mt5_process']}.exe", "/FI", "SESSION ne 0"], capture_output=True, text=True, timeout=20).stdout
         except Exception as e: self.log(f"tasklist failed: {e}"); return
-        if self.m["mt5_process"].lower() not in out.lower():
+        # a terminal64 in session 0 is a stray copy launched by the MetaTrader5 package (never the trading terminal): kill it
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq 0 } | ForEach-Object { Stop-Process -Id $_.Id -Force; 'killed stray ' + $_.Id }"], capture_output=True, text=True, timeout=30)
+        except Exception: pass
+        if self.m["mt5_process"].lower() not in out.lower() or "console" not in out.lower():
             recent = [t for t in self.st["mt5_restarts"] if C.parse_iso(t) and C.now_utc() - C.parse_iso(t) < timedelta(minutes=30)]
             if len(recent) >= 3: 
                 if len(recent) == 3: self.send("MT5 PROCESS ABSENT and 3 restarts in 30 min failed — manual intervention needed"); self.st["mt5_restarts"].append(C.now_iso())
@@ -128,11 +132,13 @@ class Monitor:
             self.st["mt5_restarts"] = recent + [C.now_iso()]
             self.send(f"MT5 PROCESS ABSENT — restarted via task {self.m['mt5_task']} (attempt {len(recent)+1})")
         try:
-            with urllib.request.urlopen(self.base + "/health", timeout=5) as r: ok = r.status == 200
+            with urllib.request.urlopen(self.base + "/health", timeout=10) as r: ok = r.status == 200
         except Exception: ok = False
         if not ok:
             self.st["web_fail"] = self.st.get("web_fail", 0) + 1
-            if self.st["web_fail"] >= 3:      # three consecutive misses (~45 s), never on the first tick after boot
+            if self.st["web_fail"] >= 4:      # four consecutive misses (~60 s); a real restart (stop, then start)
+                subprocess.run(["schtasks", "/End", "/TN", self.m["web_task"]], capture_output=True, timeout=20)
+                time.sleep(2)
                 subprocess.run(["schtasks", "/Run", "/TN", self.m["web_task"]], capture_output=True, timeout=20)
                 if not self.st.get("web_down"): self.send(f"WEB APP DOWN — restarted via task {self.m['web_task']}")
                 self.st["web_down"] = True

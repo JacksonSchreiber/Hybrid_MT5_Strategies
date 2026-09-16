@@ -37,6 +37,7 @@ _DEFAULT_CONFIG = {
     "tv_widget": True,
     "mt5": {"terminal_path": "C:\\Program Files\\OANDA MetaTrader 5\\terminal64.exe"},
     "calendar": {"dir": "", "refresh_utc": "02:30", "stale_days": 7, "python": "", "feed_url": ""},
+    "feed": {"port": 8081, "url": ""},   # url set on the web/advisor side -> bars via the feedd process
     "expected_symbols": [],           # the lineup the post-reboot check waits for ([] = whatever heartbeats exist)
 }
 
@@ -53,7 +54,7 @@ def load_config(path: str | None = None) -> dict:
         cfg = _deep_merge(cfg, json.load(open(p, encoding="utf-8")))
     cfg["_path"] = p
     try:
-        from live import mt5feed; mt5feed.configure((cfg.get("mt5") or {}).get("terminal_path"))
+        from live import mt5feed; mt5feed.configure((cfg.get("mt5") or {}).get("terminal_path")); mt5feed.configure_url((cfg.get("feed") or {}).get("url"))
     except Exception: pass
     if not cfg["root"]:
         raise SystemExit(f"live config {p}: 'root' (queue root) is required")

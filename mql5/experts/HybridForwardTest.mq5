@@ -1524,7 +1524,7 @@ void WriteSignalJson(string status,string auto_reason)
    j.EndObj();
    j.KTime("deadline",deadline); j.KInt("max_age_bars",g_cfg_max_age_bars);
    j.KInt("delay_count",g_delay_count); j.KInt("implicit_streak",g_park.implicit_streak);
-   j.Key("entry_modes"); j.BeginArr(); if(g_delay_count==0) j.Str("market"); else { j.Str("pending"); j.Str("market"); } j.EndArr();
+   j.Key("entry_modes"); j.BeginArr(); j.Str("market"); j.Str("pending"); j.EndArr();   // live: market now, or a pending order at the original entry (waits for price to return)
    j.KBool("trading_enabled",g_trading_enabled);
    //--- overlay geometry (what DrawOverlays draws) + EMA values at the last closed bar
    j.Key("overlay"); j.BeginObj();
@@ -1851,6 +1851,17 @@ void AdoptOrphans()
       if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
       long pid=(long)PositionGetInteger(POSITION_IDENTIFIER);
       if(RowIdxByPosid(pid)>=0) continue;
+      //--- an approved row whose fill never bound (live async fill) owns the position that carries its caption
+      string cm=PositionGetString(POSITION_COMMENT); int bound_row=-1;
+      for(int i=0;i<ArraySize(g_rows) && bound_row<0;i++)
+         if(g_rows[i].posid==0 && !g_rows[i].closed && g_rows[i].decision=="approved" && StringFind(cm,StringFormat("Signal #%d ",g_rows[i].id))==0) bound_row=i;
+      if(bound_row>=0)
+        {
+         g_rows[bound_row].posid=pid; g_rows[bound_row].entry=PositionGetDouble(POSITION_PRICE_OPEN); g_rows[bound_row].risk_px=MathAbs(g_rows[bound_row].entry-g_rows[bound_row].sl);
+         g_rows[bound_row].lots=PositionGetDouble(POSITION_VOLUME);
+         AuditLine("fill_bound","","",StringFormat("pos:%I64d",pid),"ok","on_restart",StringFormat("sig=%d",g_rows[bound_row].id));
+         continue;
+        }
       int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
       JournalRow r;
       g_sig_seq++; r.id=g_sig_seq; r.time=(datetime)PositionGetInteger(POSITION_TIME); r.symbol=_Symbol; r.strategy="ADOPTED";
@@ -2078,7 +2089,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
         }
       else if(em=="pending")
         {
-         if(g_delay_count<=0){ reason="bad_params:pending_only_at_reopen"; return "rejected"; }
+         // live: a pending order at the ORIGINAL entry is always offered (price slips between the trigger and the tap)
          bool two=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
          double otp=(two? cand.tp2 : cand.tp);
          if(!ValidGeom(cand.direction,cand.entry,cand.sl,otp)){ reason="geom_invalid"; return "rejected"; }
@@ -2644,7 +2655,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
          //--- setup only fills on resumption and cancels if unfilled (ShockCont).
          //--- FREEZE-mode delayed signal: enter as a PENDING at the frozen original entry so the
          //--- structural SL is kept (trap: entry_edited/stop_entry are both false for it).
-         bool freeze_pend=(InpDelayMode==DM_FREEZE && g_delay_count>0);
+         bool freeze_pend=(InpDelayMode==DM_FREEZE && g_delay_count>0) || (InpLiveMode && entry_mode=="pending_frozen");
          bool want_pending=((entry_edited || cand.stop_entry || freeze_pend) && MathAbs(cand.entry-mkt)>gate);
          //--- TEST-ONLY headless probe (AA_ALL): force a pending so the
          //--- OnTradeTransaction fill-binding + expiry paths can be verified.
@@ -2676,11 +2687,31 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
             if(ok)
               {
                ulong deal=g_trade.ResultDeal();
-               if(deal>0 && HistoryDealSelect(deal))
+               bool bound=false;
+               for(int tries=0;tries<10 && !bound;tries++)
                  {
-                  g_rows[n].posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
-                  double fill=HistoryDealGetDouble(deal,DEAL_PRICE);
-                  if(fill>0.0) { g_rows[n].entry=fill; g_rows[n].risk_px=MathAbs(fill-cand.sl); }
+                  if(deal>0 && HistoryDealSelect(deal))
+                    {
+                     g_rows[n].posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+                     double fill=HistoryDealGetDouble(deal,DEAL_PRICE);
+                     if(fill>0.0) { g_rows[n].entry=fill; g_rows[n].risk_px=MathAbs(fill-cand.sl); }
+                     bound=(g_rows[n].posid>0);
+                    }
+                  if(!bound && InpLiveMode && !(bool)MQLInfoInteger(MQL_TESTER)) Sleep(200);   // live: the deal lands a moment after the retcode
+                  else break;
+                 }
+               if(!bound && InpLiveMode)
+                 {   // fallback: the position that carries this signal's caption (comment) under our magic
+                  for(int p=PositionsTotal()-1;p>=0 && !bound;p--)
+                    {
+                     ulong tk=PositionGetTicket(p); if(tk==0) continue;
+                     if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+                     if(StringFind(PositionGetString(POSITION_COMMENT),StringFormat("Signal #%d ",id))!=0) continue;
+                     g_rows[n].posid=(long)PositionGetInteger(POSITION_IDENTIFIER);
+                     double fill=PositionGetDouble(POSITION_PRICE_OPEN);
+                     if(fill>0.0) { g_rows[n].entry=fill; g_rows[n].risk_px=MathAbs(fill-cand.sl); }
+                     bound=true; AuditLine("fill_bound","","",StringFormat("sig:%d",id),"ok","by_comment",StringFormat("posid=%I64d",g_rows[n].posid));
+                    }
                  }
                if(two_target) MinLotSplitGuard(n);
                Print("Signal #",id," APPROVED -> ",cand.strategy," ",DirStr(cand.direction)," ",
