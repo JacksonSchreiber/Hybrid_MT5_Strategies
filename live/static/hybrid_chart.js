@@ -75,7 +75,7 @@
           if (lv[L[0]] > 0) cs.createPriceLine({ price: lv[L[0]], color: L[1], lineWidth: L[3], lineStyle: L[4], axisLabelVisible: true, title: L[2] });
         });
         var ov = d.overlay || {};
-        function box(t0, t1, hi, lo, fill, line) {   // filled band between lo..hi over [t0,t1] (Lightweight Charts has no rectangles)
+        function band(t0, t1, hi, lo, fill, line) {   // filled band between lo..hi over [t0,t1] (Lightweight Charts has no rectangles)
           var z = chart.addBaselineSeries({ baseValue: { type: 'price', price: lo }, topFillColor1: fill, topFillColor2: fill, topLineColor: line, bottomLineColor: line, bottomFillColor1: 'rgba(0,0,0,0)', bottomFillColor2: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
           var pts = bars.filter(function (b) { return b[0] >= t0 && b[0] <= t1; }).map(function (b) { return { time: b[0], value: hi }; });
           if (pts.length === 1) pts.push({ time: pts[0].time + (tf === 'h4' ? 14400 : 86400), value: hi });
@@ -83,9 +83,9 @@
         }
         if (tf === 'h4' && bars.length) guard('zones', function () {
           var zf = iso(ov.zone && ov.zone.from) || bars[0][0], zt = iso(ov.zone && ov.zone.to) || bars[bars.length - 1][0];
-          if (ov.zone && ov.zone.hi > 0) box(zf, zt, ov.zone.hi, ov.zone.lo, 'rgba(112,128,144,0.35)', 'rgba(112,128,144,0.8)');
-          if (ov.zone2 && ov.zone2.hi > 0) box(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
-          imbalances(bars).forEach(function (z) { box(z.t0, z.t1, z.hi, z.lo, z.state === 0 ? 'rgba(147,112,219,0.18)' : 'rgba(147,112,219,0.08)', 'rgba(147,112,219,0.5)'); });
+          if (ov.zone && ov.zone.hi > 0) band(zf, zt, ov.zone.hi, ov.zone.lo, 'rgba(112,128,144,0.35)', 'rgba(112,128,144,0.8)');
+          if (ov.zone2 && ov.zone2.hi > 0) band(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
+          imbalances(bars).forEach(function (z) { band(z.t0, z.t1, z.hi, z.lo, z.state === 0 ? 'rgba(147,112,219,0.18)' : 'rgba(147,112,219,0.08)', 'rgba(147,112,219,0.5)'); });
           if (d.strategy === 'DeepFib' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
             cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: false, title: FIB_LT[i] }); });
         });
