@@ -12,6 +12,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 VERBS_SIGNAL = ("approve", "skip", "delay")
 VERBS_POSITION = ("close", "close50", "sl_be", "ratchet_tp1")
+VERBS_ADMIN = ("test_signal",)          # trader-issued synthetic signal (live only)
 SKIP_REASONS = {1: "Counter-trend", 2: "News / event", 3: "Ugly structure", 4: "Target blocked", 5: "Correlated", 6: "Gut / other"}
 SKIP_REASON_CODES = {8: "no response (expired)", 7: "legacy"}
 EVENT_LABEL = {"W": "NO-HOLD (election)", "V": "NO ENTRY <6h (big release)", "C": "caution", "H": "holiday/thin"}
@@ -203,7 +204,7 @@ def safe_key(s: str) -> bool:
 
 # ----------------------------------------------------------------------------- tasks (S6: typed verbs only, ids the EA reported)
 def write_task(cfg: dict, symbol: str, verb: str, params: dict, signal_id: int | None = None, position_id: int | None = None, issued_by: str = "web") -> str:
-    if verb not in VERBS_SIGNAL + VERBS_POSITION: raise ValueError("unknown verb")
+    if verb not in VERBS_SIGNAL + VERBS_POSITION + VERBS_ADMIN: raise ValueError("unknown verb")
     tid = uuid.uuid4().hex
     t = {"schema_version": SCHEMA_VERSION, "task_id": tid, "symbol": symbol, "verb": verb, "params": params,
          "issued_at": now_iso(), "issued_by": issued_by}

@@ -2020,6 +2020,7 @@ void WriteAck(string task_id,string verb,string target_key,long target_id,string
    j.KStr("task_id",task_id); j.KStr("symbol",_Symbol); j.KStr("verb",verb);
    j.KInt(target_key,target_id); j.KStr("result",result); j.KStr("reason",reason); j.KTime("executed_at",LiveNow());
    j.Key("refs"); j.BeginObj();
+   if(row_idx<0 && verb=="test_signal" && g_live_parked) j.KInt("signal_id",g_park.sid);   // the synthetic signal just published
    if(row_idx>=0)
      { j.KInt("signal_id",g_rows[row_idx].id); j.KInt("posid",g_rows[row_idx].posid); j.KInt("order_ticket",g_rows[row_idx].order_ticket);
        j.KNum("lots",g_rows[row_idx].lots,2); j.KStr("decision",g_rows[row_idx].decision); j.KNum("entry",g_rows[row_idx].entry,_Digits);
@@ -2098,6 +2099,31 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
         { WriteSignalJson("approved","order_failed"); LiveUnpark(); reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
       WriteSignalJson((row_idx>=0 && g_rows[row_idx].decision=="approved_pending") ? "approved_pending" : "approved","");
       LiveUnpark(); reason="ok"; return "accepted";
+     }
+   //--- trader-issued TEST signal (live only, never in the tester): a synthetic setup at the current price with an
+   //--- ATR-sized stop, published and parked exactly like a detector signal so the whole chain (ping, verdict, approve,
+   //--- fill, position verbs) is exercised on the demo. Journal/signal strategy = "TEST" - graders filter it out.
+   if(verb=="test_signal")
+     {
+      if((bool)MQLInfoInteger(MQL_TESTER)){ reason="bad_params"; return "rejected"; }
+      if(g_live_parked || HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
+      string dir=JGet(k,v,"params.direction",""); StringToUpper(dir);
+      if(dir!="BUY" && dir!="SELL"){ reason="bad_params"; return "rejected"; }
+      double sl_atr=StringToDouble(JGet(k,v,"params.sl_atr","0.5")); if(sl_atr<0.1 || sl_atr>3.0) sl_atr=0.5;
+      double a[]; ArraySetAsSeries(a,true); int hA=iATR(_Symbol,g_tf,14); double atr=0.0;
+      if(hA!=INVALID_HANDLE && CopyBuffer(hA,0,1,1,a)>0) atr=a[0];
+      if(atr<=0.0){ reason="bad_params"; return "rejected"; }
+      SignalCandidate c; ResetCandidate(c);
+      c.valid=true; c.strategy="TEST"; c.direction=(dir=="BUY"?1:-1);
+      double mk=(c.direction>0? SymbolInfoDouble(_Symbol,SYMBOL_ASK) : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+      c.entry=NormPrice(mk); double R=sl_atr*atr;
+      c.sl=NormPrice(c.entry-c.direction*R); c.tp1=NormPrice(c.entry+c.direction*2.0*R); c.tp2=NormPrice(c.entry+c.direction*4.0*R); c.tp=c.tp2;
+      c.partial_fraction=0.5; c.rr=4.0; c.comment="TEST signal issued by the trader (sl "+DoubleToString(sl_atr,2)+" ATR)";
+      c.zone_from=iTime(_Symbol,g_tf,3); c.zone_to=iTime(_Symbol,g_tf,0); c.zone_hi=NormPrice(c.entry+0.25*atr); c.zone_lo=NormPrice(c.entry-0.25*atr);
+      AuditLine("test_signal",task_id,verb,dir,"issued","",StringFormat("entry=%s sl=%s tp1=%s tp2=%s atr=%s",DoubleToString(c.entry,_Digits),DoubleToString(c.sl,_Digits),DoubleToString(c.tp1,_Digits),DoubleToString(c.tp2,_Digits),DoubleToString(atr,_Digits)));
+      HandleSignal(c);
+      if(!g_live_parked){ reason="order_failed:not_published"; return "rejected"; }   // e.g. election auto-skip took it
+      row_idx=-1; reason="ok"; return "accepted";
      }
    //--- position verbs --------------------------------------------------------
    if(verb=="close" || verb=="close50" || verb=="sl_be" || verb=="ratchet_tp1")
@@ -2206,7 +2232,7 @@ void LiveProcessTasks()
       long target_id=StringToInteger(JGet(k,v,target_key,"0"));
       if(JGet(k,v,"schema_version","")!=(string)LIVE_SCHEMA_VERSION){ result="rejected"; reason="schema_version_unsupported"; }
       else if(tsym!=_Symbol){ result="rejected"; reason="symbol_mismatch"; }
-      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"){ result="rejected"; reason="unknown_verb"; }
+      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"){ result="rejected"; reason="unknown_verb"; }
       else
         {
          datetime issued=IsoToTime(JGet(k,v,"issued_at",""));

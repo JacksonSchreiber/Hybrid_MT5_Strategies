@@ -81,12 +81,6 @@ def dashboard(q: dict) -> str:
         out.append(f'<div class="k">terminal feed: {"connected" if fs.get("connected") else "<span class=bad>NOT CONNECTED</span>"} · {E(str(fs.get("server") or ""))} · build {fs.get("build")}</div>')
     out.append(f'<div class="card"><div class="row"><div><div class="k">Kill switch</div><div class="big {"ok" if ks else "bad"}">{"TRADING ENABLED" if ks else ("DISABLED" if ks is False else "DISABLED (no config file)")}</div></div>'
                f'<form method="post" action="/kill" class="inline" style="margin-left:auto"><input type="hidden" name="enable" value="{0 if ks else 1}"><button class="btn {"no" if ks else "go"}" onclick="return confirm(\'{"Disable" if ks else "Enable"} trading?\')">{"Disable" if ks else "Enable"}</button></form></div></div>')
-    for sym in syms:
-        hb = C.heartbeat(CFG, sym); age = C.heartbeat_age_s(hb)
-        alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]
-        flags = "" if not hb else ("" if hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed") else ' <span class="pill bad">AutoTrading OFF</span>')
-        out.append(f'<div class="card"><div class="row"><span class="big">{E(sym)}</span><span class="pill {"ok" if alive else "bad"}">{"EA alive" if alive else "EA STALE / STOPPED"}</span>{flags}<span class="k">beat {C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</span></div>'
-                   + (ftmo_block(hb) if hb else "") + (f'<div class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</div>' if hb and hb.get("alerts") else "") + '</div>')
     # backup + telegram test (trader rulings 2026-09-16: manual 30-day zip instead of a nightly pull)
     from live import backup
     ds = backup.days_since(CFG); lb = backup.last(CFG)
@@ -95,6 +89,12 @@ def dashboard(q: dict) -> str:
     out.append(f'<div class="card"><div class="row"><div><div class="k">Backup</div><div class="big {bcls}">{E(btxt)}</div><div class="k">{E(lb["name"]) if lb else "zip of the last 30 days: journals, queue, state, verdicts, calendar, MT5 presets"}</div></div>'
                f'<a class="btn" href="/backup.zip" style="margin-left:auto" onclick="setTimeout(function(){{location.reload()}},4000)">Download backup (30 d)</a>'
                f'<form method="post" action="/telegram_test" class="inline"><button class="btn">Telegram test</button></form></div></div>')
+    for sym in syms:
+        hb = C.heartbeat(CFG, sym); age = C.heartbeat_age_s(hb)
+        alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]
+        flags = "" if not hb else ("" if hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed") else ' <span class="pill bad">AutoTrading OFF</span>')
+        out.append(f'<div class="card"><div class="row"><span class="big">{E(sym)}</span><span class="pill {"ok" if alive else "bad"}">{"EA alive" if alive else "EA STALE / STOPPED"}</span>{flags}<span class="k">beat {C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</span></div>'
+                   + (ftmo_block(hb) if hb else "") + (f'<div class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</div>' if hb and hb.get("alerts") else "") + '</div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
     out.append("<h2>Pending signals</h2>")
@@ -283,6 +283,9 @@ def settings_page(q: dict) -> str:
     out.append('</table><div class="k">edit on the box (sizing only, C2); shown here so the number in effect is never a surprise</div></div>')
     cfgv = C.load_json(os.path.join(CFG["root"], "config", "live.json"), {}) or {}
     out.append(f'<div class="card"><h2>EA knobs (config/live.json)</h2><pre>{E(json.dumps(cfgv, indent=1))}</pre></div>')
+    out.append('<div class="card"><h2>Test signal (demo only)</h2><div class="k">Publishes a synthetic TEST signal at the current price with an ATR-sized stop (TP1 = 2R, TP2 = 4R), parked like a real one. Approve it from its page to place a real demo order, then use the position page. Journal rows carry strategy TEST. Refused while that symbol has a parked signal or an open position.</div>'
+               '<form method="post" action="/task" class="row" style="margin-top:8px"><input type="hidden" name="verb" value="test_signal"><select name="symbol" style="width:auto">' + "".join(f'<option value="{E(x)}">{E(x)}</option>' for x in syms) + '</select>'
+               '<select name="direction" style="width:auto"><option>BUY</option><option>SELL</option></select><select name="sl_atr" style="width:auto"><option value="0.5">SL 0.5 ATR</option><option value="0.25">SL 0.25 ATR (fast +1R)</option><option value="1.0">SL 1.0 ATR</option></select><button class="btn">Publish test signal</button></form></div>')
     out.append(f'<div class="card"><h2>Service</h2><div class="k">queue root {E(CFG["root"])}<br>web {E(CFG["web"]["base_url"])} · no login (WireGuard is the boundary) · sessions: n/a</div></div>')
     for s in syms:
         out.append(f'<div class="card"><h2>Audit tail {E(s)}</h2><pre>{E(chr(10).join(C.audit_tail(CFG, s, 25)))}</pre></div>')
@@ -312,6 +315,19 @@ def do_task(form: dict) -> tuple[str, bool, str]:
         if not p or p.get("_closed"): return "/", False, "unknown or closed position"
         tid = C.write_task(CFG, p["symbol"], verb, {}, position_id=p["posid"])
         back = f"/position/{key}"
+    elif verb in C.VERBS_ADMIN:
+        sym = form.get("symbol", "")
+        if sym not in C.symbols(CFG): return "/settings", False, "unknown symbol"
+        d = form.get("direction", "").upper()
+        if d not in ("BUY", "SELL"): return "/settings", False, "bad direction"
+        try: sl_atr = float(form.get("sl_atr", "0.5"))
+        except ValueError: sl_atr = 0.5
+        tid = C.write_task(CFG, sym, "test_signal", {"direction": d, "sl_atr": sl_atr})
+        a = C.wait_ack(CFG, tid, 12.0)
+        if not a: return "/settings", False, "test_signal: task written, no ack within 12 s"
+        sid = (a.get("refs") or {}).get("signal_id")
+        if a.get("result") == "accepted" and sid: return f"/signal/{sym}-{sid}", True, f"TEST signal #{sid} published on {sym} - approve or skip it here"
+        return "/settings", False, f"test_signal: {a.get('result')} - {a.get('reason')}"
     else:
         return "/", False, "unknown verb"
     a = C.wait_ack(CFG, tid, 12.0)

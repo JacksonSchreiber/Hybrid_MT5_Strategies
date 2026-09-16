@@ -66,6 +66,8 @@ class Monitor:
                 if a.get("verb") == "approve":
                     kind = "PENDING ORDER placed" if refs.get("entry_mode", "").startswith("pending") else "FILLED"
                     self.send(f"{kind}: {tgt} {a['symbol']} {refs.get('lots')} lots · posid {refs.get('posid')} ticket {refs.get('order_ticket')} · SL {refs.get('sl')} TP {refs.get('tp')}")
+                elif a.get("verb") == "test_signal":
+                    self.send(f"TEST signal published on {a['symbol']} (#{refs.get('signal_id')}) - approve or skip it: {self.base}/signal/{a['symbol']}-{refs.get('signal_id')}")
                 elif a.get("verb") in ("close", "close50", "sl_be", "ratchet_tp1", "skip", "delay"):
                     self.send(f"{a['verb']} accepted: {tgt} {a['symbol']}")
             else:
