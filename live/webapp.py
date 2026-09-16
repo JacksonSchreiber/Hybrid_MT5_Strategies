@@ -270,7 +270,7 @@ def journal_page(q: dict) -> str:
     out = [f'<h1>Journal</h1><form method="get" class="row"><select name="decision" style="width:auto">{opts}</select><input name="symbol" value="{E(sym or "")}" placeholder="symbol" style="width:160px"><button class="btn">Filter</button></form><div class="card"><table><tr><th>#</th><th>time</th><th>signal</th><th>decision</th><th>R</th><th>exit</th></tr>']
     for r in rows:
         key = f'{r.get("symbol")}-{r.get("signal_id")}'
-        rtxt = r.get("r_multiple") or ""; skip = f' ({r.get("skip_reason")}{" auto" if r.get("auto") == "1" else ""})' if r.get("decision") == "skipped" else ""
+        rtxt = r.get("r_multiple") or ""; skip = f' ({r.get("skip_reason")}{" auto" if r.get("auto") == "1" else ""}{" superseded" if r.get("skip_reason") == "9" else ""})' if r.get("decision") == "skipped" else ""
         out.append(f'<tr><td><a href="/signal/{E(key)}">{E(r.get("signal_id", ""))}</a></td><td class="k">{E((r.get("signal_time") or "")[:16])}</td><td>{E(r.get("strategy", ""))} {E(r.get("direction", ""))} <span class="k">{E(r.get("decision_class", ""))}</span></td>'
                    f'<td>{E(r.get("decision", ""))}{E(skip)}</td><td class="v {"ok" if rtxt and float(rtxt) >= 0 else "bad" if rtxt else ""}">{E(rtxt)}</td><td class="k">{E((r.get("exit_time") or "")[:16])}</td></tr>')
     out.append("</table></div>")

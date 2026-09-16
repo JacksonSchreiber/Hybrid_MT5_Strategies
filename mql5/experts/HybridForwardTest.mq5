@@ -444,6 +444,34 @@ struct LivePark
    double   lots;
   };
 LivePark g_park;
+//--- PARKING SLOTS (trader ruling 2026-09-16): several signals may be parked per symbol; detectors keep running while
+//--- slots remain. The single-park code paths are unchanged - a slot's context is LOADED into the globals
+//--- (g_park, g_delayed, g_delay_count, frozen regime/class/true-orig) before any operation on that signal and
+//--- STORED back after. max_parks=1 (default; tester/self-test) reproduces the one-park behaviour exactly.
+#define MAX_PARKS 6
+struct ParkSlot { bool active; LivePark park; SignalCandidate cand; int delay_count; string regime; string with_trend; string cls; double to_entry; double to_sl; double to_tp1; double to_tp2; };
+ParkSlot g_slots[MAX_PARKS];
+int      g_cfg_max_parks=1;
+int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
+int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
+void LiveRecomputeParked(){ g_live_parked=(ParkCount()>0); }
+void ParkLoad(int i)
+  {
+   g_park=g_slots[i].park; g_delayed=g_slots[i].cand; g_delayed_id=g_slots[i].park.sid; g_delay_count=g_slots[i].delay_count;
+   g_sig_regime=g_slots[i].regime; g_sig_with_trend=g_slots[i].with_trend; g_sig_class=g_slots[i].cls;
+   g_to_entry=g_slots[i].to_entry; g_to_sl=g_slots[i].to_sl; g_to_tp1=g_slots[i].to_tp1; g_to_tp2=g_slots[i].to_tp2;
+   g_live_parked=true;
+  }
+void ParkStoreCurrent()
+  {
+   int i=ParkIndexBySid(g_park.sid);
+   if(i<0){ for(int j=0;j<MAX_PARKS;j++) if(!g_slots[j].active){ i=j; break; } }
+   if(i<0) return;
+   g_slots[i].active=true; g_slots[i].park=g_park; g_slots[i].cand=g_delayed; g_slots[i].delay_count=g_delay_count;
+   g_slots[i].regime=g_sig_regime; g_slots[i].with_trend=g_sig_with_trend; g_slots[i].cls=g_sig_class;
+   g_slots[i].to_entry=g_to_entry; g_slots[i].to_sl=g_to_sl; g_slots[i].to_tp1=g_to_tp1; g_slots[i].to_tp2=g_to_tp2;
+  }
+void ParkClear(int sid){ int i=ParkIndexBySid(sid); if(i>=0) g_slots[i].active=false; }
 
 string LivePath(string sub){ return InpLiveRoot+"\\"+sub; }
 string SymbolRoot(){ int p=StringFind(_Symbol,"."); return (p>0 ? StringSubstr(_Symbol,0,p) : _Symbol); }
@@ -655,6 +683,7 @@ void LiveLoadConfig()
       g_cfg_election_days =(int)StringToInteger(JGet(k,v,"election_horizon_days",(string)InpElectionHorizonDays));
       g_cfg_max_age_bars  =(int)StringToInteger(JGet(k,v,"max_age_bars",(string)InpLiveMaxAgeBars));
       g_cfg_task_max_age_h=(int)StringToInteger(JGet(k,v,"task_max_age_hours","24"));
+      g_cfg_max_parks=(int)MathMax(1,MathMin(MAX_PARKS,StringToInteger(JGet(k,v,"max_parks","1"))));   // parking slots per symbol (trader ruling 2026-09-16)
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
@@ -1128,7 +1157,20 @@ void OnTick()
 
    //--- a DELAYED signal takes priority on the new bar: re-present the SAME candidate
    //--- (same id, same entry/SL/TP) so the operator can watch how price developed.
-   if(g_delay_pending)
+   if(InpLiveMode && ParkCount()>0)
+     {
+      for(int si=0;si<MAX_PARKS;si++)
+        {
+         if(!g_slots[si].active) continue;
+         int psid=g_slots[si].park.sid; ParkLoad(si);
+         g_delay_pending=false; g_delay_replaying=true;
+         HandleSignal(g_delayed);                       // §11-3 invalidation / implicit delay / code 8, per signal
+         if(g_live_parked && g_park.sid==psid) ParkStoreCurrent(); else ParkClear(psid);
+        }
+      LiveRecomputeParked();
+      if(ParkCount()>=g_cfg_max_parks) return;        // all slots taken: detectors wait (max_parks=1 = the old rule)
+     }
+   else if(g_delay_pending)
      {
       g_delay_pending=false; g_delay_replaying=true;
       //--- re-snap the chart HARD RIGHT to the just-closed (current) bar before the
@@ -1160,6 +1202,7 @@ void OnTick()
       return;
      }
    HandleSignal(best);
+   if(InpLiveMode && g_live_parked) ParkStoreCurrent();
   }
 
 //+------------------------------------------------------------------+
@@ -1580,13 +1623,17 @@ void LiveSaveParked()
      j.KBool("d1_context",c.d1_context); j.KStr("comment",c.comment);
    j.EndObj();
    j.EndObj();
-   AtomicWriteText(LivePath("state\\"+_Symbol+"\\parked.json"),j.Text());
+   AtomicWriteText(LivePath(StringFormat("state\\%s\\parked_%d.json",_Symbol,g_park.sid)),j.Text());
+   ParkStoreCurrent();
   }
 void LiveUnpark()
   {
-   g_live_parked=false; g_delay_pending=false;
-   string f=LivePath("state\\"+_Symbol+"\\parked.json");
+   g_delay_pending=false;
+   string f=LivePath(StringFormat("state\\%s\\parked_%d.json",_Symbol,g_park.sid));
    if(FileIsExist(f,FILE_COMMON)) FileDelete(f,FILE_COMMON);
+   string legacy=LivePath("state\\"+_Symbol+"\\parked.json");
+   if(FileIsExist(legacy,FILE_COMMON)) FileDelete(legacy,FILE_COMMON);
+   ParkClear(g_park.sid); LiveRecomputeParked();
   }
 //--- the live decision path (replaces the popup). Fresh signal: election gate, else publish+park.
 //--- Bar-close replay (via the OnTick delay hook): §11-3 SL-through invalidation, else an implicit
@@ -1891,17 +1938,21 @@ void LiveRestoreState()
    if(hf!=INVALID_HANDLE)
      {
       string names[]; int nn=0;
-      do { if(fname!="parked.json" && fname!="seq.json" && StringFind(fname,".tmp")<0){ ArrayResize(names,nn+1); names[nn++]=fname; } } while(FileFindNext(hf,fname));
+      do { if(StringFind(fname,"parked")!=0 && fname!="seq.json" && StringFind(fname,".tmp")<0){ ArrayResize(names,nn+1); names[nn++]=fname; } } while(FileFindNext(hf,fname));
       FileFindClose(hf);
       //--- numeric order by id so g_rows[] keeps its historical order
       for(int i=0;i<nn;i++) for(int j=i+1;j<nn;j++) if(StringToInteger(names[j])<StringToInteger(names[i])){ string t=names[i]; names[i]=names[j]; names[j]=t; }
       for(int i=0;i<nn;i++) if(LiveLoadRowState(LivePath("state\\"+_Symbol+"\\"+names[i]))) nrows++;
      }
-   //--- parked signal
-   string pk[],pv[],pe; string pt=ReadTextFile(LivePath("state\\"+_Symbol+"\\parked.json"));
+   //--- parked signals: one file per slot (parked_<sid>.json), plus the legacy single parked.json
+   string pfiles[]; int npf=0; string pfn;
+   long hpf=FileFindFirst(LivePath("state\\"+_Symbol+"\\parked*.json"),pfn,FILE_COMMON);
+   if(hpf!=INVALID_HANDLE){ do { if(StringFind(pfn,".tmp")<0){ ArrayResize(pfiles,npf+1); pfiles[npf++]=pfn; } } while(FileFindNext(hpf,pfn)); FileFindClose(hpf); }
    bool parked=false;
-   if(pt!="" && JsonFlatParse(pt,pk,pv,pe))
+   for(int pf=0;pf<npf && ParkCount()<MAX_PARKS;pf++)
      {
+      string pk[],pv[],pe; string pt=ReadTextFile(LivePath("state\\"+_Symbol+"\\"+pfiles[pf]));
+      if(pt=="" || !JsonFlatParse(pt,pk,pv,pe)) continue;
       SignalCandidate c; c.valid=true;
       c.strategy=JGet(pk,pv,"cand.strategy",""); c.direction=(int)StringToInteger(JGet(pk,pv,"cand.direction","0"));
       c.entry=StringToDouble(JGet(pk,pv,"cand.entry")); c.sl=StringToDouble(JGet(pk,pv,"cand.sl")); c.tp=StringToDouble(JGet(pk,pv,"cand.tp"));
@@ -1916,8 +1967,11 @@ void LiveRestoreState()
       g_park.orig_tp1=StringToDouble(JGet(pk,pv,"orig_tp1")); g_park.orig_tp2=StringToDouble(JGet(pk,pv,"orig_tp2")); g_park.caption=JGet(pk,pv,"caption","");
       g_sig_regime=JGet(pk,pv,"regime",""); g_sig_with_trend=JGet(pk,pv,"with_trend",""); g_sig_class=JGet(pk,pv,"decision_class","");
       g_to_entry=StringToDouble(JGet(pk,pv,"to_entry")); g_to_sl=StringToDouble(JGet(pk,pv,"to_sl")); g_to_tp1=StringToDouble(JGet(pk,pv,"to_tp1")); g_to_tp2=StringToDouble(JGet(pk,pv,"to_tp2"));
-      g_delay_pending=true; g_live_parked=true; parked=true;   // the next new bar replays it (implicit delay / code 8 as usual)
+      g_delay_pending=true; g_live_parked=true; parked=true;
+      ParkStoreCurrent();
+      if(pfiles[pf]=="parked.json"){ LiveSaveParked(); FileDelete(LivePath("state\\"+_Symbol+"\\parked.json"),FILE_COMMON); }   // migrate the legacy file
      }
+   LiveRecomputeParked();
    LiveReconcile();
    AdoptOrphans();
    AuditLine("restore","","","","ok","",StringFormat("rows=%d actions=%d parked=%d sig_seq=%d",nrows,ArraySize(g_actions),(int)parked,g_sig_seq));
@@ -2059,14 +2113,16 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
      {
       int sid=(int)StringToInteger(JGet(k,v,"signal_id","0"));
       if(sid<=0){ reason="bad_params"; return "rejected"; }
-      if(!g_live_parked || sid!=g_park.sid){ reason=(RowIdxBySid(sid)>=0 ? "signal_not_open" : "unknown_signal"); return "rejected"; }
+      int slot=ParkIndexBySid(sid);
+      if(slot<0){ reason=(RowIdxBySid(sid)>=0 ? "signal_not_open" : "unknown_signal"); return "rejected"; }
+      ParkLoad(slot);
       SignalCandidate cand=g_delayed; string caption=g_park.caption;
       if(verb=="delay")
         {
          g_delay_count++; WriteDelayLog(sid,g_delay_count,cand,"delay",0);
          g_park.explicit_this_bar=true; g_park.implicit_streak=0;
          g_delayed=cand; LiveSaveParked(); WriteSignalJson("open","");
-         reason="ok"; return "accepted";
+         ParkStoreCurrent(); reason="ok"; return "accepted";
         }
       if(verb=="skip")
         {
@@ -2116,7 +2172,20 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       if(row_idx>=0 && g_rows[row_idx].decision=="approved" && g_rows[row_idx].posid==0 && g_rows[row_idx].order_ticket==0)
         { WriteSignalJson("approved","order_failed"); LiveUnpark(); reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
       WriteSignalJson((row_idx>=0 && g_rows[row_idx].decision=="approved_pending") ? "approved_pending" : "approved","");
-      LiveUnpark(); reason="ok"; return "accepted";
+      LiveUnpark();
+      //--- one position per symbol: every OTHER parked signal is closed as skipped code 9 "superseded" (auto)
+      for(int oi=0;oi<MAX_PARKS;oi++)
+        {
+         if(!g_slots[oi].active) continue;
+         int osid=g_slots[oi].park.sid; ParkLoad(oi);
+         WriteSignalJson("skipped",StringFormat("superseded: #%d approved",sid));
+         AuditLine("auto_skip","","skip",StringFormat("sig:%d",osid),"skipped","superseded",StringFormat("by #%d",sid));
+         g_live_auto=1;
+         CommitDecision(osid,g_delayed,g_park.caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,false,9,0,false,false,"auto_skip");
+         g_live_auto=0;
+         LiveUnpark();
+        }
+      reason="ok"; return "accepted";
      }
    //--- trader-issued TEST signal (live only, never in the tester): a synthetic setup at the current price with an
    //--- ATR-sized stop, published and parked exactly like a detector signal so the whole chain (ping, verdict, approve,
@@ -2124,7 +2193,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
    if(verb=="test_signal")
      {
       if((bool)MQLInfoInteger(MQL_TESTER)){ reason="bad_params"; return "rejected"; }
-      if(g_live_parked || HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
+      if(ParkCount()>=g_cfg_max_parks || HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
       string dir=JGet(k,v,"params.direction",""); StringToUpper(dir);
       if(dir!="BUY" && dir!="SELL"){ reason="bad_params"; return "rejected"; }
       double sl_atr=StringToDouble(JGet(k,v,"params.sl_atr","0.5")); if(sl_atr<0.1 || sl_atr>3.0) sl_atr=0.5;
@@ -2141,6 +2210,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       AuditLine("test_signal",task_id,verb,dir,"issued","",StringFormat("entry=%s sl=%s tp1=%s tp2=%s atr=%s",DoubleToString(c.entry,_Digits),DoubleToString(c.sl,_Digits),DoubleToString(c.tp1,_Digits),DoubleToString(c.tp2,_Digits),DoubleToString(atr,_Digits)));
       HandleSignal(c);
       if(!g_live_parked){ reason="order_failed:not_published"; return "rejected"; }   // e.g. election auto-skip took it
+      ParkStoreCurrent();
       row_idx=-1; reason="ok"; return "accepted";
      }
    //--- position verbs --------------------------------------------------------

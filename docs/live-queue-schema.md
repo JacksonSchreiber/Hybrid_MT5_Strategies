@@ -173,3 +173,12 @@ no state file are adopted conservatively (`strategy=ADOPTED`, un-banked, no BE, 
 in that consult's bundle. Reply lines: `<ts> | <symbol> | #<id> | reply | <one clause> | brief:yes|no`.
 Briefs: `<root>\advisor\briefs\<UTC>.md` (header comment: model, session, elapsed, sources, flags) + `briefs.log`
 (`ts | session | model/effort | elapsed | sources=n | flags=… | by=… | ok|ERROR …`).
+
+## Parking slots (trader ruling 2026-09-16)
+
+`config\live.json` `max_parks` (default 1 = the graded one-setup rule; the live box runs 4): while fewer than
+`max_parks` signals are parked on a symbol, the detectors keep running at bar close and each new setup is published,
+pinged and consulted on its own (`signals/<SYM>-<id>.json`, `state/<SYM>/parked_<id>.json`). Each parked signal keeps
+its own delay count, implicit streak and deadline. Approving one closes every other parked signal on that symbol as
+`skipped` with **skip_reason 9 "superseded"** (`auto=1`, `auto_reason: "superseded: #N approved"`); one position per
+symbol is unchanged. Skip codes: 1-6 trader reasons, 7 legacy, 8 no response, 9 superseded.

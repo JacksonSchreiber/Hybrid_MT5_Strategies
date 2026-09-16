@@ -14,7 +14,7 @@ VERBS_SIGNAL = ("approve", "skip", "delay")
 VERBS_POSITION = ("close", "close50", "sl_be", "ratchet_tp1")
 VERBS_ADMIN = ("test_signal",)          # trader-issued synthetic signal (live only)
 SKIP_REASONS = {1: "Counter-trend", 2: "News / event", 3: "Ugly structure", 4: "Target blocked", 5: "Correlated", 6: "Gut / other"}
-SKIP_REASON_CODES = {8: "no response (expired)", 7: "legacy"}
+SKIP_REASON_CODES = {8: "no response (expired)", 7: "legacy", 9: "superseded (another signal approved)"}
 EVENT_LABEL = {"W": "NO-HOLD (election)", "V": "NO ENTRY <6h (big release)", "C": "caution", "H": "holiday/thin"}
 
 # ----------------------------------------------------------------------------- config

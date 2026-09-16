@@ -48,6 +48,8 @@ class Monitor:
             elif prev == "open" and stt in ("expired", "rejected", "auto_skipped"):
                 why = {"expired": "no decision before the deadline (skip code 8)", "rejected": "invalidated (price through SL while parked)", "auto_skipped": "election gate: " + str(s.get("auto_reason", ""))}[stt]
                 self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: {stt} — {why}")
+            elif prev == "open" and stt == "skipped" and str(s.get("auto_reason", "")).startswith("superseded"):
+                self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: auto-skipped (code 9) - {s.get('auto_reason')}")
             elif prev == "open" and stt in ("approved", "approved_pending", "skipped"):
                 pass  # the ack message covers it
             elif prev is None and stt != "open":
