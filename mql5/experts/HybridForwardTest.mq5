@@ -419,6 +419,7 @@ string StampCompact(datetime t)
 
 //--- live runtime state
 bool     g_trading_enabled  = false;   // kill switch; fail CLOSED when the file is missing/unparseable
+string   g_ev_day="";                 // live: day key of the last calendar (re)load
 double   g_risk_mult        = 1.0;     // per-symbol risk multiplier (C2) - applied at order sizing ONLY
 int      g_cfg_max_age_bars = 3;       // G2 (live.json overrides the input)
 int      g_cfg_election_days= 14;      // G1 (live.json overrides the input)
@@ -696,6 +697,7 @@ void WriteHeartbeat(string status="running")
    j.KBool("mql_trade_allowed",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
    j.KNum("aggregate_risk_to_stop",agg,2);
    j.KNum("risk_mult_applied",g_risk_mult,3);
+   j.KInt("events_count",ArraySize(g_ev_t)); if(ArraySize(g_ev_t)>0) j.KTime("events_last_utc",g_ev_t[ArraySize(g_ev_t)-1]); else j.KNull("events_last_utc");
    j.Key("ftmo"); j.BeginObj();
      j.KNum("initial_balance",g_ftmo_initial,2); j.KStr("day_key",g_ftmo_day_key); j.KNum("day_start_balance",g_ftmo_day_bal,2); j.KNum("day_start_equity",g_ftmo_day_eq,2);
      j.KNum("daily_floor",FtmoDailyFloor(),2); j.KNum("max_floor",FtmoMaxFloor(),2); j.KNum("buffer",g_ftmo_buf_pct*g_ftmo_initial,2);
@@ -768,7 +770,20 @@ void OnTimer()
       LiveProcessTasks();
      }
    //--- positions/ view: refreshed on every state change (journal hook) and at the heartbeat cadence
-   if(now-g_live_last_beat>=InpHeartbeatSec){ g_live_last_beat=now; LiveFtmoLoad(); LiveWritePositions(); WriteHeartbeat(); }   // FTMO rules re-read at heartbeat cadence (trader-editable)
+   if(now-g_live_last_beat>=InpHeartbeatSec)
+     {
+      g_live_last_beat=now; LiveFtmoLoad();
+      //--- calendar: econ_events.csv is refreshed daily by the monitor (ForexFactory feed). Reload once a day
+      //--- after 03:00 UTC (the refresh runs 02:30) so every instance sees the new coverage without a restart.
+      if(!(bool)MQLInfoInteger(MQL_TESTER))
+        {
+         string dk=TimeToString(now,TIME_DATE);
+         if(g_ev_day=="") g_ev_day=dk;
+         else if(dk!=g_ev_day && (now%86400)>=3*3600)
+           { g_ev_day=dk; LoadEconEvents(); AuditLine("events_reload","","","","ok","",StringFormat("rows=%d last=%s",ArraySize(g_ev_t),(ArraySize(g_ev_t)>0?IsoTime(g_ev_t[ArraySize(g_ev_t)-1]):"-"))); }
+        }
+      LiveWritePositions(); WriteHeartbeat();
+     }
    if(InpLiveSelfTest) SelfTestTick();
   }
 
