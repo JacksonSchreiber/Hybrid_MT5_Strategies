@@ -285,7 +285,7 @@ def settings_page(q: dict) -> str:
     out.append(f'<div class="card"><h2>EA knobs (config/live.json)</h2><pre>{E(json.dumps(cfgv, indent=1))}</pre></div>')
     out.append('<div class="card"><h2>Test signal (demo only)</h2><div class="k">Publishes a synthetic TEST signal at the current price with an ATR-sized stop (TP1 = 2R, TP2 = 4R), parked like a real one. Approve it from its page to place a real demo order, then use the position page. Journal rows carry strategy TEST. Refused while that symbol has a parked signal or an open position.</div>'
                '<form method="post" action="/task" class="row" style="margin-top:8px"><input type="hidden" name="verb" value="test_signal"><select name="symbol" style="width:auto">' + "".join(f'<option value="{E(x)}">{E(x)}</option>' for x in syms) + '</select>'
-               '<select name="direction" style="width:auto"><option>BUY</option><option>SELL</option></select><select name="sl_atr" style="width:auto"><option value="0.5">SL 0.5 ATR</option><option value="0.25">SL 0.25 ATR (fast +1R)</option><option value="1.0">SL 1.0 ATR</option></select><button class="btn">Publish test signal</button></form></div>')
+               '<select name="direction" style="width:auto"><option>BUY</option><option>SELL</option></select><select name="sl_atr" style="width:auto"><option value="1.0">SL 1.0 ATR</option><option value="0.6">SL 0.6 ATR (can fail approve if price moves)</option><option value="1.5">SL 1.5 ATR</option></select><button class="btn">Publish test signal</button></form></div>')
     out.append(f'<div class="card"><h2>Service</h2><div class="k">queue root {E(CFG["root"])}<br>web {E(CFG["web"]["base_url"])} · no login (WireGuard is the boundary) · sessions: n/a</div></div>')
     for s in syms:
         out.append(f'<div class="card"><h2>Audit tail {E(s)}</h2><pre>{E(chr(10).join(C.audit_tail(CFG, s, 25)))}</pre></div>')
@@ -320,8 +320,8 @@ def do_task(form: dict) -> tuple[str, bool, str]:
         if sym not in C.symbols(CFG): return "/settings", False, "unknown symbol"
         d = form.get("direction", "").upper()
         if d not in ("BUY", "SELL"): return "/settings", False, "bad direction"
-        try: sl_atr = float(form.get("sl_atr", "0.5"))
-        except ValueError: sl_atr = 0.5
+        try: sl_atr = max(0.6, min(3.0, float(form.get("sl_atr", "1.0"))))   # the EA rejects stops under 0.5 ATR (doctrine min-stop)
+        except ValueError: sl_atr = 1.0
         tid = C.write_task(CFG, sym, "test_signal", {"direction": d, "sl_atr": sl_atr})
         a = C.wait_ack(CFG, tid, 12.0)
         if not a: return "/settings", False, "test_signal: task written, no ack within 12 s"

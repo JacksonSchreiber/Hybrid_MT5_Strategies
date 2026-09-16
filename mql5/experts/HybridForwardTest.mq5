@@ -592,7 +592,7 @@ bool AtomicWriteText(string rel,string body)
   }
 string ReadTextFile(string rel)
   {
-   int h=FileOpen(rel,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   int h=FileOpen(rel,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE);   // six instances read the same config/task files
    if(h==INVALID_HANDLE) return "";
    string s=""; while(!FileIsEnding(h)) s+=FileReadString(h)+"\n"; FileClose(h); return s;
   }
@@ -2218,6 +2218,8 @@ void LiveProcessTasks()
       bool parsed=JsonFlatParse(text,k,v,err);
       string tsym=JGet(k,v,"symbol",""), task_id=JGet(k,v,"task_id",""), verb=JGet(k,v,"verb","");
       if(parsed && tsym!="" && tsym!=_Symbol) continue;                       // another instance's task
+      if(!parsed && text=="") continue;                                        // still being written, or just claimed by another instance
+      if(parsed && tsym=="") continue;                                          // no symbol: not ours to judge
       string done=LivePath("tasks\\done\\"+names[i]);
       if(!FileMove(rel,FILE_COMMON,done,FILE_COMMON|FILE_REWRITE)){ Print("task claim failed ",names[i]," err=",GetLastError()); continue; }
       if(!parsed || !TaskIdOk(task_id))
