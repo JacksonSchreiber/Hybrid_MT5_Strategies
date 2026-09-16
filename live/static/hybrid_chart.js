@@ -87,13 +87,13 @@
           if (ov.zone2 && ov.zone2.hi > 0) band(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
           imbalances(bars).forEach(function (z) { band(z.t0, z.t1, z.hi, z.lo, z.state === 0 ? 'rgba(147,112,219,0.18)' : 'rgba(147,112,219,0.08)', 'rgba(147,112,219,0.5)'); });
           if (d.strategy === 'DeepFib' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
-            cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: false, title: FIB_LT[i] }); });
+            cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: true, axisLabelColor: gp ? '#7a6400' : '#3a3f47', axisLabelTextColor: '#e6edf3', title: FIB_LT[i] }); });
         });
         if (tf === 'h4' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0 && iso(ov.leg.t0) && iso(ov.leg.t1)) {
           var lg = chart.addLineSeries({ color: '#ee82ee', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
           var t0 = iso(ov.leg.t0), t1 = iso(ov.leg.t1); if (t0 < t1) lg.setData([{ time: t0, value: ov.leg.p0 }, { time: t1, value: ov.leg.p1 }]);
         }
-        (ov.aux || []).forEach(function (a) { if (a.price > 0 && tf === 'h4') cs.createPriceLine({ price: a.price, color: '#c0c0c0', lineWidth: 1, lineStyle: 1, axisLabelVisible: false, title: a.label || '' }); });
+        (ov.aux || []).forEach(function (a) { if (a.price > 0 && tf === 'h4') cs.createPriceLine({ price: a.price, color: '#c0c0c0', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, axisLabelColor: '#3a3f47', axisLabelTextColor: '#e6edf3', title: a.label || '' }); });
         var marks = [];
         if (tf === 'h4') {
           swings(bars).forEach(function (s) { marks.push({ time: s.t, position: s.kind === 'hi' ? 'aboveBar' : 'belowBar', color: '#8b949e', shape: s.kind === 'hi' ? 'arrowDown' : 'arrowUp', size: 0.5 }); });
