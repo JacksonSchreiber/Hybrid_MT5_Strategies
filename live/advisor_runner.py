@@ -196,7 +196,16 @@ class Runner:
         if not rec or not sig:
             self.log(f"{key}: reply ignored (no verdict record / signal)"); return
         self.log(f"{key}: reply -> session {rec['session_id'][:8]}")
-        text = text + "\n\n(Answer in the same session. Do not write files; end with one line 'LOG: reply | <one-clause summary of what changed, or unchanged>'.)"
+        # fresh pictures for every reply: re-render h4/d1 from the live feed so a question after a delay is answered
+        # on the setup as it looks NOW, not as it looked at publish time
+        fresh_note = ""
+        try:
+            bdir = write_bundle(sig, self.cfg); rel = os.path.relpath(bdir, self.cfg["advisor"]["live_dir"]).replace("\\", "/")
+            lv = sig.get("levels") or {}
+            fresh_note = (f"\n\n(Charts REFRESHED as of {C.now_iso()}: re-read {rel}/h4.png and {rel}/d1.png before answering - they show the current bars; "
+                          f"the signal's levels are unchanged: entry {lv.get('entry')} SL {lv.get('sl')} TP1 {lv.get('tp1')} TP2 {lv.get('tp2')}; delays so far {sig.get('delay_count', 0)}; status {sig.get('status')}.)")
+        except Exception as e: self.log(f"{key}: bundle refresh failed: {e!r}")
+        text = text + fresh_note + "\n\n(Answer in the same session. Do not write files; end with one line 'LOG: reply | <one-clause summary of what changed, or unchanged>'.)"
         with self.lock: r = run_claude(self.cfg, text, sid=rec["session_id"], resume=True, log=self.log)
         rec["consults"].append({"ts": C.now_iso(), "kind": "reply", "prompt": text.split("\n\n(Answer in the same session")[0], **r}); save_record(self.cfg, rec)
         if r["ok"]: ensure_log_line(self.cfg, sig, r["text"], "reply", self.log); r["text"] = split_log(r["text"])[0]; rec["consults"][-1]["text"] = r["text"]; save_record(self.cfg, rec)
