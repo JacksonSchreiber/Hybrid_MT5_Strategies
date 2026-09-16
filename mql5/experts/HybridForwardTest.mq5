@@ -1692,7 +1692,7 @@ void LivePresent(int id,SignalCandidate &cand,double lots,bool is_replay,
    if(g_park.implicit_streak>=g_cfg_max_age_bars)
      {
       WriteSignalJson("expired","no-response: max_age reached");
-      AuditLine("expired_code8","","",StringFormat("sig:%d",id),"skipped","no_response",StringFormat("bars=%d",g_park.implicit_streak));
+      AuditLine("expired_code8","","",StringFormat("sig:%d",id),"skipped","no_response",StringFormat("class=%s bars=%d%s",g_sig_class,g_park.implicit_streak,(g_sig_class=="TAKE"?" CHARGEABLE_VIOLATION":"")));   // §11.9: a TAKE left to expire is an illegal skip
       Print("Signal #",id," ",cand.strategy," EXPIRED (code 8, no response in ",g_cfg_max_age_bars," bars).");
       CommitDecision(id,cand,caption,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,false,8,0,false,false,"expired");
       LiveUnpark();

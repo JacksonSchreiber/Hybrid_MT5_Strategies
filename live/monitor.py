@@ -36,7 +36,8 @@ class Monitor:
             dc = int(s.get("delay_count") or 0); pdc = int(self.st.setdefault("delays", {}).get(key, 0) or 0)
             if stt == "open" and prev == "open" and dc > pdc:
                 dl = C.parse_iso(s.get("deadline")); left = max(0, int(s.get("max_age_bars") or 3) - int(s.get("implicit_streak") or 0))
-                self.send(f"REVISIT #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: re-presented at bar close (delay {dc}); {left} bar(s) of silence left before it expires, deadline {C.fmt_dt(dl)}. "
+                take_note = " TAKE-class: letting it expire is a chargeable violation (§11.9) - approve, or skip only for event/correlation." if s.get("decision_class") == "TAKE" else ""
+                self.send(f"REVISIT #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class', '')}]: re-presented at bar close (delay {dc}); {left} bar(s) of silence left before it expires, deadline {C.fmt_dt(dl)}.{take_note} "
                           f"Price {'bid ' + str((s.get('sizing') or {}).get('mkt_bid')) if (s.get('sizing') or {}).get('mkt_bid') else ''}entry {lv.get('entry')} SL {lv.get('sl')}.\n{self.base}/signal/{key}")
             self.st["delays"][key] = dc
             if prev == stt: continue
@@ -47,7 +48,8 @@ class Monitor:
                           f"{(s.get('regime') or {}).get('pretty', '')} · deadline {C.fmt_dt(dl)} ({C.rel_time(dl)})\n{self.base}/signal/{key}")
             elif prev == "open" and stt in ("expired", "rejected", "auto_skipped"):
                 why = {"expired": "no decision before the deadline (skip code 8)", "rejected": "invalidated (price through SL while parked)", "auto_skipped": "election gate: " + str(s.get("auto_reason", ""))}[stt]
-                self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: {stt} — {why}")
+                if stt == "expired" and s.get("decision_class") == "TAKE": why += " — TAKE-class: a CHARGEABLE VIOLATION under §11.9 (a TAKE may only end by approve, event/correlation skip, invalidation or supersession)"
+                self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class', '')}]: {stt} — {why}")
             elif prev == "open" and stt == "skipped" and str(s.get("auto_reason", "")).startswith("superseded"):
                 self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: auto-skipped (code 9) - {s.get('auto_reason')}")
             elif prev == "open" and stt in ("approved", "approved_pending", "skipped"):

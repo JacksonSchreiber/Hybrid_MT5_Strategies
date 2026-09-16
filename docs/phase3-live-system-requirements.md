@@ -256,3 +256,35 @@ assumed to live in the execution path rather than the UI. Both now specified cor
    report `terminal_trade_allowed` and `mql_trade_allowed`; the watchdog alerts (and the
    reboot-recovery test fails) if either is false. A silently disarmed terminal is the
    quietest possible outage and the one this design must never miss.
+
+9. **Multi-park (up to four parked signals per symbol, live-only) + skip code 9
+   "superseded" — ACCEPTED, with grading rules.** (a) Code-9 rows are automatic, never
+   decisions: excluded from precision, from the forgone ledger, and from every
+   violation audit — including when the superseded signal was TAKE-class, because
+   approving any signal on that symbol satisfies the participation obligation under
+   one-position-per-symbol. (b) Code 8 (no-response) on a **TAKE-class** signal IS a
+   chargeable protocol violation — the only legal ways off a TAKE are approve, an
+   event/correlation skip, invalidation, or supersession by an approval. Sitting a
+   TAKE out until it expires is an illegal skip with a timer. (c) The live signal set
+   diverges from the tester's by design (the tester suppresses detections while one
+   signal is parked); shadow-period plumbing checks compare against the live
+   detectors' own emissions, not a one-park tester run. (d) Superseded signals' blind
+   outcomes are computed by the coach's tooling as a "selection among alternatives"
+   note (did the trader pick the better of concurrent setups) — reported once n≥10,
+   never graded.
+
+### 11.9 Multi-park and code 9 (coach ruling 2026-09-16, relayed by the trader)
+
+- **Code 9 "superseded"** rows are never decisions and never chargeable: excluded from precision, from the forgone
+  ledger and from every violation audit - including when the superseded signal was TAKE-class (under one position per
+  symbol, approving any signal on that symbol satisfies the participation obligation).
+- **Code 8 (no-response) on a TAKE-class signal IS a chargeable violation.** A TAKE can only end four ways: approve, an
+  event/correlation skip, invalidation, or supersession by an approval. Letting one expire is an illegal skip with a
+  timer on it. The journal row carries `decision_class`; the `expired_code8` audit line carries `class=<…>` and the
+  literal `CHARGEABLE_VIOLATION` when the class is TAKE, so the audit is mechanical.
+- The live signal set now diverges from the tester's by design (the tester still suppresses detections while a signal
+  is parked): §8.1's plumbing check compares against the live detectors' own emissions, not a one-park tester replay.
+- Superseded signals' blind outcomes are computed by coach tooling as a "selection among alternatives" note (did the
+  trader pick the better of concurrent setups), reported at n≥10, never graded.
+- TEST rows and the malformed-ack test from the first live night were purged from the shadow journals on 2026-09-16
+  before real shadow records count (audit logs keep the `test_signal` lines, append-only).
