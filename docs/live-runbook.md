@@ -95,3 +95,12 @@ tuning candidate for M3 (pre-warmed session per symbol, or a trimmed reference).
 Advisor session model: session id = uuid5(signal_key); consult = `claude -p … --session-id`, reply = `--resume`; the
 runner scrubs inherited `CLAUDE_*` env vars (a nested child hangs otherwise). `verdicts.live.log` on the VPS is the
 canonical copy (M3 nightly pull syncs it to the training tree for the coach).
+
+## Shadow period — started 2026-09-16 (trader ruling: trading stays enabled after the live tests)
+
+Demo `OANDA-Demo-1`, lineup US100/US500/USOIL/XAUUSD ×1.0, EURUSD/GBPUSD ×0.5, kill switch ON from 2026-09-16 ~04:00 UTC.
+Live tests done the same night on the demo: test signal → approve (market) → fill → close 50 % → close; skip; pending
+entry path. Journal rows with `strategy=TEST` (and their `signal_id`) are trader-issued tests: **exclude from grading**.
+Live-only defects found and fixed during the tests (all committed): async fill binding, shared-read file opens with
+six instances, task claim race, position-verb confirmation timing, MetaTrader5 package launching a stray terminal
+(feed now isolated in `hybrid-feed`). Acceptance criteria: spec §8 (≥3 weeks; the coach grades the weeks).
