@@ -777,6 +777,7 @@ void OnTimer()
       //--- after 03:00 UTC (the refresh runs 02:30) so every instance sees the new coverage without a restart.
       if(!(bool)MQLInfoInteger(MQL_TESTER))
         {
+         if(ArraySize(g_ev_t)==0){ LoadEconEvents(); AuditLine("events_reload","","","",(ArraySize(g_ev_t)>0?"ok":"empty"),"retry",StringFormat("rows=%d",ArraySize(g_ev_t))); }   // a failed/racing open retries every heartbeat
          string dk=TimeToString(now,TIME_DATE);
          if(g_ev_day=="") g_ev_day=dk;
          else if(dk!=g_ev_day && (now%86400)>=3*3600)
@@ -2060,7 +2061,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       //--- approve: every doctrine gate the popup relied on, re-checked HERE (S7)
       if(!g_trading_enabled){ reason="trading_disabled"; return "rejected"; }
       if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)){ reason="trading_disabled"; return "rejected"; }
-      if(!g_ev_loaded){ reason="events_not_loaded"; return "rejected"; }
+      if(!g_ev_loaded || ArraySize(g_ev_t)==0){ reason="events_not_loaded"; return "rejected"; }
       string evn=""; datetime evt=0;
       if(ElectionGateHit(now,evn,evt)){ reason="election_gate:"+evn; return "rejected"; }
       if(HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
@@ -4331,7 +4332,7 @@ void LoadEconEvents()
    ArrayResize(g_ev_t,0); ArrayResize(g_ev_ccy,0);
    ArrayResize(g_ev_name,0); ArrayResize(g_ev_cb,0); ArrayResize(g_ev_top,0);
    ArrayResize(g_ev_cls,0);
-   int h=FileOpen("econ_events.csv",FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON,',');
+   int h=FileOpen("econ_events.csv",FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE,',');   // six live instances open it at once
    if(h==INVALID_HANDLE)
      { Print("econ_events.csv not in Common\\Files - no event lines (err ",GetLastError(),")"); return; }
    string base,quote; SymbolCcy(base,quote);
