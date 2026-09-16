@@ -1,0 +1,20 @@
+# political_events.draft.csv - DRAFT 2026-09-16 for COACH REVIEW (coach ruling 2: engineer drafts, coach reviews before
+# deploy, quarterly refresh). Window Sep 2026 - Sep 2027, lineup currencies USD / EUR / GBP.
+# Standard: national general/presidential elections, US midterms, binding referenda of a lineup currency = W;
+# EUR: EU Parliament election + national elections of Germany, France, Italy, Spain, Netherlands = W; regional/state/local = C;
+# anything doubtful is FLAGGED for the coach, not classified up or down. Same columns as political_events.csv.
+# Once approved: append the approved rows to config/political_events.csv and deploy (deploy_live.sh --calendar).
+date_utc_start,date_utc_end,ccy,event,class,source,round
+2026.11.03 00:00,2026.11.04 06:00,USD,US Midterm Elections (House + Senate; state governors same day),W,house.gov/senate.gov schedule; verified 2026-09-16,1
+2027.04.18 00:00,2027.04.19 06:00,EUR,French Presidential Election - first round,W,france24.com 2026-06-30 (date set by decree); verified 2026-09-16,1
+2027.05.02 00:00,2027.05.03 06:00,EUR,French Presidential Election - second round,W,france24.com 2026-06-30; verified 2026-09-16,2
+2027.05.06 00:00,2027.05.07 06:00,GBP,UK Local Elections (England county/district),C,fixed first-Thursday-of-May cycle; date to confirm,1
+# --- FLAGGED for the coach (date not fixed, or country outside the W list) ---
+# EUR  French Legislative Elections - expected June 2027 (two rounds), dates set after the presidential; W when fixed
+# EUR  Italian General Election - due by 22 Dec 2027; Bloomberg 2026-06-23: government weighing an early vote as soon as spring 2027 -> W when a date exists
+# EUR  Spanish General Election - due by 22 Aug 2027, no date set -> W when a date exists; Spanish local elections expected late May 2027 = C
+# EUR  Finnish Parliamentary Election 18 Apr 2027 - Finland is NOT on the W list (DE/FR/IT/ES/NL) -> coach: C or omit?
+# EUR  Greek Parliamentary Election - government says spring/summer 2027, no date -> not on the W list -> coach: C or omit?
+# GBP  Scottish Parliament + Welsh Senedd elections were 7 May 2026 (past). Next UK general election due by Aug 2029 (outside window)
+# USD  no scheduled national referenda; 2026 state ballot measures ride on the midterm date above
+# EUR  German federal (2029), Dutch general (2029 after the Oct-2025 early vote), EU Parliament (2029) - all outside the window

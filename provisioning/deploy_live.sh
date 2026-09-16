@@ -22,7 +22,7 @@ if [[ "$MODE" == "full" || "$MODE" == "--calendar" ]]; then
   CAL='C:/ProgramData/hybrid/calendar'
   $SSH "New-Item -ItemType Directory -Force -Path $CAL/pipeline, $CAL/config, $CAL/history, $CAL/snapshots, $CAL/build | Out-Null; 'calendar dirs ok'" | tr -d '\r'
   $SCP "$REPO"/pipeline/normalize_econ_tzfix.py "$REPO"/pipeline/event_classes.py "$REPO"/pipeline/tier0.py "$REPO"/pipeline/test_calendar_coverage.py "$HOST:$CAL/pipeline/"
-  $SCP "$REPO"/config/event_classes.yaml "$REPO"/config/political_events.csv "$HOST:$CAL/config/"
+  $SCP "$REPO"/config/event_classes.yaml "$REPO"/config/political_events.csv "$REPO"/config/official_schedule.csv "$HOST:$CAL/config/"
   $SCP "$REPO"/data/econ/ff_combined.csv "$HOST:$CAL/history/ff_combined.csv"
   log "calendar pipeline copied"
 fi

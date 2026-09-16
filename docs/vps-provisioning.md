@@ -150,8 +150,12 @@ rows before the store's first day) + forward store → `pipeline\normalize_econ_
 `Common\Files\econ_events.csv`. Every EA instance reloads the file once a day after 03:00 UTC (`events_reload`
 audit line; heartbeat carries `events_count`/`events_last_utc`). Monitor alerts: refresh failure, file >7 d old,
 coverage <3 d. Needs PyYAML on the box (`pip install pyyaml`). Deploy the pipeline with `deploy_live.sh --calendar`.
-Known limit: FF gives ≤7 days of forward visibility; elections come from `political_events.csv` (manual, must be
-kept ≥12 months ahead); scheduled V-class beyond one week needs a second forward layer (ruling pending).
+Forward layers (coach rulings 2026-09-16): FF's ≤7-day window covers every binding V rule (entry-time, <6 h).
+`config/official_schedule.csv` (year-ahead FOMC / ECB / BoE / NFP / US CPI dates from the publishers, UTC) is merged
+UNDER FF by the normaliser (FF wins on the same release/ccy/UTC date) for the events panel and the advisory line only;
+engineer maintains it (BLS next-year schedule lands in Q4; BoE 2027 provisional), coach reviews annually. Elections:
+`config/political_events.csv` (14-day NO-HOLD gate) - engineer drafts 12 months ahead in `political_events.draft.csv`,
+coach reviews before the rows are appended and deployed, quarterly refresh.
 
 Gotchas found: (1) a child `claude` inherits `CLAUDE_*` variables from a parent Claude Code session and hangs — the
 runner scrubs them; (2) Python's default cert store on a fresh Windows box fails Telegram's chain — `certifi` is used

@@ -91,10 +91,10 @@ class Refresher:
                 vv = dict(v); vv["utc"] = datetime.fromisoformat(vv["utc"]) if vv.get("utc") else None
                 w.writerow(to_row8(vv))
         out = os.path.join(self.dir, "build", "econ_events.csv"); pipe = os.path.join(self.dir, "pipeline")
-        p = subprocess.run([self.python, "normalize_econ_tzfix.py", src, out], cwd=pipe, capture_output=True, text=True, timeout=600)
+        p = subprocess.run([self.python, "normalize_econ_tzfix.py", src, out], cwd=pipe, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
         if p.returncode != 0: res["error"] = "normalize failed: " + (p.stderr or p.stdout)[-400:]; return res
         res["normalize"] = (p.stdout or "").strip().splitlines()[-1:] 
-        t = subprocess.run([self.python, "test_calendar_coverage.py", out], cwd=pipe, capture_output=True, text=True, timeout=600)
+        t = subprocess.run([self.python, "test_calendar_coverage.py", out], cwd=pipe, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
         res["coverage_test_rc"] = t.returncode
         if t.returncode != 0: res["error"] = "coverage test FAILED: " + (t.stdout or t.stderr)[-600:]; return res
         # sanity on the fresh rows: last date, class counts, at least one V in the forward window

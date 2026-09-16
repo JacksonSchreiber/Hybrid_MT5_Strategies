@@ -64,6 +64,31 @@ def bias(event,actual,forecast):
     pol=-1 if any(k in event.lower() for k in INVERSE) else 1
     return (1 if a>f else -1)*pol
 
+OFFICIAL_CSV = Path(__file__).resolve().parent.parent / "config" / "official_schedule.csv"
+OFFICIAL_FAMILY = {"federal funds": ("federal funds",), "fomc press": ("fomc press", "press conference"), "main refinancing": ("main refinancing", "refinancing rate"),
+                   "ecb press": ("ecb press", "press conference"), "official bank rate": ("official bank rate", "bank rate"),
+                   "non-farm": ("non-farm", "nonfarm"), "cpi m/m": ("cpi m/m", "cpi")}
+
+def load_official(ff_rows):
+    """year-ahead official schedule rows (same 7-col layout as political_events.csv). Skipped when ForexFactory already
+    carries the same release family for that ccy on that UTC date (FF wins on exact time)."""
+    if not OFFICIAL_CSV.exists(): return []
+    have = {}
+    for t in ff_rows:
+        have.setdefault((t[0][:10], t[1]), []).append(t[2].lower())
+    out = []
+    for raw in OFFICIAL_CSV.read_text(encoding="utf-8").splitlines():
+        if not raw.strip() or raw.startswith("#") or raw.startswith("date_utc_start"): continue
+        f = raw.split(",")
+        if len(f) < 5 or not f[0].strip(): continue
+        start, ccy, event, cls = f[0].strip(), f[2].strip(), f[3].strip(), (f[4].strip() or "V")
+        d = datetime.strptime(start, "%Y.%m.%d %H:%M")
+        fam = next((k for k in OFFICIAL_FAMILY if k in event.lower()), None)
+        names = have.get((d.strftime("%Y.%m.%d"), ccy), [])
+        if fam and any(any(w in n for w in OFFICIAL_FAMILY[fam]) for n in names): continue
+        out.append((d.strftime("%Y.%m.%d %H:%M"), ccy, event, "", "", 0, cls))
+    return out
+
 def load_political():
     """Return list of (datetime_utc_str, ccy, event, actual, forecast, bias, cls)."""
     out=[]
@@ -104,6 +129,7 @@ def main():
                          (x.get("Forecast") or "").strip(),
                          bias(ev,x.get("Actual"),x.get("Forecast")),cls))
     rows.extend(load_political())                  # §3.7 political / fiscal layer
+    rows.extend(load_official(rows))   # coach ruling 2026-09-16: published schedules, FF wins on overlap
     # sort by datetime string (fixed-width YYYY.MM.DD HH:MM sorts chronologically)
     rows.sort(key=lambda t:t[0])
     seen,outrows=set(),[]
