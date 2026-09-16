@@ -183,6 +183,10 @@ class Monitor:
         for sym in C.symbols(self.cfg):
             hb = C.heartbeat(self.cfg, sym) or {}; f = hb.get("ftmo") or {}
             parts.append(f"{sym}: equity {hb.get('equity')} · daily headroom {f.get('headroom_daily')} · max headroom {f.get('headroom_max')} · open {len(hb.get('open_positions') or [])}")
+        try:
+            from live import brief_runner; b = brief_runner.latest_brief(self.cfg, 2.0)
+            parts.append("context brief available (" + C.rel_time(b["t"]) + ")" if b else "no context brief in the last 2 days - generate one from the Context page if you want the advisor to have it")
+        except Exception: pass
         parts.append(f"{self.base}/")
         self.send("\n".join(parts))
 

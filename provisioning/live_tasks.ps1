@@ -41,7 +41,9 @@ $cj = 'C:\Users\hybridops\.claude.json'
 $j = if (Test-Path $cj) { Get-Content $cj -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
 if (-not $j.PSObject.Properties['projects']) { $j | Add-Member -NotePropertyName projects -NotePropertyValue ([pscustomobject]@{}) }
 $live = 'C:\ProgramData\hybrid\advisor\live\advisor'
-if (-not $j.projects.PSObject.Properties[$live]) { $j.projects | Add-Member -NotePropertyName $live -NotePropertyValue ([pscustomobject]@{ hasTrustDialogAccepted = $true }) }
-else { $j.projects.$live | Add-Member -NotePropertyName hasTrustDialogAccepted -NotePropertyValue $true -Force }
+foreach ($dirn in @($live, 'C:\ProgramData\hybrid\advisor\live\brief')) {
+  if (-not $j.projects.PSObject.Properties[$dirn]) { $j.projects | Add-Member -NotePropertyName $dirn -NotePropertyValue ([pscustomobject]@{ hasTrustDialogAccepted = $true }) }
+  else { $j.projects.$dirn | Add-Member -NotePropertyName hasTrustDialogAccepted -NotePropertyValue $true -Force }
+}
 $j | ConvertTo-Json -Depth 8 | Set-Content -Path $cj -Encoding ascii
 "tasks: " + ((Get-ScheduledTask hybrid-web, hybrid-monitor, hybrid-advisor | ForEach-Object { $_.TaskName + '=' + $_.State }) -join ', ')

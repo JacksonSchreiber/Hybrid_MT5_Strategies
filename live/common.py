@@ -38,6 +38,7 @@ _DEFAULT_CONFIG = {
     "mt5": {"terminal_path": "C:\\Program Files\\OANDA MetaTrader 5\\terminal64.exe"},
     "calendar": {"dir": "", "refresh_utc": "02:30", "stale_days": 7, "python": "", "feed_url": ""},
     "feed": {"port": 8081, "url": ""},   # url set on the web/advisor side -> bars via the feedd process
+    "brief": {"model": "claude-opus-5", "effort": "medium", "timeout_s": 150},
     "expected_symbols": [],           # the lineup the post-reboot check waits for ([] = whatever heartbeats exist)
 }
 

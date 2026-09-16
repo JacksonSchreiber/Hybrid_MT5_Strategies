@@ -7,7 +7,7 @@ Every task written and every ack received is appended to <root>/web/web_audit.lo
 the boundary (trader ruling 2026-09-15); HTTP inside WireGuard.
 """
 from __future__ import annotations
-import hashlib, html, json, os, sys, urllib.parse, threading
+import hashlib, html, json, os, re, sys, urllib.parse, threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,7 +35,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:14px/1.4 ui-monospace,Menlo,
 textarea,select,input{width:100%;background:#0b0f14;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:16px}
 .ev.bind{color:var(--dn);font-weight:600}.ev.amber{color:var(--warn);font-weight:600}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}@media(max-width:640px){.grid2{grid-template-columns:1fr}}
 .flash{padding:10px;border-radius:6px;margin:8px 0}.flash.ok{background:#12301a;border:1px solid #2ea043}.flash.bad{background:#3a1d1d;border:1px solid #a33}
-.cd{font-weight:600}
+.cd{font-weight:600}.brief h2{color:var(--txt);text-transform:none;letter-spacing:0;font-size:17px;margin-top:14px}.brief p,.brief li{font-size:15px;line-height:1.5}.brief a{word-break:break-all}
 """
 JS = """
 function tick(){document.querySelectorAll('[data-deadline]').forEach(function(el){var d=new Date(el.dataset.deadline);var s=Math.floor((d-Date.now())/1000);
@@ -45,7 +45,7 @@ var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.que
 """
 
 def page(title: str, body: str, active: str = "", refresh: int | None = None) -> str:
-    tabs = [("/", "Home", "home"), ("/journal", "Journal", "journal"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
+    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
     nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs)
     m = f'<meta name="autorefresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -286,6 +286,49 @@ def events_page(q: dict) -> str:
     if not win: out.append('<div class="card k">no events in the window</div>')
     return page("Events", "".join(out), "events")
 
+def md_html(md: str) -> str:
+    """tiny markdown -> html for the brief (headings, bullets, paragraphs, links); everything escaped first."""
+    out = []; in_ul = False
+    for line in md.splitlines():
+        t = E(line.rstrip())
+        t = re.sub(r"(https?://[^\s)]+)", r'<a href="\1" target="_blank">\1</a>', t)
+        t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+        if t.startswith("## "): 
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h2>{t[3:]}</h2>")
+        elif t.startswith("# "):
+            if in_ul: out.append("</ul>"); in_ul = False
+            out.append(f"<h1>{t[2:]}</h1>")
+        elif t.lstrip().startswith(("- ", "* ")):
+            if not in_ul: out.append("<ul>"); in_ul = True
+            out.append(f"<li>{t.lstrip()[2:]}</li>")
+        elif t.strip() == "":
+            if in_ul: out.append("</ul>"); in_ul = False
+        else: out.append(f"<p>{t}</p>")
+    if in_ul: out.append("</ul>")
+    return "\n".join(out)
+
+def context_page(q: dict) -> str:
+    from live import brief_runner
+    st = C.load_json(os.path.join(brief_runner.brief_dir(CFG), "status.json"), {}) or {}
+    briefs = brief_runner.list_briefs(CFG); sel = q.get("b") or (briefs[0]["name"] if briefs else None)
+    out = [flash(q.get("msg"), q.get("ok", "1") == "1"), '<h1>Context brief</h1>']
+    gen = st.get("state") == "generating"
+    out.append(f'<div class="card"><div class="row"><form method="post" action="/brief" class="inline"><button class="btn go" {"disabled" if gen else ""}>{"Generating… (up to ~90 s)" if gen else "Generate brief"}</button></form>'
+               f'<span class="k">claude-opus-5 · medium effort · public web sources · descriptive only, never a vote{" · started " + E(st.get("started", "")) if gen else ""}</span></div>'
+               + (f'<div class="bad" style="margin-top:6px">last generation failed: {E(str((st.get("last") or {}).get("error")))}</div>' if st.get("state") == "error" else "") + '</div>')
+    if sel:
+        r = brief_runner.read_brief(CFG, sel)
+        if r:
+            head, body = r; meta = next((b for b in briefs if b["name"] == sel), None)
+            t = meta["t"].strftime("%a %d %b %Y %H:%M UTC") if meta else sel
+            fl = meta["flags"] if meta else []
+            out.append(f'<div class="card"><div class="row"><span class="big">Brief · {E(t)}</span><span class="k">{E(head.strip("<!-> \n"))}</span></div>'
+                       + (f'<div class="flash bad">FLAG: directional wording detected ({E(", ".join(fl))}). The brief must explain, never vote - read those lines with that in mind.</div>' if fl else '<div class="k ok">filter: no directional language found</div>')
+                       + f'<div class="brief">{md_html(body)}</div></div>')
+    out.append('<div class="card"><h2>Previous briefs</h2>' + ("".join(f'<div><a href="/context?b={E(b["name"])}">{E(b["t"].strftime("%a %d %b %Y %H:%M UTC"))}</a>{" <span class=bad>FLAG</span>" if b["flags"] else ""}</div>' for b in briefs[:30]) or '<div class="k">none yet</div>') + '</div>')
+    return page("Context brief", "".join(out), "context", refresh=15 if gen else None)
+
 def settings_page(q: dict) -> str:
     rm = C.risk_mult(CFG); syms = C.symbols(CFG)
     out = [flash(q.get("msg"), q.get("ok", "1") == "1"), '<h1>Settings</h1><div class="card"><h2>Risk multipliers (config/risk_mult.json)</h2><table><tr><th>symbol</th><th>mult</th></tr>']
@@ -376,6 +419,7 @@ class H(BaseHTTPRequestHandler):
             if parts[0] == "health": return self._send(json.dumps({"ok": True, "ts": C.now_iso()}), "application/json")
             if parts[0] == "signal" and len(parts) == 2: return self._send(signal_page(parts[1], q))
             if parts[0] == "position" and len(parts) == 2: return self._send(position_page(parts[1], q))
+            if parts[0] == "context": return self._send(context_page(q))
             if parts[0] == "journal": return self._send(journal_page(q))
             if parts[0] == "events": return self._send(events_page(q))
             if parts[0] == "settings": return self._send(settings_page(q))
@@ -399,6 +443,10 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(key) or not C.signal(CFG, key) or not text: return self._redirect("/", "bad reply", False)
                 C.atomic_write_json(os.path.join(CFG["root"], "advisor", "replies", f"{key}-{C.now_utc().strftime('%Y%m%dT%H%M%S')}.json"), {"signal_key": key, "text": text[:4000], "ts": C.now_iso()})
                 return self._redirect(f"/signal/{key}", "reply queued — the answer appears here in ~10-30 s", True)
+            if u.path == "/brief":
+                from live import brief_runner
+                brief_runner.request(CFG, "web"); C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|brief_requested|by=web")
+                return self._redirect("/context", "brief requested - the page refreshes itself while it generates", True)
             if u.path == "/telegram_test":
                 ok = C.telegram_send(CFG, f"Test from the web app ({C.now_iso()}). If you read this, alerts from the box reach you.", LOG)
                 return self._redirect("/", "Telegram test sent" if ok else "Telegram send FAILED - check token/chat id/network on the box", ok)

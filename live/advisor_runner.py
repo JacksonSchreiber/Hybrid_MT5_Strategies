@@ -18,6 +18,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
 from live import charts
+from live import brief_runner
 
 SESSION_NS = uuid.UUID("5f0a3c1e-9b7d-4c1a-8f2e-2d3b4a5c6d7e")
 ALLOWED = "Read,Glob,Grep,Write(notes.live.md),Edit(notes.live.md)"   # the RUNNER writes verdicts.live.log from the LOG: line
@@ -91,7 +92,13 @@ def write_bundle(sig: dict, cfg: dict) -> str:
     h4, d1 = charts.render_signal(sig, os.path.join(cfg["root"], "web", "charts"), fresh=True)
     import shutil
     shutil.copyfile(h4, os.path.join(bdir, "h4.png")); shutil.copyfile(d1, os.path.join(bdir, "d1.png"))
-    C.atomic_write_text(os.path.join(bdir, "setup.md"), build_setup_md(sig, cfg))
+    brief_note = ""
+    b = brief_runner.latest_brief(cfg, 2.0)
+    mb = os.path.join(bdir, "market-brief.md")
+    if b:
+        shutil.copyfile(b["path"], mb); brief_note = f"\n- **Context brief attached:** `market-brief.md` (generated {b['t'].strftime('%Y-%m-%d %H:%M UTC')}{'; FLAGGED directional wording: ' + ', '.join(b['flags']) if b['flags'] else ''}) - CLAUDE.live.md §Context brief governs its weight."
+    elif os.path.exists(mb): os.remove(mb)
+    C.atomic_write_text(os.path.join(bdir, "setup.md"), build_setup_md(sig, cfg) + brief_note + "\n")
     return bdir
 
 # ----------------------------------------------------------------------------- claude
@@ -106,13 +113,13 @@ def claude_env(cfg: dict) -> dict:
 
 def run_claude(cfg: dict, prompt: str, *, sid: str, resume: bool, log) -> dict:
     a = cfg["advisor"]; cmd = a["claude_cmd"]
-    args = [cmd, "-p", prompt, "--output-format", "json", "--model", a["model"], "--effort", a["effort"],
+    args = [cmd, "-p", "--output-format", "json", "--model", a["model"], "--effort", a["effort"],
             "--allowedTools", ALLOWED, "--disallowedTools", DISALLOWED, "--max-turns", "40"]
     args += ["--resume", sid] if resume else ["--session-id", sid]
     if os.name == "nt" and cmd.lower().endswith((".cmd", ".bat")): args = ["cmd", "/c"] + args
     t0 = time.time()
     try:
-        p = subprocess.run(args, cwd=a["live_dir"], env=claude_env(cfg), capture_output=True, text=True, timeout=a["timeout_s"], encoding="utf-8", errors="replace")
+        p = subprocess.run(args, cwd=a["live_dir"], env=claude_env(cfg), input=prompt, capture_output=True, text=True, timeout=a["timeout_s"], encoding="utf-8", errors="replace")   # prompt via stdin (cmd /c truncates multi-line args)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timeout after {a['timeout_s']}s", "elapsed_s": round(time.time() - t0, 1)}
     el = round(time.time() - t0, 1)
@@ -138,15 +145,17 @@ def ensure_log_line(cfg: dict, sig: dict, text: str, kind: str, log) -> None:
     """the runner owns verdicts.live.log: prefix ts|symbol|#id, then the model's LOG: fields; synthesize if absent."""
     p = os.path.join(cfg["advisor"]["live_dir"], "verdicts.live.log"); tag = f"#{sig['signal_id']}"
     _, payload = split_log(text)
+    bflag = "brief:" + ("yes" if os.path.exists(os.path.join(cfg["advisor"]["live_dir"], "bundles", sig["signal_key"], "market-brief.md")) else "no")
     if payload:
-        C.append_line(p, " | ".join([C.now_iso(), sig["symbol"], tag, payload])); return
+        payload = re.sub(r"\s*\|\s*brief:(yes|no)\s*$", "", payload)
+        C.append_line(p, " | ".join([C.now_iso(), sig["symbol"], tag, payload, bflag])); return
     m = VERDICT_RE.search(text or "")
     v = f"{m.group(1).upper()} ({m.group(2).lower()}, {m.group(3).lower()})" if m else "UNPARSED"
     sh = re.search(r"regime\s*([✓✗?])\s*news\s*([✓✗?])\s*correlation\s*([✓✗?])", text or ""); steps = re.search(r"steps:\s*([0-9✓✗? ]+)", text or "")
     q = re.search(r"Quality:\s*([ABC])", text or ""); why = re.search(r"Why:\s*(.+)", text or "")
     line = " | ".join([C.now_iso(), sig["symbol"], tag, f"{sig.get('strategy')} {sig.get('direction')}", v,
                        f"SH:{''.join(sh.groups()) if sh else '???'} steps:{steps.group(1).strip().replace(' ', '') if steps else '-'}",
-                       f"Q:{q.group(1) if q else '-'}", "step: (runner-synthesized)", (why.group(1).strip()[:160] if why else "(no Why line)") + (" | reply" if kind == "reply" else " | runner")])
+                       f"Q:{q.group(1) if q else '-'}", "step: (runner-synthesized)", (why.group(1).strip()[:160] if why else "(no Why line)") + (" | reply" if kind == "reply" else " | runner"), bflag])
     C.append_line(p, line); log(f"{sig['signal_key']}: log line synthesized ({kind})")
 
 # ----------------------------------------------------------------------------- records
@@ -157,7 +166,7 @@ def save_record(cfg: dict, rec: dict) -> None: C.atomic_write_json(verdict_path(
 class Runner:
     def __init__(self, cfg: dict):
         self.cfg = cfg; self.log = C.Log("advisor", cfg["logs_dir"]); self.lock = threading.Lock()
-        for sub in ("advisor/verdicts", "advisor/replies", "advisor/replies/done", "web/charts"): os.makedirs(os.path.join(cfg["root"], sub), exist_ok=True)
+        for sub in ("advisor/verdicts", "advisor/replies", "advisor/replies/done", "web/charts", "advisor/briefs", "advisor/briefs/requests"): os.makedirs(os.path.join(cfg["root"], sub), exist_ok=True)
         for sub in ("bundles",): os.makedirs(os.path.join(cfg["advisor"]["live_dir"], sub), exist_ok=True)
 
     def consult(self, sig: dict) -> dict:
@@ -165,7 +174,7 @@ class Runner:
         bdir = write_bundle(sig, self.cfg)
         rel = os.path.relpath(bdir, self.cfg["advisor"]["live_dir"]).replace("\\", "/")
         prompt = (f"#{sig['signal_id']} — LIVE signal {sig['symbol']} {sig.get('strategy')} {sig.get('direction')}. "
-                  f"Bundle: {rel}/setup.md, {rel}/h4.png, {rel}/d1.png. Read all three, then answer with the full scorecard. "
+                  f"Bundle: {rel}/setup.md, {rel}/h4.png, {rel}/d1.png" + (f", {rel}/market-brief.md (context brief - §Context brief rules apply)" if os.path.exists(os.path.join(bdir, "market-brief.md")) else "") + ". Read them all, then answer with the full scorecard. "
                   f"Do NOT write to verdicts.live.log yourself and do not use shell commands (none are available): the runner appends the log line. "
                   f"End your answer with one final line starting with 'LOG: ' followed by the verdict-log fields after the '#id' field, i.e. "
                   f"'LOG: {sig.get('strategy')} {sig.get('direction')} | <VERDICT> (quick, <confidence>) | SH:<regime><news><corr> steps:<...> | Q:<A|B|C|-> | step: <decisive step> | <one-clause reason>' "
@@ -195,6 +204,7 @@ class Runner:
         self.log(f"{key}: reply {'ok' if r['ok'] else 'FAILED'} in {r.get('elapsed_s')}s")
 
     def tick(self) -> None:
+        brief_runner.poll_requests(self.cfg, self.log)
         for sig in C.list_signals(self.cfg, light=True):
             if sig.get("status") != "open": continue
             rec = load_record(self.cfg, sig["signal_key"])

@@ -104,3 +104,15 @@ entry path. Journal rows with `strategy=TEST` (and their `signal_id`) are trader
 Live-only defects found and fixed during the tests (all committed): async fill binding, shared-read file opens with
 six instances, task claim race, position-verb confirmation timing, MetaTrader5 package launching a stray terminal
 (feed now isolated in `hybrid-feed`). Acceptance criteria: spec §8 (≥3 weeks; the coach grades the weeks).
+
+## Context brief (coach task 2026-09-16)
+
+Web **Context** page (own page, never on the signal page): "Generate brief" → the advisor runner generates it in a
+thread (`live/brief_runner.py`): claude-opus-5, medium effort, WebSearch/WebFetch on public sources, subscription
+transport (same token/launcher as the advisor), prompt via stdin. Fixed template: (a) this week's events from the
+deployed feed with labels (built from the file, the model may only annotate), (b) CB posture USD/EUR/GBP, (c) five-session
+drivers per lineup symbol, (d) sources. Hard no-directional rule + post-filter (`DIRECTIONAL` regex) shown as a FLAG on
+the page and in `briefs.log`. Files: `<root>\advisor\briefs\<UTC>.md`, `briefs.log`, `status.json`. The advisor
+bundle attaches the newest brief from the past **2 UTC days** (trader change to the coach's same-day rule) as
+`market-brief.md`; the runner writes `brief:yes|no` at the end of every verdict-log line. No Telegram push; the
+daily summary notes whether a brief is available. First generation on the box: 64 s, 9 sources, 746 words, no flags.

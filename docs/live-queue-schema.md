@@ -163,3 +163,13 @@ tooling gets a `--live` root option in M2.
 `state/<SYMBOL>/<signal_id>.json` = the full journal row + its manual actions, rewritten on every state change; restored in `OnInit`
 and reconciled against the terminal (terminal = truth for existence, file = truth for flags/R). Orphan positions with our magic and
 no state file are adopted conservatively (`strategy=ADOPTED`, un-banked, no BE, no ratchet) with a heartbeat alert.
+
+## Advisor verdict log line (`verdicts.live.log`, runner-written)
+
+```
+<UTC ts> | <symbol> | #<signal_id> | <strategy> <direction> | <VERDICT> (quick, <confidence>) | SH:<regime><news><corr> steps:<…> | Q:<A|B|C|-> | step: <decisive step> | <one-clause reason> | brief:yes|no
+```
+`brief:yes` when `market-brief.md` (the newest Context brief from the past 2 UTC days, trader ruling 2026-09-16) was
+in that consult's bundle. Reply lines: `<ts> | <symbol> | #<id> | reply | <one clause> | brief:yes|no`.
+Briefs: `<root>\advisor\briefs\<UTC>.md` (header comment: model, session, elapsed, sources, flags) + `briefs.log`
+(`ts | session | model/effort | elapsed | sources=n | flags=… | by=… | ok|ERROR …`).
