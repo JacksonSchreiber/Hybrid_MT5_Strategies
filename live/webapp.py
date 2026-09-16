@@ -16,6 +16,7 @@ from live import charts
 
 CFG: dict = {}
 LOG = None
+STATIC_V = str(int(os.path.getmtime(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "hybrid_chart.js")))) if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "hybrid_chart.js")) else "0"
 E = html.escape
 
 CSS = """
@@ -176,7 +177,7 @@ def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None
     return (f'<div class="card" style="padding:6px"><div class="hc"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
             f'<span class="k">EMA <span style="color:#ffd700">20</span> <span style="color:#00bfff">50</span> <span style="color:#ee82ee">200</span> · zone · <span style="color:#9370db">imbalances</span> · swings · fib (DeepFib)</span>'
             f'<span class="k hc-status" style="margin-left:auto"></span><a href="{link}" target="_blank">TradingView ↗</a></div><div class="hc-box" style="width:100%"></div></div>'
-            f'<script src="/static/lw.js"></script><script src="/static/hybrid_chart.js"></script><script>HybridChart.mount(document.currentScript.previousElementSibling.previousElementSibling.previousElementSibling, {json.dumps(data, separators=(",", ":"))});</script></div>')
+            f'<script src="/static/lw.js?v={STATIC_V}"></script><script src="/static/hybrid_chart.js?v={STATIC_V}"></script><script>HybridChart.mount(document.currentScript.previousElementSibling.previousElementSibling.previousElementSibling, {json.dumps(data, separators=(",", ":"))});</script></div>')
 
 def tv_block(symbol: str, interval: int = 240, levels: dict | None = None) -> str:
     """TradingView Advanced Chart widget (loads from tradingview.com on the viewer's device) + deep link to the TV app."""

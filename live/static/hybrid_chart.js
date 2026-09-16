@@ -46,7 +46,10 @@
         [20, 50, 200].forEach(function (n) { var e = ema(closes, n); emaS[n].setData(barsAll.map(function (b, i) { return { time: b[0], value: e[i] }; }).slice(n)); });
         setStatus(tick);
       }
-      function build(bars, tick) {
+      function showErr(where, e) { if (status) { status.textContent = 'chart error in ' + where + ': ' + (e && e.message || e); status.style.color = '#f85149'; } console.log('chart error', where, e); }
+      function guard(where, fn) { try { fn(); } catch (e) { showErr(where, e); } }
+      function build(bars, tick) { try { build0(bars, tick); } catch (e) { showErr('build', e); } }
+      function build0(bars, tick) {
         if (chart) { chart.remove(); }
         barsAll = bars.slice();
         var h = Math.max(320, Math.min(560, window.innerHeight * 0.55));
@@ -75,14 +78,14 @@
           if (pts.length === 1) pts.push({ time: pts[0].time + (tf === 'h4' ? 14400 : 86400), value: hi });
           if (pts.length) z.setData(pts);
         }
-        if (tf === 'h4' && bars.length) {
+        if (tf === 'h4' && bars.length) guard('zones', function () {
           var zf = iso(ov.zone && ov.zone.from) || bars[0][0], zt = iso(ov.zone && ov.zone.to) || bars[bars.length - 1][0];
           if (ov.zone && ov.zone.hi > 0) box(zf, zt, ov.zone.hi, ov.zone.lo, 'rgba(112,128,144,0.35)', 'rgba(112,128,144,0.8)');
           if (ov.zone2 && ov.zone2.hi > 0) box(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
           imbalances(bars).forEach(function (z) { box(z.t0, z.t1, z.hi, z.lo, z.state === 0 ? 'rgba(147,112,219,0.18)' : 'rgba(147,112,219,0.08)', 'rgba(147,112,219,0.5)'); });
           if (d.strategy === 'DeepFib' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
             cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: false, title: FIB_LT[i] }); });
-        }
+        });
         if (tf === 'h4' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0 && iso(ov.leg.t0) && iso(ov.leg.t1)) {
           var lg = chart.addLineSeries({ color: '#ee82ee', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
           var t0 = iso(ov.leg.t0), t1 = iso(ov.leg.t1); if (t0 < t1) lg.setData([{ time: t0, value: ov.leg.p0 }, { time: t1, value: ov.leg.p1 }]);
@@ -97,7 +100,7 @@
         if (d.signal_t) marks.push({ time: tf === 'h4' ? d.signal_t : d.signal_t - (d.signal_t % 86400), position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 });
         (d.marks || []).forEach(function (m) { marks.push({ time: m.t, position: 'aboveBar', color: '#ff8c00', shape: 'square', text: m.label, size: 1 }); });
         var set = {}; marks.forEach(function (m) { set[m.time] = m; }); marks = Object.values(set).sort(function (a, b) { return a.time - b.time; });
-        cs.setMarkers(marks);
+        guard('markers', function () { cs.setMarkers(marks); });
         var n = bars.length, from = Math.max(0, n - (tf === 'h4' ? 90 : 130));
         chart.timeScale().setVisibleLogicalRange({ from: from, to: n + 5 });
         new ResizeObserver(function () { chart.applyOptions({ width: box.clientWidth }); }).observe(box);
