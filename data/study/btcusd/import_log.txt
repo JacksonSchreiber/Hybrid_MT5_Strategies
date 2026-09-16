@@ -1,0 +1,5 @@
+[2026-07-18 00:50:10] Backlog: 1 symbol(s) -> BTCUSD
+[2026-07-18 00:50:11] === BTCUSD: starting import ===
+[2026-07-18 00:50:11] BTCUSD: mt5_import.sh exited non-zero - see /home/jack/hybrid_project/logs/rolling_import/BTCUSD.log
+[2026-07-18 00:50:11] Backlog: 1 symbol(s) -> BTCUSD
+[2026-07-18 00:50:11] === BTCUSD: starting import ===
