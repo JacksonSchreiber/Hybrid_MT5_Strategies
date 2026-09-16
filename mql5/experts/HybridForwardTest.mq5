@@ -2043,6 +2043,13 @@ void WriteAck(string task_id,string verb,string target_key,long target_id,string
   }
 
 //--- Execute one claimed task. Returns result ("accepted"/"rejected"/"expired"), sets reason + row.
+//--- live servers confirm asynchronously: the retcode says DONE before PositionSelect reflects it.
+//--- Poll the position up to ~2 s (tester: one pass), and treat a DONE/PLACED retcode as success regardless.
+bool LiveDone(){ uint rc=g_trade.ResultRetcode(); return (rc==TRADE_RETCODE_DONE || rc==TRADE_RETCODE_PLACED || rc==TRADE_RETCODE_DONE_PARTIAL); }
+bool LiveWaitClosed(long posid){ for(int i=0;i<10;i++){ if(!PositionSelectByTicket((ulong)posid)) return true; if((bool)MQLInfoInteger(MQL_TESTER)) break; Sleep(200); } return !PositionSelectByTicket((ulong)posid); }
+bool LiveWaitVolBelow(long posid,double vol0){ for(int i=0;i<10;i++){ if(PositionSelectByTicket((ulong)posid) && PositionGetDouble(POSITION_VOLUME)<vol0-1e-9) return true; if(!PositionSelectByTicket((ulong)posid)) return true; if((bool)MQLInfoInteger(MQL_TESTER)) break; Sleep(200); } return false; }
+bool LiveWaitSL(long posid,double sl){ for(int i=0;i<10;i++){ if(PositionSelectByTicket((ulong)posid) && MathAbs(PositionGetDouble(POSITION_SL)-sl)<=_Point*1.5) return true; if((bool)MQLInfoInteger(MQL_TESTER)) break; Sleep(200); } return false; }
+
 string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string &reason,int &row_idx)
   {
    reason=""; row_idx=-1;
@@ -2148,8 +2155,8 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       if(verb=="close")
         {
          ManualClose(idx);
-         if(PositionSelectByTicket((ulong)posid)){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
-         reason="ok"; return "accepted";
+         if(!LiveWaitClosed(posid) && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason=(PositionSelectByTicket((ulong)posid) ? "ok_unconfirmed" : "ok"); return "accepted";
         }
       if(verb=="close50")
         {
@@ -2158,9 +2165,9 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
          double pv=MathFloor((vol0*0.5)/step)*step;
          if(pv<vmin || (vol0-pv)<vmin){ reason="min_lot_split"; return "rejected"; }
          ManualClose50(idx);
-         bool ok=(PositionSelectByTicket((ulong)posid) && PositionGetDouble(POSITION_VOLUME)<vol0-1e-9);
-         if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
-         reason="ok"; return "accepted";
+         bool ok=LiveWaitVolBelow(posid,vol0);
+         if(!ok && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason=(ok ? "ok" : "ok_unconfirmed"); return "accepted";
         }
       if(verb=="sl_be")
         {
@@ -2172,9 +2179,9 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
          if(sl0>0.0 && (g_rows[idx].direction>0 ? be<=sl0 : be>=sl0)){ reason="be_would_loosen"; return "rejected"; }
          AuditLine("gate",task_id,verb,StringFormat("pos:%I64d",posid),"BEPlaceable=true","","");
          ManualBE(idx);
-         bool ok=(PositionSelectByTicket((ulong)posid) && MathAbs(PositionGetDouble(POSITION_SL)-be)<=_Point*1.5);
-         if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
-         reason="ok"; return "accepted";
+         bool ok=LiveWaitSL(posid,be);
+         if(!ok && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason=(ok ? "ok" : "ok_unconfirmed"); return "accepted";
         }
       if(verb=="ratchet_tp1")
         {
@@ -2190,9 +2197,9 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
             return "rejected";
            }
          ManualRatchetTP1(idx);
-         bool ok=(PositionSelectByTicket((ulong)posid) && MathAbs(PositionGetDouble(POSITION_SL)-NormPrice(g_rows[idx].tp1))<=_Point*1.5);
-         if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
-         reason="ok"; return "accepted";
+         bool ok=LiveWaitSL(posid,NormPrice(g_rows[idx].tp1));
+         if(!ok && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+         reason=(ok ? "ok" : "ok_unconfirmed"); return "accepted";
         }
      }
    reason="unknown_verb"; return "rejected";
