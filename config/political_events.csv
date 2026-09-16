@@ -27,3 +27,18 @@ date_utc_start,date_utc_end,ccy,event,class,source,round
 2018.07.06 00:00,2018.07.09 06:00,GBP,Chequers Cabinet Brexit Summit (Fri; Davis/Johnson resignations followed Sun-Mon),W,coach-2026-08-26,1
 2018.11.24 00:00,2018.11.26 06:00,GBP,EU Special Summit on Brexit Withdrawal Agreement (Sun Nov 25),W,coach-2026-08-26,1
 2018.12.10 00:00,2018.12.11 23:59,GBP,UK Commons Meaningful Vote on Brexit deal (scheduled Dec 11; pulled Dec 10),W,coach-2026-08-26,1
+
+# --- Standing classification rule (coach ruling 2026-09-16, added with the first forward batch) ---
+# National general/presidential elections, US midterms and binding referenda of a lineup currency = W (NO-HOLD).
+# EUR: the EU Parliament election and the national elections of DE/FR/IT/ES/NL = W. National elections of other EUR
+# member states = C, never omitted (the events panel shows them; the NO-HOLD gate does not fire) - upgrade such a
+# country to W only for a binding EU-membership or currency referendum (2015 Greece shape). Regional/state/local = C.
+# Forward batches: engineer drafts 12 months ahead (political_events.draft.csv), coach reviews, then rows are appended
+# here and deployed (deploy_live.sh --calendar); quarterly refresh. Rows whose date is not yet fixed wait in the draft.
+# --- Forward batch 2026-09-16 (coach-approved 2026-09-16) ---
+2026.09.20 00:00,2026.09.21 06:00,EUR,German State Elections - Berlin + Mecklenburg-Vorpommern,C,berlin.de + landtag-mv.de; verified 2026-09-16,1
+2026.11.03 00:00,2026.11.04 06:00,USD,US Midterm Elections (House + Senate; state governors same day),W,house.gov/senate.gov schedule; verified 2026-09-16,1
+2027.04.18 00:00,2027.04.19 06:00,EUR,French Presidential Election - first round,W,france24.com 2026-06-30 (date set by decree); verified 2026-09-16,1
+2027.04.18 00:00,2027.04.19 06:00,EUR,Finnish Parliamentary Election,C,vaalit.fi; verified 2026-09-16 (non-big-five EUR member = C),1
+2027.05.02 00:00,2027.05.03 06:00,EUR,French Presidential Election - second round,W,france24.com 2026-06-30; verified 2026-09-16,2
+2027.05.06 00:00,2027.05.07 06:00,GBP,UK Local Elections (England county/district),C,fixed first-Thursday-of-May cycle; date to confirm,1
