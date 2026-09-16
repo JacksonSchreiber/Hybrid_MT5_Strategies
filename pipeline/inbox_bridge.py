@@ -145,11 +145,20 @@ def setup_levels(row) -> tuple:
             _f(row, "orig_tp2", "tp2"))
 
 
+def _rules_line(symbol: str) -> str:
+    """per-symbol doctrine flags (config/symbol_rules.json) - coach 2026-09-16; empty for symbols without an entry."""
+    try:
+        from symbol_rules import rules_line
+        return rules_line(symbol or "")
+    except Exception: return ""
+
 def asset_class(symbol: str) -> str:
     """Coarse, blind-SAFE instrument class for the advisor's library reads (coach 2026-09-10):
     FX major / equity index / energy / metal. Context only — NOT a verdict threshold, and never
     the symbol name itself. Computed here; only the class label is emitted."""
     s = (symbol or "").split(".")[0].upper()       # strip .dk / .sim broker suffix
+    if s in ("BTCUSD", "ETHUSD", "BTCUSDT", "ETHUSDT", "LTCUSD", "XRPUSD", "BTC", "ETH"):
+        return "crypto"                                # coach 2026-09-16: CLAUDE.md §Crypto instruments applies
     if "OIL" in s or s in ("WTI", "BRENT", "XTIUSD", "XBRUSD", "XNGUSD"):
         return "energy"
     if s.startswith("XAU") or s.startswith("XAG") or s in ("GOLD", "SILVER"):
@@ -241,6 +250,7 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
         f"- **Session / day / time:** {sess} / {dow} / {tod}",
         f"- **Asset class:** {asset_class(row.get('symbol'))} "
         "(context for library reads; not a verdict threshold)",
+        *([f"- **Symbol rules (blind-safe, journaled):** {_rules_line(row.get('symbol'))}"] if _rules_line(row.get('symbol')) else []),
         f"- **{regime_line}** (D1 200-EMA/ADX, chart-derived)",
         f"- **{protocol_line}**",
         f"- **Proposed levels (chart-visible prices):** entry {entry}, SL {sl}, "

@@ -73,7 +73,8 @@ case "$LEVEL" in
   12b) P=(USOIL.dk 2017.01.01 2017.12.31); A=();;   # Pair-12 (coach 2026-09-10): WTI 2017, fresh, single-shot. AA baseline DEFERRED until item-1 TP1-ratchet ruling lands so it carries the final exit doctrine.
   13a) P=(GBPUSD.dk 2023.01.01 2023.12.31); A=();;  # Pair-13 (coach 2026-09-10): GBPUSD 2023, fresh, single-shot. AA baseline = current doctrine.
   13b) P=(US100.dk 2019.01.01 2019.12.31); A=();;   # Pair-13 (coach 2026-09-10): NAS100 2019, fresh, single-shot. AA baseline = current doctrine.
-  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b, 9a, 9b, 10a, 10b, 11, 12a, 12b, 13a, 13b)";;
+  14) P=(BTCUSD.dk 2019.01.01 2019.12.31); A=();;    # Window 14 (coach 2026-09-16): BTCUSD discretion window, trader-initiated (NOT a reopening of the closed mechanical study). Four-detector lineup. Per-symbol rules from config/symbol_rules.json (session rules off, weekend-hold off, overnight-timing advisory, USD V/W bind as index; class: crypto). Graded on COSTED figures (pipeline/cost_journal.py). Import covers 2017-05→2026-07 so the regime warm-up is complete before 2019-01-01.
+  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b, 9a, 9b, 10a, 10b, 11, 12a, 12b, 13a, 13b, 14)";;
 esac
 if $ALT; then
   [[ ${#A[@]} -gt 0 ]] || die "level $LEVEL has no alternate window (final-exam levels are single-shot)"
@@ -93,7 +94,7 @@ BASELINE="$BASELINE_DIR/${SYMBOL}_${FROMC}_${TOC}_AA_ALL.csv"
 # interactive .set below read these SAME vars so they can never drift.
 # Extend the new-era list (11|12|...) as future windows are added.
 case "$LEVEL" in
-  11|12a|12b|13a|13b) LIVE_STRAT="SMC,Fib,TrendCont,EMArevQ"; SET_EMA=false; SET_EMAQ=true;  SET_TC=true;;
+  11|12a|12b|13a|13b|14) LIVE_STRAT="SMC,Fib,TrendCont,EMArevQ"; SET_EMA=false; SET_EMAQ=true;  SET_TC=true;;
   *)          LIVE_STRAT="SMC,Fib,EMA";               SET_EMA=true;  SET_EMAQ=false; SET_TC=false;;
 esac
 

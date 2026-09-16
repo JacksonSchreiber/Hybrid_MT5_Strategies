@@ -244,6 +244,15 @@ def _next_days(signal, events, cls_letter, horizon_days):
     return None if best is None else round((best - now).total_seconds() / 86400.0, 1)
 
 
+def _weekend_hold_off(signal) -> bool:
+    """coach 2026-09-16 (BTCUSD window 14): the weekend-hold flag is switched off per symbol in config/symbol_rules.json
+    (a 24/7-class instrument has no weekend close). Stdlib-only, no import of the pipeline package."""
+    try:
+        import json as _j; from pathlib import Path as _P
+        d = _j.loads((_P(__file__).resolve().parent.parent / "config" / "symbol_rules.json").read_text(encoding="utf-8"))
+        return str(d.get((getattr(signal, "symbol", "") or "").split(".")[0].upper(), {}).get("weekend_hold_flag", "")).lower() == "off"
+    except Exception: return False
+
 def blind_calendar(signal: Signal, events, horizon_h: float = VIOLATION_HORIZON_H,
                    past_h: float = 24.0, *, swing: bool = True):
     """The ONLY calendar info the models receive. No names/currencies/dates — booleans,
@@ -261,7 +270,7 @@ def blind_calendar(signal: Signal, events, horizon_h: float = VIOLATION_HORIZON_
         "affects": _aff(v_legs),
         "recent_event_bias": s["recent_bias"],
         # weekend-hold horizon (new, §3.4) — class only, never the event name
-        "weekend_event": bool(s["weekend"]),
+        "weekend_event": bool(s["weekend"]) and not _weekend_hold_off(signal),   # per-symbol flag (config/symbol_rules.json)
         "weekend_class": "W" if s["weekend"] else None,
         "weekend_hours_until": s["weekend"][0]["hours_until"] if s["weekend"] else None,
         "weekend_affects": _aff(w_legs),

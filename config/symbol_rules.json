@@ -1,0 +1,21 @@
+{
+ "_doc": "Per-symbol doctrine flags (coach 2026-09-16, BTCUSD window 14). Keyed by symbol root (broker suffix stripped). Consumed by pipeline/tier0.py (weekend-hold flag), pipeline/inbox_bridge.py (setup.md class + rules line), pipeline/cost_journal.py (costs). The EA has no session gates, so nothing is forked in MQL5; the flag state is journaled in every setup.md, in the AA baseline README sidecar and in the window report.",
+ "BTCUSD": {
+  "class": "crypto",
+  "late_friday_rule": "off",
+  "weekend_hold_flag": "off",
+  "overnight_timing_steps": "advisory",
+  "event_rows": "USD V/W bind as for an index",
+  "costs": {
+   "source": "OANDA-Demo-1 BTCUSD.sim specification read 2026-09-16 (trader screenshot)",
+   "swap_long_pct_pa": -30.31,
+   "swap_short_pct_pa": -19.69,
+   "swap_days": "Mon-Fri x1, no triple day",
+   "commission_pct_per_side": 0.0325,
+   "spread_usd": 3.09,
+   "contract_size": 1,
+   "min_lot": 0.01,
+   "lot_step": 0.01
+  }
+ }
+}
