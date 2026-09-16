@@ -31,8 +31,15 @@ class Monitor:
         seen = self.st["signals"]
         for s in C.list_signals(self.cfg):
             key = s["signal_key"]; stt = s.get("status"); prev = seen.get(key)
-            if prev == stt: continue
             lv = s.get("levels") or {}; rr = s.get("rr") or {}
+            # re-present after a delay (bar close or explicit delay): remind the trader to revisit
+            dc = int(s.get("delay_count") or 0); pdc = int(self.st.setdefault("delays", {}).get(key, 0) or 0)
+            if stt == "open" and prev == "open" and dc > pdc:
+                dl = C.parse_iso(s.get("deadline")); left = max(0, int(s.get("max_age_bars") or 3) - int(s.get("implicit_streak") or 0))
+                self.send(f"REVISIT #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: re-presented at bar close (delay {dc}); {left} bar(s) of silence left before it expires, deadline {C.fmt_dt(dl)}. "
+                          f"Price {'bid ' + str((s.get('sizing') or {}).get('mkt_bid')) if (s.get('sizing') or {}).get('mkt_bid') else ''}entry {lv.get('entry')} SL {lv.get('sl')}.\n{self.base}/signal/{key}")
+            self.st["delays"][key] = dc
+            if prev == stt: continue
             if prev is None and stt == "open":
                 dl = C.parse_iso(s.get("deadline"))
                 self.send(f"NEW SIGNAL #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class')}]\n"
