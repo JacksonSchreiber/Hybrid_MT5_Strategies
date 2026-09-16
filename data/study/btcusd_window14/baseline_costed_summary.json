@@ -1,0 +1,49 @@
+{
+ "journal": "BTCUSD.dk_20190101_20191231_AA_ALL.csv",
+ "symbol": "BTCUSD.dk",
+ "closed_trades": 37,
+ "total_r_off": 2.64,
+ "total_r_on": -1.996,
+ "avg_r_off": 0.0714,
+ "avg_r_on": -0.054,
+ "per_detector": {
+  "TrendCont": {
+   "n": 23,
+   "total_off": -3.69,
+   "total_on": -6.621
+  },
+  "SweepMSS": {
+   "n": 7,
+   "total_off": 6.33,
+   "total_on": 5.599
+  },
+  "EMArevQ": {
+   "n": 3,
+   "total_off": -0.4,
+   "total_on": -0.669
+  },
+  "DeepFib": {
+   "n": 4,
+   "total_off": 0.4,
+   "total_on": -0.305
+  }
+ },
+ "signals_per_detector": {
+  "DeepFib": 4,
+  "EMArevQ": 4,
+  "SweepMSS": 8,
+  "TrendCont": 24
+ },
+ "costs": {
+  "source": "OANDA-Demo-1 BTCUSD.sim specification read 2026-09-16 (trader screenshot)",
+  "swap_long_pct_pa": -30.31,
+  "swap_short_pct_pa": -19.69,
+  "swap_days": "Mon-Fri x1, no triple day",
+  "commission_pct_per_side": 0.0325,
+  "spread_usd": 3.09,
+  "contract_size": 1,
+  "min_lot": 0.01,
+  "lot_step": 0.01
+ },
+ "out": "/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/Common/Files/journal/baselines/BTCUSD.dk_20190101_20191231_AA_ALL.costed.csv"
+}
