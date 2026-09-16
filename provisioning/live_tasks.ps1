@@ -20,6 +20,11 @@ foreach ($name in $svc.Keys) {
   $set = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable
   Register-ScheduledTask -TaskName $name -Action $act -Trigger $trg -Settings $set -User 'hybridops' -Password $pw -RunLevel Highest -Force | Out-Null
 }
+# weekly maintenance window: Saturday 14:00 UTC (trader ruling 2026-09-16), runs provisioning/maintenance.ps1 as SYSTEM
+$mAct = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\hybrid\maintenance.ps1'
+$mTrg = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At 14:00
+$mSet = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable
+Register-ScheduledTask -TaskName 'hybrid-maintenance' -Action $mAct -Trigger $mTrg -Settings $mSet -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 # Claude Code trust for the advisor folder (settings.json permissions are ignored in an untrusted workspace)
 $cj = 'C:\Users\hybridops\.claude.json'
 $j = if (Test-Path $cj) { Get-Content $cj -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }

@@ -179,7 +179,7 @@ class Monitor:
         self.send("\n".join(parts))
 
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()
@@ -191,9 +191,39 @@ class Monitor:
             try: boot_s = float(subprocess.run(["powershell", "-NoProfile", "-Command", "((Get-Date)-(Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds"], capture_output=True, text=True, timeout=30).stdout.strip())
             except Exception: pass
         self.log(f"monitor up (dry={self.dry}); uptime_s={boot_s}")
-        if boot_s is not None and boot_s < 600: self.send(f"RECOVERED after reboot: monitor up {int(boot_s)} s after boot; checking MT5 + web + heartbeat now. {self.base}/")
+        self.boot_check_due = (boot_s is not None and boot_s < 900); self.boot_t0 = time.time()
+        if self.boot_check_due: self.send(f"Box is back up (monitor started {int(boot_s)} s after boot). Checking MT5, the EAs, the feed and the web app now…")
         while True:
-            self.tick(); time.sleep(self.m["interval_s"])
+            self.tick()
+            if self.boot_check_due: self.boot_check()
+            time.sleep(self.m["interval_s"])
+
+    def boot_check(self):
+        """after a reboot: report once when EVERY expected EA heartbeat is fresh + web up + feed connected, or fail loudly."""
+        want = (self.cfg.get("expected_symbols") or C.symbols(self.cfg)); fresh = []
+        for sym in want:
+            hb = C.heartbeat(self.cfg, sym); age = C.heartbeat_age_s(hb)
+            if hb and hb.get("status") == "running" and age is not None and age < 150 and C.parse_iso(hb.get("ts")) and C.parse_iso(hb["ts"]).timestamp() > self.boot_t0 - 60: fresh.append(sym)
+        try:
+            with urllib.request.urlopen(self.base + "/health", timeout=5) as r: web_ok = r.status == 200
+        except Exception: web_ok = False
+        feed_ok = True
+        try:
+            from live import mt5feed; feed_ok = bool(mt5feed.status().get("connected"))
+        except Exception: pass
+        if len(fresh) == len(want) and want and web_ok and feed_ok:
+            self.boot_check_due = False
+            self.send(f"ALL SYSTEMS UP after reboot: {len(fresh)}/{len(want)} EAs heartbeating ({', '.join(sorted(fresh))}), terminal feed connected, web app up, trading {'ENABLED' if C.kill_switch(self.cfg) else 'disabled'}. {int(time.time() - self.boot_t0)} s after monitor start.")
+        elif time.time() - self.boot_t0 > 600:
+            self.boot_check_due = False
+            self.send(f"REBOOT RECOVERY INCOMPLETE after 10 min: EAs up {len(fresh)}/{len(want)} (missing {', '.join(sorted(set(want) - set(fresh))) or '-'}), web {'up' if web_ok else 'DOWN'}, feed {'ok' if feed_ok else 'NOT CONNECTED'}. Intervene: {self.base}/")
+
+    def reminders(self):
+        """Friday 18:00 UTC: Contabo snapshot reminder before the Saturday maintenance reboot (provider snapshots expire)."""
+        now = C.now_utc(); key = now.strftime("%Y-%m-%d")
+        if now.weekday() == 4 and now.strftime("%H:%M") >= "18:00" and self.st.get("last_snapshot_reminder") != key:
+            self.st["last_snapshot_reminder"] = key
+            self.send("Reminder: the box installs Windows updates and reboots tomorrow (Saturday) at 14:00 UTC. Take a Contabo snapshot now if you want a rollback point (their snapshots expire).")
 
 def main():
     import argparse

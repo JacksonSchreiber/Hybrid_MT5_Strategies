@@ -1,168 +1,130 @@
 # VPS provisioning guide — rebuild the live box from nothing
 
-**Purpose:** if the server breaks, a new one is rebuilt by following this file top to bottom. Every step is
-either a script in `provisioning/` or a command shown verbatim. The engineer updates this file in the same
-commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md` §2 (security), §7 (ops).
+**Purpose:** if the server breaks, a new one is rebuilt by following this file top to bottom. Every step is a script in
+`provisioning/` or a command shown verbatim. The engineer updates this file in the same commit as any change to the
+box. Spec: `docs/phase3-live-system-requirements.md` (§2 security, §7 ops). Contracts: `docs/live-queue-schema.md`.
+Last full pass: 2026-09-16 (steps 1–6 all executed on the current box; the trader waived the rebuild-from-script drill).
+
+## Facts
 
 | item | value |
 |---|---|
-| OS | Windows Server 2022 Datacenter (Contabo image), 8 GB RAM, ~87 GB free on C: |
-| broker/terminal | OANDA MT5 (demo on `OANDA-Demo-1`); the FTMO challenge account, when it arrives, is a second terminal install |
-| lineup (coach ruling 2026-09-16) | `US100.sim US500.sim USOIL.sim XAUUSD.sim` ×1.0, `EURUSD.sim GBPUSD.sim` ×0.5 (`config\risk_mult.json` = `provisioning/risk_mult.json`); one EA instance per chart, per-symbol heartbeats. No US30 (untrained), no USDJPY |
-| ops account | `hybridops` (local Administrators; SSH key-only; built-in `Administrator` denied over SSH) |
-| WireGuard | server `10.77.0.1/24`, UDP `51820`; peers: engineer workstation `10.77.0.2/32`, trader phone `10.77.0.3/32` |
-| inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
-| clock | UTC |
-| secrets | `C:\ProgramData\hybrid\secrets\` (ACL: Administrators + SYSTEM only; never in the repo): `mt5.json` {login, password, investor_password, server}, `telegram.token`, `telegram.chat_id`, `advisor.token` (Claude Code OAuth from `claude setup-token`, bills the subscription). Master copies live in the trader's KeePassXC; re-copy with `scp` over the tunnel |
-| status | steps 1–4 done 2026-09-15; EA live-heartbeating on EURUSD.sim; web/monitor/advisor services up; external probe: no TCP port open |
-| provider | Contabo. Recovery path if SSH is ever lost: Contabo panel → VPS → VNC (browser). Log in as Administrator, PowerShell as admin |
+| provider / OS | Contabo VPS `vmi3580043`, Windows Server 2022 Datacenter, 8 GB RAM. Console = Contabo panel → VPS → VNC (the recovery path when SSH is lost; no RDP anywhere) |
+| accounts | `hybridops` = local Administrator, auto-logs on at boot (console locked), SSH key-only; built-in `Administrator` denied over SSH. Password in `C:\ProgramData\hybrid\secrets\hybridops.password` |
+| network | WireGuard server `10.77.0.1/24` UDP 51820; peers: engineer WSL `10.77.0.2`, trader phone `10.77.0.3`. Inbound allowed: UDP 51820, TCP 22 + 8080 on `10.77.0.1` only, DHCP, ICMP fragmentation. RDP + WinRM disabled at the service level |
+| secrets | `C:\ProgramData\hybrid\secrets\` (Administrators + SYSTEM only, never in the repo): `mt5.json` {login,password,investor_password,server}, `telegram.token`, `telegram.chat_id`, `advisor.token` (Claude Code OAuth from `claude setup-token`, bills the subscription), `hybridops.password`. Master copies: trader's KeePassXC |
+| broker / terminal | OANDA MT5 build 6198, demo `OANDA-Demo-1`, symbols carry `.sim`. Data dir `C:\Users\hybridops\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552AE0B5EAEFB04866EB`, queue root `…\Terminal\Common\Files\live` |
+| lineup (coach 2026-09-16) | `US100.sim US500.sim USOIL.sim XAUUSD.sim` ×1.0, `EURUSD.sim GBPUSD.sim` ×0.5 (`config\risk_mult.json` = `provisioning/risk_mult.json`); one EA instance per H4 chart; no US30, no USDJPY |
+| runtime | Python 3.12 (+ pillow, certifi, pyyaml, MetaTrader5), Node 22 + `@anthropic-ai/claude-code`, WireGuard 0.5.3, OpenSSH (Windows capability) |
+| services (scheduled tasks) | `hybrid-mt5` (at logon), `hybrid-lock-console`, `hybrid-sshd-keeper`, `hybrid-web`, `hybrid-monitor`, `hybrid-advisor` (at startup +45 s, as hybridops), `hybrid-maintenance` (Sat 14:00 UTC, SYSTEM) |
+| web | `http://10.77.0.1:8080` from any peer; no login, plain HTTP (trader rulings: the tunnel is the boundary) |
+| backups | trader-driven: dashboard **Download backup (30 d)** → `hybrid-backup_<from>_to_<to>.zip`; counter turns red near 30 days (trader ruling 2026-09-16 replaces the nightly pull) |
 
-## Step 1 — bootstrap over RDP (the only step ever done by hand on the console)
+## Engineer workstation (WSL) prerequisites
+`~/.ssh/hybrid_vps_ed25519` (SSH key), `~/.wireguard/hybridvps.conf` (tunnel), `sudo apt install wireguard-tools` with a
+NOPASSWD sudoers line for `wg-quick`/`wg`; `sudo wg-quick up ~/.wireguard/hybridvps.conf`;
+`ssh -i ~/.ssh/hybrid_vps_ed25519 hybridops@10.77.0.1`. Local MT5 (OANDA, same install hash) builds the EA
+(`pipeline/mt5_build_ea.sh`) and the two scripts (`mql5/scripts/*.mq5`, MetaEditor `/compile`).
 
-Fresh box, RDP open, logged in as Administrator.
+---
 
-1. Open **PowerShell as Administrator**.
-2. Get `provisioning/bootstrap.ps1` onto the box. Either paste it into the console (RDP clipboard) after
-   `notepad C:\bootstrap.ps1`, or if the repo is reachable:
-   ```powershell
-   Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/JacksonSchreiber/Hybrid_MT5_Strategies/main/provisioning/bootstrap.ps1 -OutFile C:\bootstrap.ps1
-   ```
-3. Run it:
-   ```powershell
-   Set-ExecutionPolicy -Scope Process Bypass -Force
-   C:\bootstrap.ps1
-   ```
-4. Send the engineer the green block it prints (`public_ip`, `wg_server_pubkey`). Nothing in it is secret.
-   Transcript: `C:\ProgramData\hybrid\bootstrap.log`.
-
-What it did: `hybridops` account; OpenSSH Server key-only, PowerShell as shell, listening on `10.77.0.1`
-only, `DenyUsers Administrator`, sshd **delayed start + restart-on-failure + `hybrid-sshd-keeper` task**
-(the tunnel service reports running before the adapter has its address; without these sshd crashes at boot); WireGuard MSI (silent) + `wg0` tunnel
-service with the engineer's public key as the only peer; firewall default-deny inbound + the two allow
-rules; UTC; Windows Update set to download-and-notify (no auto-install/reboot).
-
-**Engineer side (WSL):** private keys live in `~/.ssh/hybrid_vps_ed25519` and `~/.wireguard/client.key`; the phone's
-full config is `~/.wireguard/phone.conf` (also kept in the trader's KeePassXC). Private keys are never in the repo.
-Tunnel config `~/.wireguard/hybridvps.conf`:
+## Step 1 — bootstrap over the console (the only hands-on step)
+Fresh box, logged in as Administrator on the Contabo VNC console (or RDP if the image still has it open).
+```powershell
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/JacksonSchreiber/Hybrid_MT5_Strategies/main/provisioning/bootstrap.ps1 -OutFile C:\bootstrap.ps1
+Set-ExecutionPolicy -Scope Process Bypass -Force
+C:\bootstrap.ps1
 ```
-[Interface]
-PrivateKey = <client.key>
-Address = 10.77.0.2/32
+Send the engineer the green block (`public_ip`, `wg_server_pubkey`). The script is idempotent. It creates `hybridops`,
+installs OpenSSH (key-only, PowerShell shell, bound to `10.77.0.1`, delayed start + restart-on-failure +
+`hybrid-sshd-keeper`, `DenyUsers Administrator`), WireGuard `wg0` with both peers (public keys are in the script),
+firewall default-deny + the two allow rules, UTC, Windows Update download-only.
+If the WireGuard server key is being restored from KeePassXC (so the phone/workstation configs keep working): put it in
+`C:\ProgramData\WireGuard\server.key` **before** running the script. Otherwise re-issue the client configs.
+Engineer: update `Endpoint` in `~/.wireguard/hybridvps.conf` (and the phone config) if the IP changed; `wg-quick up`; ssh.
 
-[Peer]
-PublicKey = <wg_server_pubkey from step 1>
-Endpoint = <public_ip>:51820
-AllowedIPs = 10.77.0.0/24
-PersistentKeepalive = 25
+## Step 2 — lock the console
+```bash
+scp -i ~/.ssh/hybrid_vps_ed25519 provisioning/lockdown.ps1 hybridops@10.77.0.1:C:/ProgramData/hybrid/
+ssh -i ~/.ssh/hybrid_vps_ed25519 hybridops@10.77.0.1 'powershell -ExecutionPolicy Bypass -File C:\ProgramData\hybrid\lockdown.ps1'
+ssh … 'Restart-Computer -Force'      # wait ~90 s; SSH must return; then from outside the tunnel every TCP port must be closed
 ```
-`sudo wg-quick up ~/.wireguard/hybridvps.conf` then `ssh -i ~/.ssh/hybrid_vps_ed25519 hybridops@10.77.0.1`.
-The script is idempotent: re-run it after any failure (accounts, keys and rules are reused/replaced, never duplicated).
-Re-issuing keys: generate new ones, put the public halves in `bootstrap.ps1`, re-run step 1 (idempotent).
+Incident 2026-09-15 (why sshd has three guards): it started before the tunnel adapter had its address and died;
+recovered via the console with `sc.exe failure sshd …` + `Start-Service sshd`. Scheduled tasks run `.ps1` FILES,
+never inline `-Command` strings (quoting silently broke a safety task).
 
-## Step 2 — lock the console (done 2026-09-15)
+## Step 3 — secrets, MT5, EA
+1. Secrets: `scp` the five files into `C:\ProgramData\hybrid\secrets\` then `icacls C:\ProgramData\hybrid /inheritance:r /grant "Administrators:(OI)(CI)F" /grant "SYSTEM:(OI)(CI)F"`.
+   `hybridops.password`: generate a new random one and `Set-LocalUser -Name hybridops -Password …` (tasks store it).
+2. MT5 install (over SSH): `Invoke-WebRequest https://download.mql5.com/cdn/web/oanda.corporation/mt5/oanda5setup.exe -OutFile C:\ProgramData\hybrid\installers\oanda5setup.exe; Start-Process … -ArgumentList /auto -Wait` (exit code 1 = it could not launch the GUI; files are installed).
+3. Auto-logon + console lock + MT5 task: `Autologon64.exe /accepteula hybridops <computer> <password>` (Sysinternals, LSA-stored);
+   tasks `hybrid-lock-console` (at logon of hybridops: `rundll32 user32.dll,LockWorkStation`) and `hybrid-mt5` (at logon +20 s,
+   `terminal64.exe /config:C:\ProgramData\hybrid\mt5\live.ini`, RestartCount 3, no stored password = interactive session).
+   MT5 needs the console session: in an SSH session it cannot create chart windows.
+4. `C:\ProgramData\hybrid\mt5\live.ini` = `provisioning/live.ini` with `Login/Password/Server` inserted under `[Common]`
+   from `secrets\mt5.json` (a `[Common]` section WITHOUT credentials starts the terminal logged out). `[Experts]
+   Enabled=1 AllowLiveTrading=1 AllowDllImport=0` arms AutoTrading (§11-8).
+5. Deploy files (built locally): `MQL5\Experts\HybridForwardTest-live.ex5`, `MQL5\Scripts\HybridSaveTemplate.ex5`,
+   `MQL5\Scripts\HybridLiveLauncher.ex5`, `MQL5\Indicators\HybridTriEMA.ex5`, `MQL5\Presets\hft_live.set`
+   (`provisioning/hft_live.set`), `Common\Files\live\config\risk_mult.json` (`provisioning/risk_mult.json`).
+   Restoring from a backup zip: `mt5/MQL5/Presets/*`, `mt5/MQL5/Profiles/Templates/hybrid_live.tpl` go back to the same
+   places (then step 6 is not needed), `live/**` goes back under the queue root, `mt5/Common/Files/econ_events.csv` too.
+6. Template (skip if `hybrid_live.tpl` was restored): temporarily set `[StartUp] Expert=HybridForwardTest-live
+   ExpertParameters=hft_live.set Script=HybridSaveTemplate Symbol=EURUSD.sim Period=H4` in a copy of the ini, start the
+   terminal once with it (`Register-ScheduledTask … -User hybridops`, `Start-ScheduledTask`), confirm
+   `MQL5\Profiles\Templates\hybrid_live.tpl` exists with `<expert>` + inputs, then restore `[StartUp] Script=HybridLiveLauncher`.
+7. Start `hybrid-mt5`. Expect within ~3 min: terminal in session 1, log `authorized on OANDA-Demo-1`, expert log
+   `Launcher: lineup=6 … template applied=…`, six `HybridForwardTest ACTIVE [LIVE(queue)]` lines, six
+   `live\heartbeat_<SYM>.json` rewritten every 60 s with `terminal_trade_allowed:true`, `events_count>0`.
+   After every EA rebuild: copy the `.ex5`, `Stop-Process terminal64`, `Start-ScheduledTask hybrid-mt5`. Re-save the
+   template only when the EA's INPUTS change (the charts read the template, not `hft_live.set`).
 
-Over SSH, run `provisioning/lockdown.ps1` (copy it with `scp -i ~/.ssh/hybrid_vps_ed25519 provisioning/lockdown.ps1
-hybridops@10.77.0.1:C:/ProgramData/hybrid/` then `ssh … 'powershell -ExecutionPolicy Bypass -File C:\ProgramData\hybrid\lockdown.ps1'`).
-Then `ssh … 'Restart-Computer -Force'`, wait ~90 s, confirm SSH returns, and probe the public IP from outside the
-tunnel: every TCP port must be closed (S1). Final state: inbound allow = `Hybrid WireGuard in`, `Hybrid SSH over
-WireGuard`, DHCP-In, ICMPv4 fragmentation-needed; `TermService` and `WinRM` disabled; `fDenyTSConnections=1`.
+## Step 4 — runtime + services
+```powershell
+# Python 3.12 + Node 22 + Claude Code + libs
+Invoke-WebRequest https://www.python.org/ftp/python/3.12.6/python-3.12.6-amd64.exe -OutFile C:\ProgramData\hybrid\installers\python.exe
+Start-Process C:\ProgramData\hybrid\installers\python.exe -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait
+& "C:\Program Files\Python312\python.exe" -m pip install pillow certifi pyyaml MetaTrader5
+Invoke-WebRequest https://nodejs.org/dist/v22.11.0/node-v22.11.0-x64.msi -OutFile C:\ProgramData\hybrid\installers\node.msi
+Start-Process msiexec.exe -ArgumentList '/i C:\ProgramData\hybrid\installers\node.msi /qn' -Wait
+& "C:\Program Files\nodejs\npm.cmd" install -g @anthropic-ai/claude-code
+New-NetFirewallRule -DisplayName 'Hybrid web over WireGuard' -Direction Inbound -Protocol TCP -LocalPort 8080 -LocalAddress 10.77.0.1 -Action Allow
+```
+Then from the workstation: `provisioning/deploy_live.sh` (full). It copies `live/*.py` + `live/static`, the config
+(`provisioning/live_config.vps.json` → `C:\ProgramData\hybrid\live\live_config.json`), the advisor tree
+(`C:\ProgramData\hybrid\advisor\live\{quick-reference.html, advisor\{CLAUDE.md = CLAUDE.live.md, library\, .claude\settings.json,
+notes.live.md, verdicts.live.log}}` — never the blind role/notes/log), the calendar pipeline (`--calendar` part:
+`normalize_econ_tzfix.py, event_classes.py, tier0.py, test_calendar_coverage.py, config\{event_classes.yaml,
+political_events.csv, official_schedule.csv}, history\ff_combined.csv`), `maintenance.ps1`, and runs
+`live_tasks.ps1` (registers `hybrid-web/monitor/advisor` at startup as hybridops with the stored password,
+`hybrid-maintenance` Sat 14:00 UTC as SYSTEM, and pre-trusts the advisor folder in `C:\Users\hybridops\.claude.json`).
+Verify: `/health` over the tunnel, dashboard shows six `EA alive`, `hybrid-monitor.task.log` shows a successful
+Telegram send (dashboard **Telegram test** button), one manual `python live\calendar_refresh.py --config …` returns
+`"ok": true` (coverage test exit 0, coverage ≥ next week).
 
-**Incident record (2026-09-15):** first reboot after lockdown locked the box out — sshd started in the same second
-the tunnel service reported running, before `10.77.0.1` existed, and died; a timed "re-enable RDP" safety task
-also failed (PowerShell quoting inside a scheduled-task argument). Recovered via the provider console with four
-lines (`sc.exe failure sshd …`, `sc.exe failureflag sshd 1`, `Start-Service sshd`). Permanent fix is in
-`bootstrap.ps1` (delayed start, failure actions, file-based keeper task). Lesson: scheduled tasks run a `.ps1`
-file, never an inline `-Command` string.
-
-## Step 3 — MT5 terminal, EA deploy, live start-up (done 2026-09-15, data-feed check pending)
-
-**Session model (why):** MT5 cannot create chart windows in an SSH (session 0) context, and an EA needs a chart. So the
-terminal runs in the console session: `hybridops` auto-logs on at boot (password stored as an LSA secret by Sysinternals
-Autologon, not plaintext registry), the console locks itself 0 s after logon (`hybrid-lock-console` task) and the
-terminal starts 20 s after logon (`hybrid-mt5` task, restarts up to 3× a minute apart). The console is reachable only
-through the Contabo VNC panel. The `hybridops` password lives in `C:\ProgramData\hybrid\secrets\hybridops.password`
-(needed only to re-register tasks after a rebuild).
-
-Over SSH:
-1. `Invoke-WebRequest https://download.mql5.com/cdn/web/oanda.corporation/mt5/oanda5setup.exe -OutFile C:\ProgramData\hybrid\oanda5setup.exe`
-   then `Start-Process … -ArgumentList /auto -Wait` (exit code 1 = it could not launch the GUI; the files are installed).
-2. Autologon: `Autologon64.exe /accepteula hybridops <computer> <password>` (download from live.sysinternals.com).
-3. Tasks: `hybrid-lock-console` (at logon of hybridops: `rundll32 user32.dll,LockWorkStation`), `hybrid-mt5` (at logon
-   + 20 s: `terminal64.exe /config:C:\ProgramData\hybrid\mt5\live.ini`, no stored password = interactive session).
-4. `C:\ProgramData\hybrid\mt5\live.ini` = `provisioning/live.ini` with `Login/Password/Server` inserted under
-   `[Common]` from `secrets\mt5.json` (the template in the repo has no credentials; **a `[Common]` section without
-   them makes the terminal start logged-out**). `[Experts] Enabled=1 AllowLiveTrading=1 AllowDllImport=0` arms
-   AutoTrading (§11-8). `[StartUp]` attaches `HybridForwardTest-live` to EURUSD H4 with `MQL5\Presets\hft_live.set`.
-5. Deploy (built locally by `pipeline/mt5_build_ea.sh`, copied with `scp`): `MQL5\Experts\HybridForwardTest-live.ex5`,
-   `MQL5\Indicators\HybridTriEMA.ex5`, `MQL5\Presets\hft_live.set` (= `provisioning/hft_live.set`),
-   `Common\Files\econ_events.csv`. Data dir: `C:\Users\hybridops\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552AE0B5EAEFB04866EB`;
-   queue root: `C:\Users\hybridops\AppData\Roaming\MetaQuotes\Terminal\Common\Files\live`.
-6. Reboot; expect: `terminal64` in session 1, terminal log `authorized on <server>` + `trading has been enabled`,
-   expert log `HybridForwardTest ACTIVE [LIVE(queue)]`, `live\heartbeat_EURUSD.json` rewritten every 60 s with
-   `terminal_trade_allowed:true, mql_trade_allowed:true`.
-
-**Six charts, one EA each (2026-09-16):** MT5's `[StartUp]` attaches one expert to one chart and the profile only
-persists charts on a graceful exit, so the EA is attached by scripts instead: `HybridSaveTemplate` (run ONCE on a chart
-with the live EA attached: `[StartUp] Expert=HybridForwardTest-live … Script=HybridSaveTemplate`) saves
-`MQL5\Profiles\Templates\hybrid_live.tpl` = the EA + all its inputs; the permanent `live.ini` runs
-`[StartUp] Script=HybridLiveLauncher` (host chart EURUSD.sim H4), which opens one H4 chart per lineup symbol (input
-`InpSymbols`), applies the template to any chart without the EA, and closes non-lineup charts. Idempotent on every
-terminal start. Both scripts live in `mql5/scripts/`, compiled `.ex5` deployed to `MQL5\Scripts\`. After an EA
-rebuild: copy the new `.ex5`, Stop-Process the terminal, Start-ScheduledTask hybrid-mt5 (the template references the
-file by path, so every chart loads the new build). The template must be re-saved only if the EA's INPUTS change
-(`hft_live.set` is no longer what the charts read - the template is).
-
-**Symbol naming:** OANDA's MT5 servers suffix symbols with `.sim` (`EURUSD.sim`); a `[StartUp] Symbol=EURUSD` chart never
-synchronises and the EA is removed after 5 min ("symbol synchronization timeout"). The queue files are therefore
-`heartbeat_EURUSD.sim.json`, `signals/EURUSD.sim-*.json`, journals `EURUSD.sim_YYYYMM.csv`; `risk_mult.json` keys use the
-root (`EURUSD`). An FTMO server uses plain `EURUSD` — ini change only. Verified 2026-09-15 21:59 UTC: heartbeat every
-60 s on the wall clock, `account_login` set, equity 25 000, `terminal_trade_allowed`/`mql_trade_allowed` true,
-`trading_enabled` false (no `config\trading_enabled.json` yet — the kill switch stays off until the shadow period).
-
-## Step 4 — web app, monitor (notifier + watchdog), advisor runner (done 2026-09-15)
-
-Runtime (over SSH, once): Python 3.12 (`python-3.12.6-amd64.exe /quiet InstallAllUsers=1 PrependPath=1`) + `pip install
-pillow certifi matplotlib`; Node 22 (`node-v22.11.0-x64.msi /qn`) + `npm i -g @anthropic-ai/claude-code`.
-Layout: `C:\ProgramData\hybrid\live\{live\*.py, live_config.json, hybrid-*.cmd}`; advisor tree
-`C:\ProgramData\hybrid\advisor\live\{quick-reference.html, advisor\{CLAUDE.md (= CLAUDE.live.md), library\,
-.claude\settings.json, notes.live.md, verdicts.live.log, bundles\}}`; logs `C:\ProgramData\hybrid\logs\`.
-
-Deploy from the workstation: `provisioning/deploy_live.sh` (copies code + `provisioning/live_config.vps.json` + the
-live advisor material, runs `provisioning/live_tasks.ps1`, restarts the tasks, checks `/health` over the tunnel).
-`--code` skips the advisor material. Tasks `hybrid-web`, `hybrid-monitor`, `hybrid-advisor`: at startup + 45 s, as
-`hybridops` with the stored password, restart every minute on failure, each runs its `.cmd` (never inline commands).
-Firewall: `Hybrid web over WireGuard` = TCP 8080 on `10.77.0.1` only. The advisor folder is pre-trusted in
-`C:\Users\hybridops\.claude.json` (otherwise its `settings.json` permissions are ignored).
-
-Web app: `http://10.77.0.1:8080` from any WireGuard peer (phone = 10.77.0.3). No login (trader ruling 2026-09-15:
-the tunnel is the boundary); plain HTTP inside the tunnel. Verify after any deploy or reboot: `/health` returns
-`{"ok":true}`, dashboard shows `EA alive` with a fresh beat, `hybrid-monitor.task.log` shows a successful Telegram
-send (the daily summary fires once after start when past 21:05 UTC).
-
-**Calendar (coach ruling 2026-09-16, same source made live):** `live/calendar_refresh.py`, run by the monitor daily at
-02:30 UTC (and on start if the deployed file is >1.5 d old). Pulls ForexFactory's official
-`ff_calendar_thisweek.xml` (the ONLY rolling file - `nextweek` does not exist; GMT times; stable series id in `<url>`),
-snapshots it under `C:\ProgramData\hybrid\calendar\snapshots\`, accumulates rows into `forward.json` keyed by
-(series id, UTC date) so re-pulls replace revised times, then FULLY REBUILDS: history (`history\ff_combined.csv`,
-rows before the store's first day) + forward store → `pipeline\normalize_econ_tzfix.py` (classes from
-`config\event_classes.yaml`, `config\political_events.csv` merged) → `pipeline\test_calendar_coverage.py` must exit 0
-→ sanity (row count, coverage end ≥ today, V-class present in the forward window) → atomic replace of
-`Common\Files\econ_events.csv`. Every EA instance reloads the file once a day after 03:00 UTC (`events_reload`
-audit line; heartbeat carries `events_count`/`events_last_utc`). Monitor alerts: refresh failure, file >7 d old,
-coverage <3 d. Needs PyYAML on the box (`pip install pyyaml`). Deploy the pipeline with `deploy_live.sh --calendar`.
-Forward layers (coach rulings 2026-09-16): FF's ≤7-day window covers every binding V rule (entry-time, <6 h).
-`config/official_schedule.csv` (year-ahead FOMC / ECB / BoE / NFP / US CPI dates from the publishers, UTC) is merged
-UNDER FF by the normaliser (FF wins on the same release/ccy/UTC date) for the events panel and the advisory line only;
-engineer maintains it (BLS next-year schedule lands in Q4; BoE 2027 provisional), coach reviews annually. Elections:
-`config/political_events.csv` (14-day NO-HOLD gate) - engineer drafts 12 months ahead in `political_events.draft.csv`,
-coach reviews before the rows are appended and deployed, quarterly refresh.
-
-Gotchas found: (1) a child `claude` inherits `CLAUDE_*` variables from a parent Claude Code session and hangs — the
-runner scrubs them; (2) Python's default cert store on a fresh Windows box fails Telegram's chain — `certifi` is used
-when present; (3) `.sim` symbol suffix (step 3).
-
-## Step 5 — backup / restore and the Windows Update maintenance window
-_Pending._
+## Step 5 — operations
+- **Maintenance:** `hybrid-maintenance` (Saturday 14:00 UTC) sends "MAINTENANCE: shutting down", stops MT5 gracefully,
+  installs Windows updates (PSWindowsUpdate, installed on first run), reboots. The monitor then sends "ALL SYSTEMS UP"
+  once all six EAs heartbeat + feed + web are up, or "REBOOT RECOVERY INCOMPLETE" after 10 min. Friday 18:00 UTC:
+  Contabo-snapshot reminder. Reboot drill = `powershell -File C:\ProgramData\hybrid\maintenance.ps1 -NoUpdates`.
+- **Backups:** trader clicks **Download backup (30 d)**; keep the zips in KeePassXC/OneDrive. Restore = step 3.5.
+- **Calendar:** refreshed daily 02:30 UTC by the monitor (ForexFactory this-week XML → forward store → full rebuild
+  → coverage test → atomic swap); EAs reload after 03:00 UTC; alerts on failure / >7 d stale / coverage <3 d.
+  `official_schedule.csv` (year-ahead FOMC/ECB/BoE/NFP/CPI, FF wins on overlap) and `political_events.csv` (elections,
+  coach-reviewed forward batches, pending items in `political_events.draft.csv`) are deployed with `deploy_live.sh --calendar`.
+- **Kill switch:** dashboard button writes `config\trading_enabled.json`; missing file = disabled (fail closed).
+- **Deploy path for code:** `deploy_live.sh --code` (services restart, ~10 s); EA: step 3.7.
 
 ## Recovery quick-reference
-_Pending (filled in with the first real recovery drill, spec §7)._
+| symptom | do |
+|---|---|
+| SSH times out, tunnel handshakes | console → `Start-Service sshd`; if it keeps dying: `sc.exe qfailure sshd`, `Get-ScheduledTask hybrid-sshd-keeper` |
+| SSH times out, no handshake | Contabo console: `Get-Service WireGuardTunnel$wg0`, `C:\ProgramData\WireGuard\wg0.conf` intact? public IP changed? |
+| dashboard "EA STALE" for all symbols | `Get-Process terminal64`? none → `Start-ScheduledTask hybrid-mt5` (the monitor does this itself, 3 tries/30 min). Present → expert log (`MQL5\Logs\<date>.log`): `symbol synchronization timeout` = wrong symbol name; `INERT` = AutoTrading/ini issue |
+| one symbol missing | `Launcher:` line in the expert log; `hybrid_live.tpl` present? re-run step 3.6 if the template is gone |
+| AutoTrading disarmed alert | `live.ini [Experts] Enabled=1 AllowLiveTrading=1`, restart `hybrid-mt5` |
+| web down | monitor restarts `hybrid-web` after 3 misses; else `Get-Content C:\ProgramData\hybrid\logs\hybrid-web.task.log -Tail 20` |
+| advisor consult FAILED | `hybrid-advisor.task.log`; token expired → `claude setup-token` on the trader's PC, replace `secrets\advisor.token`, restart task; "workspace not trusted" → re-run `live_tasks.ps1` |
+| calendar stale / refresh failed | `C:\ProgramData\hybrid\logs\calendar.log`; run `calendar_refresh.py` by hand; FF 429 = wait; coverage test failure = history file corrupt → redeploy `--calendar` |
+| Telegram silent | dashboard **Telegram test**; `secrets\telegram.token` / `chat_id`; certifi installed? |
+| box lost entirely | steps 1–5 + restore the latest backup zip (step 3.5); minutes-to-trading-ready: not yet measured (drill waived by the trader 2026-09-16) |

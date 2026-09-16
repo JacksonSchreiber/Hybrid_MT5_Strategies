@@ -87,6 +87,14 @@ def dashboard(q: dict) -> str:
         flags = "" if not hb else ("" if hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed") else ' <span class="pill bad">AutoTrading OFF</span>')
         out.append(f'<div class="card"><div class="row"><span class="big">{E(sym)}</span><span class="pill {"ok" if alive else "bad"}">{"EA alive" if alive else "EA STALE / STOPPED"}</span>{flags}<span class="k">beat {C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</span></div>'
                    + (ftmo_block(hb) if hb else "") + (f'<div class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</div>' if hb and hb.get("alerts") else "") + '</div>')
+    # backup + telegram test (trader rulings 2026-09-16: manual 30-day zip instead of a nightly pull)
+    from live import backup
+    ds = backup.days_since(CFG); lb = backup.last(CFG)
+    if ds is None: bcls, btxt = "bad", "never backed up"
+    else: bcls = "ok" if ds < 15 else ("warn" if ds < 25 else "bad"); btxt = f"{ds:.0f} day{'s' if ds >= 1.5 else ''} since last backup"
+    out.append(f'<div class="card"><div class="row"><div><div class="k">Backup</div><div class="big {bcls}">{E(btxt)}</div><div class="k">{E(lb["name"]) if lb else "zip of the last 30 days: journals, queue, state, verdicts, calendar, MT5 presets"}</div></div>'
+               f'<a class="btn" href="/backup.zip" style="margin-left:auto" onclick="setTimeout(function(){{location.reload()}},4000)">Download backup (30 d)</a>'
+               f'<form method="post" action="/telegram_test" class="inline"><button class="btn">Telegram test</button></form></div></div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
     out.append("<h2>Pending signals</h2>")
@@ -333,6 +341,12 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(sym) or tf not in mt5feed.TF: return self._send("bad request", "text/plain", 400)
                 b = mt5feed.bars(sym, tf, n); k = mt5feed.tick(sym)
                 return self._send(json.dumps({"symbol": sym, "tf": tf, "bars": b, "tick": k, "ts": C.now_iso(), "live": b is not None}, separators=(",", ":")), "application/json")
+            if parts[0] == "backup.zip":
+                from live import backup
+                data, name, man = backup.build(CFG, 30); backup.record(CFG, man, name)
+                C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backup|{name}|{len(data)}B|{man['files']} files|by=web")
+                self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
             if parts[0] == "health": return self._send(json.dumps({"ok": True, "ts": C.now_iso()}), "application/json")
             if parts[0] == "signal" and len(parts) == 2: return self._send(signal_page(parts[1], q))
             if parts[0] == "position" and len(parts) == 2: return self._send(position_page(parts[1], q))
@@ -359,6 +373,9 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(key) or not C.signal(CFG, key) or not text: return self._redirect("/", "bad reply", False)
                 C.atomic_write_json(os.path.join(CFG["root"], "advisor", "replies", f"{key}-{C.now_utc().strftime('%Y%m%dT%H%M%S')}.json"), {"signal_key": key, "text": text[:4000], "ts": C.now_iso()})
                 return self._redirect(f"/signal/{key}", "reply queued — the answer appears here in ~10-30 s", True)
+            if u.path == "/telegram_test":
+                ok = C.telegram_send(CFG, f"Test from the web app ({C.now_iso()}). If you read this, alerts from the box reach you.", LOG)
+                return self._redirect("/", "Telegram test sent" if ok else "Telegram send FAILED - check token/chat id/network on the box", ok)
             if u.path == "/kill":
                 en = form.get("enable") == "1"; C.set_kill_switch(CFG, en)
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|kill_switch|{'enabled' if en else 'disabled'}|by=web")

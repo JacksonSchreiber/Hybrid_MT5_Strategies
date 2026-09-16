@@ -40,5 +40,13 @@
     "refresh_utc": "02:30",
     "stale_days": 7,
     "python": "C:\\Program Files\\Python312\\python.exe"
-  }
+  },
+  "expected_symbols": [
+    "EURUSD.sim",
+    "GBPUSD.sim",
+    "US100.sim",
+    "US500.sim",
+    "USOIL.sim",
+    "XAUUSD.sim"
+  ]
 }
