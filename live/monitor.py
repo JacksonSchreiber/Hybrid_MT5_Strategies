@@ -191,8 +191,12 @@ class Monitor:
             try: boot_s = float(subprocess.run(["powershell", "-NoProfile", "-Command", "((Get-Date)-(Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds"], capture_output=True, text=True, timeout=30).stdout.strip())
             except Exception: pass
         self.log(f"monitor up (dry={self.dry}); uptime_s={boot_s}")
-        self.boot_check_due = (boot_s is not None and boot_s < 900); self.boot_t0 = time.time()
-        if self.boot_check_due: self.send(f"Box is back up (monitor started {int(boot_s)} s after boot). Checking MT5, the EAs, the feed and the web app now…")
+        # one boot check per boot: a service restart inside the first 15 min must not re-announce a reboot
+        boot_key = str(int(time.time() - boot_s)) if boot_s is not None else ""
+        self.boot_check_due = (boot_s is not None and boot_s < 900 and abs(int(self.st.get("last_boot_checked", "0") or 0) - int(boot_key or 0)) > 30); self.boot_t0 = time.time()
+        if self.boot_check_due:
+            self.st["last_boot_checked"] = boot_key; self.save()
+            self.send(f"Box is back up (monitor started {int(boot_s)} s after boot). Checking MT5, the EAs, the feed and the web app now...")
         while True:
             self.tick()
             if self.boot_check_due: self.boot_check()

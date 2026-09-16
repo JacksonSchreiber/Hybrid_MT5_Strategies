@@ -20,6 +20,17 @@ foreach ($name in $svc.Keys) {
   $set = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable
   Register-ScheduledTask -TaskName $name -Action $act -Trigger $trg -Settings $set -User 'hybridops' -Password $pw -RunLevel Highest -Force | Out-Null
 }
+# services keeper (SYSTEM, at startup +90 s then every 5 min): starts any hybrid-web/monitor/advisor task that is not
+# running. Boot triggers of user tasks proved unreliable on 2026-09-16 (web+monitor did not launch after a reboot).
+$keeper = 'C:\ProgramData\hybrid\services-keeper.ps1'
+Set-Content -Path $keeper -Encoding ascii -Value @'
+foreach ($t in "hybrid-web","hybrid-monitor","hybrid-advisor") { $s = (Get-ScheduledTask $t -ErrorAction SilentlyContinue).State; if ($s -and $s -ne "Running") { Start-ScheduledTask $t } }
+'@
+$kAct = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $keeper"
+$kT1 = New-ScheduledTaskTrigger -AtStartup; $kT1.Delay = 'PT90S'
+$kT2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskName 'hybrid-services-keeper' -Action $kAct -Trigger @($kT1, $kT2) -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+wevtutil set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true 2>$null
 # weekly maintenance window: Saturday 14:00 UTC (trader ruling 2026-09-16), runs provisioning/maintenance.ps1 as SYSTEM
 $mAct = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\hybrid\maintenance.ps1'
 $mTrg = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At 14:00
