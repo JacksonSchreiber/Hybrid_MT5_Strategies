@@ -15,7 +15,7 @@ BG = (13, 17, 23); GRID = (30, 36, 46); TXT = (201, 209, 217); DIM = (110, 118, 
 UP = (63, 185, 80); DN = (248, 81, 73); BLUE = (88, 166, 255)
 EMA_COL = {20: (255, 215, 0), 50: (0, 191, 255), 200: (238, 130, 238)}
 ZONE = (255, 215, 0, 56); ZONE2 = (0, 191, 255, 48); LEG = (238, 130, 238); SWING = (201, 209, 217)
-H4_BARS = 120; D1_BARS = 130
+H4_BARS = 90; D1_BARS = 130
 
 def _font(size: int):
     for cand in ("DejaVuSans.ttf", "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
@@ -37,7 +37,8 @@ def _price_range(bars, extra: list[float]) -> tuple[float, float]:
     return lo - pad, hi + pad
 
 def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict | None = None, n_show: int = H4_BARS,
-           signal_t: int | None = None, size=(1000, 520), digits: int = 5, marks: list[tuple[int, str]] | None = None) -> Image.Image:
+           signal_t: int | None = None, size=(1000, 520), digits: int = 5, marks: list[tuple[int, str]] | None = None,
+           strategy: str = "", imbal: bool = False) -> Image.Image:
     """bars: [[t_epoch,o,h,l,c,v]] oldest->newest (all of them; EMAs are computed on the full series)."""
     W, H = size; pad_l, pad_r, pad_t, pad_b = 12, 92, 30, 28
     img = Image.new("RGB", (W, H), BG); d = ImageDraw.Draw(img, "RGBA")
@@ -69,13 +70,30 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
         t = datetime.fromtimestamp(show[i][0], timezone.utc)
         d.line([(X(i), y1), (X(i), y1 + 4)], fill=DIM)
         d.text((X(i) - 20, y1 + 6), t.strftime("%d %b" if n_show > 100 else "%d %b %H:%M"), fill=DIM, font=f_small)
-    # overlay zones (behind candles)
+    # overlay zones (behind candles): zone / zone2 span zone.from..zone.to exactly as the tester rectangles
+    z_from = z_to = None
     if overlay:
+        zz = overlay.get("zone") or {}
+        z_from = t_index.get(_epoch(zz.get("from"))); z_to = t_index.get(_epoch(zz.get("to")))
         for z, col in (("zone", ZONE), ("zone2", ZONE2)):
             zz = overlay.get(z) or {}
             if zz.get("hi", 0) > 0 and zz.get("lo", 0) > 0:
-                xa = X(t_index.get(_epoch(zz.get("from")), 0)) if z == "zone" and zz.get("from") else x0
-                d.rectangle([xa, Y(zz["hi"]), x1, Y(zz["lo"])], fill=col)
+                xa = X(z_from) if z_from is not None else x0; xb = X(z_to) if z_to is not None else x1
+                d.rectangle([xa - bw, Y(zz["hi"]), xb + bw, Y(zz["lo"])], fill=col, outline=(col[0], col[1], col[2], 160))
+    # imbalances (FVG / gap / volume spike) from the bars, as DrawImbalances: purple boxes to the last bar + midline
+    if imbal:
+        from live import overlays as OV
+        for zb in OV.imbalances(bars if n_show >= len(bars) else bars, 120, 2.0, 15):
+            i0 = t_index.get(zb["t0"])
+            if i0 is None: continue
+            col = (147, 112, 219, 40 if zb["state"] == 0 else 22)
+            d.rectangle([X(i0) - bw // 2, Y(zb["hi"]), x1, Y(zb["lo"])], fill=col, outline=(147, 112, 219, 110))
+            mid = (zb["hi"] + zb["lo"]) / 2; _dashed(d, X(i0), x1, Y(mid), (147, 112, 219, 140), 3, 5)
+        for sw in OV.swings(bars, 14):
+            i = t_index.get(sw["t"])
+            if i is None: continue
+            if sw["kind"] == "hi": d.text((X(i) - 4, Y(sw["p"]) - 15), "v", fill=SWING, font=f_small)
+            else: d.text((X(i) - 4, Y(sw["p"]) + 2), "^", fill=SWING, font=f_small)
     # candles
     for i, b in enumerate(show):
         t, o, h, l, c = b[0], b[1], b[2], b[3], b[4]
@@ -90,18 +108,24 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
         pts = [(X(i), Y(v)) for i, v in enumerate(series[-n:])]
         if len(pts) > 1: d.line(pts, fill=EMA_COL[nper], width=2 if nper == 200 else 1)
     # overlay: leg, aux levels, swings
+    leg = (overlay or {}).get("leg") or {}
     if overlay:
-        leg = overlay.get("leg") or {}
         if leg.get("p0", 0) > 0 and leg.get("p1", 0) > 0:
             i0 = t_index.get(_epoch(leg.get("t0"))); i1 = t_index.get(_epoch(leg.get("t1")))
             if i0 is not None and i1 is not None: d.line([(X(i0), Y(leg["p0"])), (X(i1), Y(leg["p1"]))], fill=LEG, width=2)
+        lx = X(z_to) + 6 if z_to is not None else x0 + 4
         for a in overlay.get("aux") or []:
             if a.get("price", 0) > 0:
-                _dashed(d, x0, x1, Y(a["price"]), (160, 160, 160)); d.text((x0 + 4, Y(a["price"]) - 13), a.get("label", ""), fill=(160, 160, 160), font=f_small)
+                _dashed(d, x0, x1, Y(a["price"]), (192, 192, 192), 2, 4); d.text((lx, Y(a["price"]) - 13), a.get("label", ""), fill=(192, 192, 192), font=f_small)
+        if strategy == "DeepFib" and leg.get("p0", 0) > 0 and leg.get("p1", 0) > 0:
+            from live import overlays as OV
+            for price, lab, gp in OV.fib_levels(leg):
+                col = (255, 215, 0) if gp else (150, 150, 150)
+                _dashed(d, x0, x1, Y(price), col, 4 if gp else 2, 4); d.text((x1 - 70, Y(price) - 13), lab, fill=col, font=f_small)
         for key, mark in (("swings_hi", "v"), ("swings_lo", "^")):
             for s in overlay.get(key) or []:
                 i = t_index.get(_epoch(s.get("t")))
-                if i is not None: d.text((X(i) - 4, Y(s["p"]) - (14 if mark == "v" else 2)), mark, fill=SWING, font=f_small)
+                if i is not None: d.text((X(i) - 4, Y(s["p"]) - (14 if mark == "v" else 2)), mark, fill=(255, 200, 120), font=f_small)
     # levels
     for key, col, lab in (("entry", UP, "entry"), ("sl", DN, "SL"), ("tp1", BLUE, "TP1"), ("tp2", BLUE, "TP2")):
         p = lv.get(key)
@@ -146,7 +170,7 @@ def render_signal(sig: dict, out_dir: str, fresh: bool = False) -> tuple[str, st
     head = f"{sig['symbol']}  {sig['strategy']} {sig['direction']}  #{sig['signal_id']}  {sig.get('sigtime_text', '')}"
     sig_t = _epoch(sig.get("signal_time"))
     lv = sig.get("levels") or {}
-    render(signal_bars(sig, "h4"), title="H4  " + head, levels=lv, overlay=sig.get("overlay"), n_show=H4_BARS, signal_t=sig_t, digits=digits).save(p_h4 + ".tmp", "PNG"); os.replace(p_h4 + ".tmp", p_h4)
+    render(signal_bars(sig, "h4"), title="H4  " + head, levels=lv, overlay=sig.get("overlay"), n_show=H4_BARS, signal_t=sig_t, digits=digits, strategy=sig.get("strategy", ""), imbal=True).save(p_h4 + ".tmp", "PNG"); os.replace(p_h4 + ".tmp", p_h4)
     render(signal_bars(sig, "d1"), title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
     return p_h4, p_d1
 

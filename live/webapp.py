@@ -171,10 +171,10 @@ def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None
     data = {"symbol": sig["symbol"], "live": live_feed, "bars_h4": sig.get("bars_h4") or [], "bars_d1": sig.get("bars_d1") or [],
             "levels": levels or sig.get("levels") or {},
             "overlay": {k: ov.get(k) for k in ("zone", "zone2", "leg", "aux", "swings_hi", "swings_lo")},
-            "signal_t": charts._epoch(sig.get("signal_time")), "digits": charts._digits(sig), "marks": marks or []}
+            "signal_t": charts._epoch(sig.get("signal_time")), "digits": charts._digits(sig), "marks": marks or [], "strategy": sig.get("strategy", "")}
     tvs = C.tv_symbol(CFG, sig["symbol"]); link = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
     return (f'<div class="card" style="padding:6px"><div class="hc"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
-            f'<span class="k">EMA <span style="color:#ffd700">20</span> <span style="color:#00bfff">50</span> <span style="color:#ee82ee">200</span> · zone, leg, swings from the detector</span>'
+            f'<span class="k">EMA <span style="color:#ffd700">20</span> <span style="color:#00bfff">50</span> <span style="color:#ee82ee">200</span> · zone · <span style="color:#9370db">imbalances</span> · swings · fib (DeepFib)</span>'
             f'<span class="k hc-status" style="margin-left:auto"></span><a href="{link}" target="_blank">TradingView ↗</a></div><div class="hc-box" style="width:100%"></div></div>'
             f'<script src="/static/lw.js"></script><script src="/static/hybrid_chart.js"></script><script>HybridChart.mount(document.currentScript.previousElementSibling.previousElementSibling.previousElementSibling, {json.dumps(data, separators=(",", ":"))});</script></div>')
 
