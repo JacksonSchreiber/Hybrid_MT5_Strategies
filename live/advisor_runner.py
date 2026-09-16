@@ -20,7 +20,7 @@ from live import common as C
 from live import charts
 
 SESSION_NS = uuid.UUID("5f0a3c1e-9b7d-4c1a-8f2e-2d3b4a5c6d7e")
-ALLOWED = "Read,Glob,Grep,Write(verdicts.live.log),Edit(verdicts.live.log),Write(notes.live.md),Edit(notes.live.md)"
+ALLOWED = "Read,Glob,Grep,Write(notes.live.md),Edit(notes.live.md)"   # the RUNNER writes verdicts.live.log from the LOG: line
 DISALLOWED = "Bash,WebFetch,WebSearch,Task,Agent,NotebookEdit"
 
 def session_id(key: str) -> str: return str(uuid.uuid5(SESSION_NS, key))
@@ -126,14 +126,20 @@ def run_claude(cfg: dict, prompt: str, *, sid: str, resume: bool, log) -> dict:
 
 VERDICT_RE = re.compile(r"VERDICT:\s*([A-Z]+(?: \(default\))?)[^\n]*?\((quick|deep)\)[^\n]*?confidence:\s*(low|medium|high)", re.I)
 
+LOG_RE = re.compile(r"^\s*LOG:\s*(.+?)\s*$", re.M)
+
+def split_log(text: str) -> tuple[str, str | None]:
+    """returns (text without the LOG: line, the LOG: payload or None)."""
+    m = LOG_RE.search(text or "")
+    if not m: return text, None
+    return (text[:m.start()] + text[m.end():]).rstrip(), m.group(1).strip()
+
 def ensure_log_line(cfg: dict, sig: dict, text: str, kind: str, log) -> None:
-    """the role file asks the model to append the log line itself; if the tail has no line for this signal, synthesize one."""
+    """the runner owns verdicts.live.log: prefix ts|symbol|#id, then the model's LOG: fields; synthesize if absent."""
     p = os.path.join(cfg["advisor"]["live_dir"], "verdicts.live.log"); tag = f"#{sig['signal_id']}"
-    try:
-        with open(p, encoding="utf-8", errors="replace") as f: tail = f.read().splitlines()[-40:]
-    except OSError: tail = []
-    if any(f"| {sig['symbol']} | {tag} |" in l for l in tail if (kind == "reply") == ("reply" in l.split("|")[-1].lower() or "| reply" in l)):
-        return
+    _, payload = split_log(text)
+    if payload:
+        C.append_line(p, " | ".join([C.now_iso(), sig["symbol"], tag, payload])); return
     m = VERDICT_RE.search(text or "")
     v = f"{m.group(1).upper()} ({m.group(2).lower()}, {m.group(3).lower()})" if m else "UNPARSED"
     sh = re.search(r"regime\s*([✓✗?])\s*news\s*([✓✗?])\s*correlation\s*([✓✗?])", text or ""); steps = re.search(r"steps:\s*([0-9✓✗? ]+)", text or "")
@@ -159,17 +165,20 @@ class Runner:
         bdir = write_bundle(sig, self.cfg)
         rel = os.path.relpath(bdir, self.cfg["advisor"]["live_dir"]).replace("\\", "/")
         prompt = (f"#{sig['signal_id']} — LIVE signal {sig['symbol']} {sig.get('strategy')} {sig.get('direction')}. "
-                  f"Bundle: {rel}/setup.md, {rel}/h4.png, {rel}/d1.png. Read all three, then answer with the scorecard "
-                  f"and append the verdict line to verdicts.live.log (symbol {sig['symbol']}, signal #{sig['signal_id']}).")
+                  f"Bundle: {rel}/setup.md, {rel}/h4.png, {rel}/d1.png. Read all three, then answer with the full scorecard. "
+                  f"Do NOT write to verdicts.live.log yourself and do not use shell commands (none are available): the runner appends the log line. "
+                  f"End your answer with one final line starting with 'LOG: ' followed by the verdict-log fields after the '#id' field, i.e. "
+                  f"'LOG: {sig.get('strategy')} {sig.get('direction')} | <VERDICT> (quick, <confidence>) | SH:<regime><news><corr> steps:<...> | Q:<A|B|C|-> | step: <decisive step> | <one-clause reason>' "
+                  f"using the glyphs ✓ ✗ ? exactly as in the role file (e.g. 'SH:✓✓✗ steps:1✓2✗3✗4?5?6✓').")
         self.log(f"{key}: consult start (session {rec['session_id'][:8]})")
         with self.lock:
             r = run_claude(self.cfg, prompt, sid=rec["session_id"], resume=False, log=self.log)
             if not r["ok"] and "already in use" in (r.get("error") or "").lower():
                 r = run_claude(self.cfg, prompt, sid=rec["session_id"], resume=True, log=self.log)
+        if r.get("ok"): ensure_log_line(self.cfg, sig, r["text"], "verdict", self.log); r["text"] = split_log(r["text"])[0]
         entry = {"ts": C.now_iso(), "kind": "verdict", "prompt": prompt, **r}
         rec["consults"].append(entry); rec["delay_count"] = sig.get("delay_count", 0); rec["status_at_consult"] = sig.get("status")
         save_record(self.cfg, rec)
-        if r["ok"]: ensure_log_line(self.cfg, sig, r["text"], "verdict", self.log)
         self.log(f"{key}: consult {'ok' if r['ok'] else 'FAILED'} in {r.get('elapsed_s')}s" + ("" if r["ok"] else f": {r.get('error')}"))
         return rec
 
@@ -178,9 +187,10 @@ class Runner:
         if not rec or not sig:
             self.log(f"{key}: reply ignored (no verdict record / signal)"); return
         self.log(f"{key}: reply -> session {rec['session_id'][:8]}")
+        text = text + "\n\n(Answer in the same session. Do not write files; end with one line 'LOG: reply | <one-clause summary of what changed, or unchanged>'.)"
         with self.lock: r = run_claude(self.cfg, text, sid=rec["session_id"], resume=True, log=self.log)
-        rec["consults"].append({"ts": C.now_iso(), "kind": "reply", "prompt": text, **r}); save_record(self.cfg, rec)
-        if r["ok"]: ensure_log_line(self.cfg, sig, r["text"], "reply", self.log)
+        rec["consults"].append({"ts": C.now_iso(), "kind": "reply", "prompt": text.split("\n\n(Answer in the same session")[0], **r}); save_record(self.cfg, rec)
+        if r["ok"]: ensure_log_line(self.cfg, sig, r["text"], "reply", self.log); r["text"] = split_log(r["text"])[0]; rec["consults"][-1]["text"] = r["text"]; save_record(self.cfg, rec)
         os.replace(reply_file, os.path.join(os.path.dirname(reply_file), "done", os.path.basename(reply_file)))
         self.log(f"{key}: reply {'ok' if r['ok'] else 'FAILED'} in {r.get('elapsed_s')}s")
 
