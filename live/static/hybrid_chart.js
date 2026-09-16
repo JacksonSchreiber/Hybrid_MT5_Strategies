@@ -22,8 +22,13 @@
       var cs, emaS = {}, closes = [], barsAll = [];
       function setStatus(tick) { if (!status) return; status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live') : (d.live ? 'feed unavailable' : 'bars as of the signal'); }
       function update(last, tick) {
-        last.forEach(function (b) { var i = barsAll.findIndex(function (x) { return x[0] === b[0]; }); if (i >= 0) barsAll[i] = b; else if (!barsAll.length || b[0] > barsAll[barsAll.length - 1][0]) barsAll.push(b); });
-        last.forEach(function (b) { cs.update({ time: b[0], open: b[1], high: b[2], low: b[3], close: b[4] }); });
+        // series.update() accepts only the current bar or a newer one: push the forming bar and any new bar, never older ones
+        var lastT = barsAll.length ? barsAll[barsAll.length - 1][0] : 0;
+        last.sort(function (a, b) { return a[0] - b[0]; }).forEach(function (b) {
+          if (b[0] < lastT) return;
+          if (b[0] === lastT) barsAll[barsAll.length - 1] = b; else barsAll.push(b);
+          try { cs.update({ time: b[0], open: b[1], high: b[2], low: b[3], close: b[4] }); } catch (e) { console.log('update skipped', e); }
+        });
         closes = barsAll.map(function (b) { return b[4]; });
         [20, 50, 200].forEach(function (n) { var e = ema(closes, n); emaS[n].setData(barsAll.map(function (b, i) { return { time: b[0], value: e[i] }; }).slice(n)); });
         setStatus(tick);
