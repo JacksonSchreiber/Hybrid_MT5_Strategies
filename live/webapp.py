@@ -7,7 +7,7 @@ Every task written and every ack received is appended to <root>/web/web_audit.lo
 the boundary (trader ruling 2026-09-15); HTTP inside WireGuard.
 """
 from __future__ import annotations
-import html, json, os, sys, urllib.parse, threading
+import hashlib, html, json, os, sys, urllib.parse, threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -174,10 +174,11 @@ def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None
             "overlay": {k: ov.get(k) for k in ("zone", "zone2", "leg", "aux", "swings_hi", "swings_lo")},
             "signal_t": charts._epoch(sig.get("signal_time")), "digits": charts._digits(sig), "marks": marks or [], "strategy": sig.get("strategy", "")}
     tvs = C.tv_symbol(CFG, sig["symbol"]); link = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
-    return (f'<div class="card" style="padding:6px"><div class="hc"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
+    cid = "hc_" + hashlib.md5(sig["signal_key"].encode()).hexdigest()[:8]
+    return (f'<div class="card" style="padding:6px"><div class="hc" id="{cid}"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
             f'<span class="k">EMA <span style="color:#ffd700">20</span> <span style="color:#00bfff">50</span> <span style="color:#ee82ee">200</span> · zone · <span style="color:#9370db">imbalances</span> · swings · fib (DeepFib)</span>'
             f'<span class="k hc-status" style="margin-left:auto"></span><a href="{link}" target="_blank">TradingView ↗</a></div><div class="hc-box" style="width:100%"></div></div>'
-            f'<script src="/static/lw.js?v={STATIC_V}"></script><script src="/static/hybrid_chart.js?v={STATIC_V}"></script><script>HybridChart.mount(document.currentScript.previousElementSibling.previousElementSibling.previousElementSibling, {json.dumps(data, separators=(",", ":"))});</script></div>')
+            f'<script src="/static/lw.js?v={STATIC_V}"></script><script src="/static/hybrid_chart.js?v={STATIC_V}"></script><script>window.addEventListener("DOMContentLoaded", function () {{ HybridChart.mount("{cid}", {json.dumps(data, separators=(",", ":"))}); }});</script></div>')
 
 def tv_block(symbol: str, interval: int = 240, levels: dict | None = None) -> str:
     """TradingView Advanced Chart widget (loads from tradingview.com on the viewer's device) + deep link to the TV app."""

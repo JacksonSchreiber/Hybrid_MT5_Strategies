@@ -19,8 +19,11 @@
     for (var i = 2; i < w.length - 2 && out.length < 120; i++) { var sh = true, sl = true; for (var k = 1; k <= 2; k++) { if (!(w[i][2] > w[i-k][2] && w[i][2] > w[i+k][2])) sh = false; if (!(w[i][3] < w[i-k][3] && w[i][3] < w[i+k][3])) sl = false; }
       if (sh) out.push({ t: w[i][0], p: w[i][2], kind: 'hi' }); if (sl) out.push({ t: w[i][0], p: w[i][3], kind: 'lo' }); } return out; }
   window.HybridChart = {
-    mount: function (el, d) {
+    mount: function (id, d) {
+      var el = typeof id === 'string' ? document.getElementById(id) : id;
+      if (!el) { console.log('HybridChart: container not found', id); return; }
       var tf = 'h4', chart, box = el.querySelector('.hc-box'), bar = el.querySelector('.hc-bar'), status = el.querySelector('.hc-status'), timer = null, gen = 0;
+      if (!box || !(box instanceof Element)) { if (status) { status.textContent = 'chart error: box element missing (' + (el.tagName || typeof el) + ')'; status.style.color = '#f85149'; } return; }
       function api(tf, n) { return fetch('/api/bars/' + encodeURIComponent(d.symbol) + '?tf=' + tf + '&n=' + n, { cache: 'no-store' }).then(function (r) { return r.json(); }); }
       function start() {
         if (timer) { clearInterval(timer); timer = null; }
