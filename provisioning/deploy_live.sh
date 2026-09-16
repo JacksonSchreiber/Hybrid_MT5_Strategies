@@ -12,11 +12,20 @@ APP='C:/ProgramData/hybrid/live'; ADV='C:/ProgramData/hybrid/advisor/live'
 MODE="${1:-full}"
 log(){ printf '%s\n' "$*" >&2; }
 $SSH "New-Item -ItemType Directory -Force -Path $APP/live/static, $ADV/advisor/.claude, $ADV/advisor/library, C:/ProgramData/hybrid/logs | Out-Null; 'dirs ok'" | tr -d '\r'
-$SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$HOST:$APP/live/"
+$SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$REPO"/live/calendar_refresh.py "$HOST:$APP/live/"
 $SCP "$REPO"/live/static/lw.js "$REPO"/live/static/hybrid_chart.js "$HOST:$APP/live/static/"
 $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
 $SCP "$REPO"/provisioning/live_tasks.ps1 "$HOST:C:/ProgramData/hybrid/live_tasks.ps1"
 log "code + config copied"
+if [[ "$MODE" == "full" || "$MODE" == "--calendar" ]]; then
+  # calendar pipeline: normalizer + classifier + coverage test + rules + history (3 MB) - the box rebuilds econ_events.csv daily
+  CAL='C:/ProgramData/hybrid/calendar'
+  $SSH "New-Item -ItemType Directory -Force -Path $CAL/pipeline, $CAL/config, $CAL/history, $CAL/snapshots, $CAL/build | Out-Null; 'calendar dirs ok'" | tr -d '\r'
+  $SCP "$REPO"/pipeline/normalize_econ_tzfix.py "$REPO"/pipeline/event_classes.py "$REPO"/pipeline/tier0.py "$REPO"/pipeline/test_calendar_coverage.py "$HOST:$CAL/pipeline/"
+  $SCP "$REPO"/config/event_classes.yaml "$REPO"/config/political_events.csv "$HOST:$CAL/config/"
+  $SCP "$REPO"/data/econ/ff_combined.csv "$HOST:$CAL/history/ff_combined.csv"
+  log "calendar pipeline copied"
+fi
 if [[ "$MODE" == "full" ]]; then
   # advisor material: LIVE role only (never the blind CLAUDE.md / notes.md / verdicts.log), quick reference, library
   $SCP "$TRAIN/quick-reference.html" "$HOST:$ADV/quick-reference.html"

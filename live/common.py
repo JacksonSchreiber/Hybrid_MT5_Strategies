@@ -35,6 +35,7 @@ _DEFAULT_CONFIG = {
                    "XAUUSD": "OANDA:XAUUSD", "XAGUSD": "OANDA:XAGUSD", "USOIL": "OANDA:WTICOUSD", "UKOIL": "OANDA:BCOUSD"},
     "tv_widget": True,
     "mt5": {"terminal_path": "C:\\Program Files\\OANDA MetaTrader 5\\terminal64.exe"},
+    "calendar": {"dir": "", "refresh_utc": "02:30", "stale_days": 7, "python": "", "feed_url": ""},
 }
 
 def _deep_merge(a: dict, b: dict) -> dict:

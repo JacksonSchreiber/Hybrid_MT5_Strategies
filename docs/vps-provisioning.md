@@ -8,6 +8,7 @@ commit as any change to the box. Spec: `docs/phase3-live-system-requirements.md`
 |---|---|
 | OS | Windows Server 2022 Datacenter (Contabo image), 8 GB RAM, ~87 GB free on C: |
 | broker/terminal | OANDA MT5 (demo on `OANDA-Demo-1`); the FTMO challenge account, when it arrives, is a second terminal install |
+| lineup (coach ruling 2026-09-16) | `US100.sim US500.sim USOIL.sim XAUUSD.sim` ×1.0, `EURUSD.sim GBPUSD.sim` ×0.5 (`config\risk_mult.json` = `provisioning/risk_mult.json`); one EA instance per chart, per-symbol heartbeats. No US30 (untrained), no USDJPY |
 | ops account | `hybridops` (local Administrators; SSH key-only; built-in `Administrator` denied over SSH) |
 | WireGuard | server `10.77.0.1/24`, UDP `51820`; peers: engineer workstation `10.77.0.2/32`, trader phone `10.77.0.3/32` |
 | inbound allowed | UDP 51820 (WireGuard) and TCP 22 on `10.77.0.1` only. Everything else blocked, RDP disabled (S2) |
@@ -100,6 +101,17 @@ Over SSH:
    expert log `HybridForwardTest ACTIVE [LIVE(queue)]`, `live\heartbeat_EURUSD.json` rewritten every 60 s with
    `terminal_trade_allowed:true, mql_trade_allowed:true`.
 
+**Six charts, one EA each (2026-09-16):** MT5's `[StartUp]` attaches one expert to one chart and the profile only
+persists charts on a graceful exit, so the EA is attached by scripts instead: `HybridSaveTemplate` (run ONCE on a chart
+with the live EA attached: `[StartUp] Expert=HybridForwardTest-live … Script=HybridSaveTemplate`) saves
+`MQL5\Profiles\Templates\hybrid_live.tpl` = the EA + all its inputs; the permanent `live.ini` runs
+`[StartUp] Script=HybridLiveLauncher` (host chart EURUSD.sim H4), which opens one H4 chart per lineup symbol (input
+`InpSymbols`), applies the template to any chart without the EA, and closes non-lineup charts. Idempotent on every
+terminal start. Both scripts live in `mql5/scripts/`, compiled `.ex5` deployed to `MQL5\Scripts\`. After an EA
+rebuild: copy the new `.ex5`, Stop-Process the terminal, Start-ScheduledTask hybrid-mt5 (the template references the
+file by path, so every chart loads the new build). The template must be re-saved only if the EA's INPUTS change
+(`hft_live.set` is no longer what the charts read - the template is).
+
 **Symbol naming:** OANDA's MT5 servers suffix symbols with `.sim` (`EURUSD.sim`); a `[StartUp] Symbol=EURUSD` chart never
 synchronises and the EA is removed after 5 min ("symbol synchronization timeout"). The queue files are therefore
 `heartbeat_EURUSD.sim.json`, `signals/EURUSD.sim-*.json`, journals `EURUSD.sim_YYYYMM.csv`; `risk_mult.json` keys use the
@@ -126,6 +138,20 @@ Web app: `http://10.77.0.1:8080` from any WireGuard peer (phone = 10.77.0.3). No
 the tunnel is the boundary); plain HTTP inside the tunnel. Verify after any deploy or reboot: `/health` returns
 `{"ok":true}`, dashboard shows `EA alive` with a fresh beat, `hybrid-monitor.task.log` shows a successful Telegram
 send (the daily summary fires once after start when past 21:05 UTC).
+
+**Calendar (coach ruling 2026-09-16, same source made live):** `live/calendar_refresh.py`, run by the monitor daily at
+02:30 UTC (and on start if the deployed file is >1.5 d old). Pulls ForexFactory's official
+`ff_calendar_thisweek.xml` (the ONLY rolling file - `nextweek` does not exist; GMT times; stable series id in `<url>`),
+snapshots it under `C:\ProgramData\hybrid\calendar\snapshots\`, accumulates rows into `forward.json` keyed by
+(series id, UTC date) so re-pulls replace revised times, then FULLY REBUILDS: history (`history\ff_combined.csv`,
+rows before the store's first day) + forward store → `pipeline\normalize_econ_tzfix.py` (classes from
+`config\event_classes.yaml`, `config\political_events.csv` merged) → `pipeline\test_calendar_coverage.py` must exit 0
+→ sanity (row count, coverage end ≥ today, V-class present in the forward window) → atomic replace of
+`Common\Files\econ_events.csv`. Every EA instance reloads the file once a day after 03:00 UTC (`events_reload`
+audit line; heartbeat carries `events_count`/`events_last_utc`). Monitor alerts: refresh failure, file >7 d old,
+coverage <3 d. Needs PyYAML on the box (`pip install pyyaml`). Deploy the pipeline with `deploy_live.sh --calendar`.
+Known limit: FF gives ≤7 days of forward visibility; elections come from `political_events.csv` (manual, must be
+kept ≥12 months ahead); scheduled V-class beyond one week needs a second forward layer (ruling pending).
 
 Gotchas found: (1) a child `claude` inherits `CLAUDE_*` variables from a parent Claude Code session and hangs — the
 runner scrubs them; (2) Python's default cert store on a fresh Windows box fails Telegram's chain — `certifi` is used

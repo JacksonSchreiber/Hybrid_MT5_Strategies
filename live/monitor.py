@@ -139,11 +139,28 @@ class Monitor:
             if self.st.get("web_down"): self.st["web_down"] = False; self.send("web app back up")
 
     def calendar(self):
-        today = C.now_utc().strftime("%Y-%m-%d")
+        """daily ForexFactory refresh (coach ruling 2026-09-16) + staleness watchdog (>7 d) + coverage warning."""
+        now = C.now_utc(); today = now.strftime("%Y-%m-%d"); cal = self.cfg.get("calendar") or {}
+        p = os.path.join(self.cfg["common_files"], "econ_events.csv")
+        try: age_d = (time.time() - os.path.getmtime(p)) / 86400
+        except OSError: age_d = 999
+        hh, mm = (cal.get("refresh_utc") or "02:30").split(":")
+        due = now.strftime("%H:%M") >= f"{hh}:{mm}" and self.st.get("last_calendar_refresh") != today
+        if due or (age_d > 1.5 and self.st.get("last_calendar_refresh") != today):
+            self.st["last_calendar_refresh"] = today
+            try:
+                from live.calendar_refresh import Refresher
+                r = Refresher(self.cfg, self.log).run(); self.log("calendar refresh: " + json.dumps(r)[:600])
+                if r.get("ok"): self.st["calendar_fail"] = 0; self.send(f"calendar refreshed: {r['rows']} rows, coverage to {r['last_utc']} UTC, {r['forward_V']} V-class in the forward window")
+                else: self.st["calendar_fail"] = self.st.get("calendar_fail", 0) + 1; self.send(f"CALENDAR REFRESH FAILED: {r.get('error')} (deployed file untouched, {age_d:.1f} d old)")
+            except Exception as e:
+                self.send(f"CALENDAR REFRESH CRASHED: {e!r}")
+        if age_d > cal.get("stale_days", 7) and self.st.get("last_stale_warn") != today:
+            self.st["last_stale_warn"] = today; self.send(f"CALENDAR STALE: econ_events.csv is {age_d:.1f} days old (> {cal.get('stale_days', 7)} d) — the feed refresh is not landing")
         if self.st["last_calendar_warn"] == today: return
         _, cov = C.load_events(self.cfg)
-        if not cov or cov < C.now_utc() + timedelta(days=self.m["calendar_min_days"]):
-            self.send(f"CALENDAR COVERAGE: econ_events.csv ends {cov.strftime('%Y-%m-%d') if cov else 'never (file missing)'} — under {self.m['calendar_min_days']} d ahead. The election gate cannot see beyond it; refresh the feed.")
+        if not cov or cov < now + timedelta(days=self.m["calendar_min_days"]):
+            self.send(f"CALENDAR COVERAGE: econ_events.csv ends {cov.strftime('%Y-%m-%d') if cov else 'never (file missing)'} — under {self.m['calendar_min_days']} d ahead. The election gate cannot see beyond it.")
             self.st["last_calendar_warn"] = today
 
     def summary(self):
