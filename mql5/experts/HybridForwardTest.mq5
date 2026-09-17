@@ -1107,6 +1107,7 @@ void OnTick()
    //--- goes to the operator, not the blind advisor) — InpShowEvents gates only
    //--- the on-CHART lines, which would leak event names into the advisor shot.
    if(!g_ev_loaded) { LoadEconEvents(); if(InpShowEvents) DrawEconEvents(); }
+   LiveInvalidatePendingsThroughSL();   // live only: resting pending order whose SL traded before fill -> deleted + invalidated
 
    if(!g_started && !InpLiveMode)   // live: LiveInit() already did this in OnInit (live\journal paths)
      {
@@ -1235,6 +1236,35 @@ bool HasActiveOrderOrPosition()
 //| bars and journal them as "expired". A fill (posid>0) or a prior    |
 //| close short-circuits. Proactive OrderDelete => we own the outcome. |
 //+------------------------------------------------------------------+
+//--- LIVE (trader ruling 2026-09-17): a resting pending order is invalidated when price trades through its SL before it
+//--- fills - the same rule as a parked signal (§11-3). Checked every tick. Delete first; mark only when the broker confirms
+//--- (if the order already filled in the meantime, the fill binding owns the outcome).
+void LiveInvalidatePendingsThroughSL()
+  {
+   if(!InpLiveMode || (bool)MQLInfoInteger(MQL_TESTER)) return;
+   for(int i=0;i<ArraySize(g_rows);i++)
+     {
+      if(!g_rows[i].is_pending || g_rows[i].posid>0 || g_rows[i].closed || g_rows[i].order_ticket<=0 || g_rows[i].sl<=0.0) continue;
+      double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+      bool through=(g_rows[i].direction>0 ? (bid>0.0 && bid<=g_rows[i].sl) : (ask>0.0 && ask>=g_rows[i].sl));
+      if(!through) continue;
+      if(!OrderSelect((ulong)g_rows[i].order_ticket)) continue;             // already filled or gone: binding/expiry decide
+      bool del=g_trade.OrderDelete((ulong)g_rows[i].order_ticket);
+      if(!del && !LiveDone()){ AuditLine("invalidate_failed","","",StringFormat("sig:%d",g_rows[i].id),"error",StringFormat("order_delete:%d",g_trade.ResultRetcode()),""); continue; }
+      g_rows[i].decision="rejected"; g_rows[i].terminal="invalidated"; g_rows[i].closed=true; g_rows[i].is_pending=false;
+      string sp=LivePath(StringFormat("signals\\%s-%d.json",_Symbol,g_rows[i].id)); string js=ReadTextFile(sp);
+      if(js!="")
+        {
+         StringReplace(js,"\"status\":\"approved_pending\"","\"status\":\"rejected\"");
+         StringReplace(js,"\"auto_reason\":\"\"",StringFormat("\"auto_reason\":\"invalidated: price through SL %s while the pending order rested\"",DoubleToString(g_rows[i].sl,_Digits)));
+         AtomicWriteText(sp,js);
+        }
+      AuditLine("invalidated","","",StringFormat("sig:%d",g_rows[i].id),"rejected","pending_sl_through",StringFormat("ticket=%I64d sl=%s bid=%s ask=%s",g_rows[i].order_ticket,DoubleToString(g_rows[i].sl,_Digits),DoubleToString(bid,_Digits),DoubleToString(ask,_Digits)));
+      Print("Signal #",g_rows[i].id," pending order INVALIDATED: price through SL ",DoubleToString(g_rows[i].sl,_Digits)," before fill - order deleted");
+      WriteJournal(g_journal_part);
+     }
+  }
+
 void ExpireStalePendings()
   {
    for(int i=0;i<ArraySize(g_rows);i++)

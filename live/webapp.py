@@ -176,6 +176,8 @@ def signal_page(key: str, q: dict) -> str:
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
                    + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form>'
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="delay"><button class="btn wait" style="width:100%">DELAY one bar</button></form></div>')
+    if s.get("status") == "rejected" and str(s.get("auto_reason", "")).startswith("invalidated: price through SL") and "pending" in str(s.get("auto_reason", "")):
+        out.insert(1, f'<div class="flash bad">pending order INVALIDATED - {E(s["auto_reason"])}; the EA deleted it before it filled</div>')
     if s.get("status") == "approved_pending":
         pend = pending_orders()
         mine = [o for o in (pend or []) if o.get("signal_key") == key]

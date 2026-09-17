@@ -54,6 +54,8 @@ class Monitor:
                 self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: auto-skipped (code 9) - {s.get('auto_reason')}")
             elif prev == "open" and stt in ("approved", "approved_pending", "skipped"):
                 pass  # the ack message covers it
+            if prev == "approved_pending" and stt == "rejected":
+                self.send(f"PENDING ORDER INVALIDATED: #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} - price traded through the SL {lv.get('sl')} before the order at {lv.get('entry')} filled; the EA deleted it.")
             if stt == "approved_pending":
                 row = C.row_state(self.cfg, s["symbol"], s["signal_id"]) or {}
                 tag = f"pend-exp:{key}"
