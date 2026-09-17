@@ -108,6 +108,7 @@ VISUAL_RE = re.compile(r" on ([A-Za-z0-9.]+),\S+ from (\d{4})\.(\d{2})\.(\d{2})"
 # ≈ below 81%). Proportional so a differently-sized window still blinds correctly.
 CROP_TOP_FRAC = 0.095
 CROP_BOT_FRAC = 0.81
+CROP_BOT_FRAC_FALLBACK = 0.72   # used only when the frame-line detection fails (conservative: loses a sliver of the lowest pane rather than leak the time axis)
 
 
 def _winpath(p: Path) -> str:
@@ -154,12 +155,34 @@ def scroll_chart_end():
         pass
 
 
+def detect_time_axis_top(im) -> int | None:
+    """Row index of the bottom frame line of the LOWEST chart pane (the time axis sits just below it).
+    Layout-independent (extra indicator panes such as ATR/ADX push the axis down, which broke the fixed fraction
+    on 2026-09-17: dates leaked on window 14). Dark MT5 scheme: chart background black, pane frames are 1-px white
+    lines, the time-axis band below is black with text, then a grey tab-strip border (~178) + dark strip (~47).
+    Returns None when the pattern is not found (caller falls back to a conservative fraction)."""
+    w, h = im.size; px = im.load(); xs = range(12, int(w * 0.95), 4); n = len(xs)
+    def frac(y, pred): return sum(1 for x in xs if pred(px[x, y])) / n
+    black = lambda c: max(c) < 12
+    white = lambda c: min(c) >= 200
+    strip = lambda c: 25 <= max(c) <= 90 and max(c) - min(c) < 12
+    y_tab = None
+    for y in range(int(h * 0.5), h - 4):
+        if frac(y, black) < 0.05 and all(frac(y + k, strip) > 0.9 for k in (1, 2, 3)):
+            y_tab = y; break
+    if y_tab is None: return None
+    for y in range(y_tab - 1, int(h * 0.4), -1):
+        if frac(y, white) > 0.9: return y
+    return None
+
 def blind_crop(raw: Path, dst: Path):
     from PIL import Image
     im = Image.open(raw).convert("RGB")
     w, h = im.size
     top = round(CROP_TOP_FRAC * h)
-    bot = round(CROP_BOT_FRAC * h)
+    det = detect_time_axis_top(im)
+    bot = det if det is not None else round(CROP_BOT_FRAC_FALLBACK * h)   # never trust the fixed fraction alone
+    bot = min(bot, round(CROP_BOT_FRAC * h))
     c = im.crop((0, top, w, max(top + 1, bot)))
     le = max(c.size)                                  # (v) downscale: long edge <= 1568px
     if le > 1568:
