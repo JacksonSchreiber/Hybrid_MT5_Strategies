@@ -254,7 +254,7 @@ def cancel_txt(o: dict) -> str:
         row = C.row_state(CFG, o["symbol"], sid) or {}
         placed = C.parse_iso(row.get("placed_time")) if isinstance(row.get("placed_time"), str) else (datetime.fromtimestamp(int(row["placed_time"]), timezone.utc) if row.get("placed_time") else None)
         base = int(placed.timestamp()) if placed else int(o.get("setup") or 0)
-        at = C.pending_cancel_at(base)
+        at = C.pending_cancel_at(base, C.PENDING_EXPIRY_BARS, int(o.get("server_offset_h", 3)))
         return f'~{C.fmt_dt(at)} ({C.rel_time(at)}, {C.PENDING_EXPIRY_BARS} H4 bars after placement)'
     except Exception:
         return f"after {C.PENDING_EXPIRY_BARS} H4 bars"

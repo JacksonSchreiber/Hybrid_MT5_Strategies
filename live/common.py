@@ -175,13 +175,14 @@ def row_state(cfg: dict, symbol: str, signal_id) -> dict | None:
     return load_json(os.path.join(cfg["root"], "state", symbol, f"{sid}.json")) if safe_key(symbol) else None
 
 PENDING_EXPIRY_BARS = 3   # EA input InpPendingExpiryBars (H4 bars after the placement bar)
-def pending_cancel_at(placed_epoch: int, bars: int = PENDING_EXPIRY_BARS) -> datetime:
-    """approximate time the EA cancels an unfilled pending order: the Nth H4 bar open after the placement bar, skipping weekends."""
-    t = datetime.fromtimestamp(placed_epoch - placed_epoch % 14400, timezone.utc); n = 0
+def pending_cancel_at(placed_server_epoch: int, bars: int = PENDING_EXPIRY_BARS, server_offset_h: int = 3) -> datetime:
+    """UTC time the EA cancels an unfilled pending order. placed_time is BROKER-clock epoch (TimeCurrent); H4 bars align to
+    the broker clock (OANDA UTC+3), so count N bar opens after the placement bar in broker time, skipping weekends, then convert."""
+    t = datetime.fromtimestamp(placed_server_epoch - placed_server_epoch % 14400, timezone.utc); n = 0
     while n < bars:
         t += timedelta(hours=4)
         if t.weekday() < 5: n += 1
-    return t
+    return t - timedelta(hours=server_offset_h)
 
 def ack(cfg: dict, task_id: str) -> dict | None:
     return load_json(os.path.join(cfg["root"], "acks", f"{task_id}.json")) if safe_key(task_id) else None

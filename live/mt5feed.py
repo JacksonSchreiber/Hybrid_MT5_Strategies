@@ -115,7 +115,8 @@ def orders(symbol: str | None = None) -> list[dict] | None:
                         "volume": float(o.volume_current), "price": float(o.price_open), "sl": float(o.sl), "tp": float(o.tp),
                         "magic": int(o.magic), "comment": o.comment, "setup": int(o.time_setup), "expiration": int(o.time_expiration),
                         "bid": float(t.bid) if t else None, "ask": float(t.ask) if t else None, "market": float(px),
-                        "distance": abs(px - o.price_open) if px else None, "distance_r": (abs(px - o.price_open) / stop) if px and stop else None})
+                        "distance": abs(px - o.price_open) if px else None, "distance_r": (abs(px - o.price_open) / stop) if px and stop else None,
+                        "server_offset_h": max(-12, min(14, round(((t.time if t else time.time()) - time.time()) / 3600.0)))})   # broker clock vs UTC (OANDA = +3)
         return out
 
 def status() -> dict:
