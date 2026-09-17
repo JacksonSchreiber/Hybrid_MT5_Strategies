@@ -182,3 +182,16 @@ pinged and consulted on its own (`signals/<SYM>-<id>.json`, `state/<SYM>/parked_
 its own delay count, implicit streak and deadline. Approving one closes every other parked signal on that symbol as
 `skipped` with **skip_reason 9 "superseded"** (`auto=1`, `auto_reason: "superseded: #N approved"`); one position per
 symbol is unchanged. Skip codes: 1-6 trader reasons, 7 legacy, 8 no response, 9 superseded.
+
+## Resting pending orders (trader rulings 2026-09-17)
+
+An approval with `entry_mode: pending` places a limit/stop order at the original entry (`decision: approved_pending`,
+`order_ticket` set, no `positions/` file until it fills). While it rests: the web app lists it under **Pending orders**
+(live distance to fill, EA cancel time) from the terminal feed (`feedd /orders`). It ends one of three ways:
+1. **fills** → the fill binds to the row, a `positions/` file appears, Telegram "FILLED";
+2. **expires** unfilled at the 3rd H4 bar after placement (`InpPendingExpiryBars`, broker-clock bars; OANDA = UTC+3) →
+   `decision: expired`, Telegram "PENDING ORDER EXPIRED";
+3. **invalidated** when price trades through its SL before filling (ask ≥ SL for a sell, bid ≤ SL for a buy; checked
+   every tick, live only) → order deleted, `decision: rejected`, `terminal: invalidated`, signal `status: rejected` with
+   `auto_reason: "invalidated: price through SL … while the pending order rested"`, audit `invalidated … pending_sl_through`,
+   Telegram "PENDING ORDER INVALIDATED". Same rule as a parked signal (§11-3).
