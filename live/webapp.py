@@ -56,7 +56,7 @@ def flash(msg: str | None, ok: bool = True) -> str:
     return f'<div class="flash {"ok" if ok else "bad"}">{E(msg)}</div>' if msg else ""
 
 def status_pill(s: str) -> str:
-    cls = {"open": "warn", "approved": "ok", "approved_pending": "ok", "skipped": "", "auto_skipped": "", "expired": "bad", "rejected": "bad"}.get(s, "")
+    cls = {"open": "warn", "approved": "ok", "approved_pending": "ok", "skipped": "", "auto_skipped": "", "expired": "bad", "rejected": "bad", "cancelled": ""}.get(s, "")
     return f'<span class="pill {cls}">{E(s)}</span>'
 
 def cls_pill(dc: str) -> str:
@@ -178,6 +178,8 @@ def signal_page(key: str, q: dict) -> str:
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="delay"><button class="btn wait" style="width:100%">DELAY one bar</button></form></div>')
     if s.get("status") == "rejected" and str(s.get("auto_reason", "")).startswith("invalidated: price through SL") and "pending" in str(s.get("auto_reason", "")):
         out.insert(1, f'<div class="flash bad">pending order INVALIDATED - {E(s["auto_reason"])}; the EA deleted it before it filled</div>')
+    if s.get("status") == "cancelled":
+        out.insert(1, '<div class="flash ok">pending order CANCELLED by you before it filled</div>')
     if s.get("status") == "approved_pending":
         pend = pending_orders()
         mine = [o for o in (pend or []) if o.get("signal_key") == key]
@@ -274,9 +276,12 @@ def pending_card(o: dict, link: bool = False) -> str:
     body += (f'<div><span class="k">SL / TP</span> <b class="v bad">{o["sl"]}</b> / <b class="v">{o["tp"]}</b></div>'
              f'<div><span class="k">lots</span> <b class="v">{o["volume"]}</b></div><div><span class="k">EA cancels if unfilled</span> <b class="v">{cancel_txt(o)}</b></div></div>'
              f'<div class="k">fills when the {"ask" if o["buy"] else "bid"} reaches {o["price"]}; it then becomes an open position with the +1R bank and BE rules</div>')
-    if link and o.get("signal_key"): body = f'<a href="/signal/{E(o["signal_key"])}">' + body + '</div></a>'
-    else: body += '</div>'
-    return body
+    cancel = (f'<form method="post" action="/task" style="margin-top:8px"><input type="hidden" name="key" value="{E(o["signal_key"])}"><input type="hidden" name="verb" value="cancel_pending">'
+              f'<button class="btn no" onclick="return confirm(\'Cancel the resting order for {E(o["signal_key"])}?\')">Cancel order</button></form>') if o.get("signal_key") else ""
+    inner = body[len('<div class="card">'):] if body.startswith('<div class="card">') else body
+    if link and o.get("signal_key"):
+        return f'<div class="card"><a href="/signal/{E(o["signal_key"])}" style="color:inherit">' + inner + '</a>' + cancel + '</div>'
+    return '<div class="card">' + inner + cancel + '</div>'
 
 def _acks() -> list[dict]:
     import glob
@@ -433,6 +438,14 @@ def do_task(form: dict) -> tuple[str, bool, str]:
         if not p or p.get("_closed"): return "/", False, "unknown or closed position"
         tid = C.write_task(CFG, p["symbol"], verb, {}, position_id=p["posid"])
         back = f"/position/{key}"
+    elif verb in C.VERBS_PENDING:
+        s = C.signal(CFG, key)
+        if not s: return "/", False, "unknown signal"
+        if s.get("status") != "approved_pending": return f"/signal/{key}", False, f"signal is {s.get('status')}, no resting order"
+        tid = C.write_task(CFG, s["symbol"], verb, {}, signal_id=s["signal_id"])
+        a = C.wait_ack(CFG, tid, 12.0)
+        if not a: return f"/signal/{key}", False, "cancel: task written, no ack within 12 s - check again shortly"
+        return f"/signal/{key}", a.get("result") == "accepted", f"cancel pending order: {a.get('result')} - {a.get('reason')}"
     elif verb in C.VERBS_ADMIN:
         sym = form.get("symbol", "")
         if sym not in C.symbols(CFG): return "/settings", False, "unknown symbol"

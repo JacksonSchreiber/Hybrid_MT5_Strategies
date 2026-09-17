@@ -1247,6 +1247,17 @@ void LiveInvalidatePendingsThroughSL()
       if(!g_rows[i].is_pending || g_rows[i].posid>0 || g_rows[i].closed || g_rows[i].order_ticket<=0 || g_rows[i].sl<=0.0) continue;
       double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
       bool through=(g_rows[i].direction>0 ? (bid>0.0 && bid<=g_rows[i].sl) : (ask>0.0 && ask>=g_rows[i].sl));
+      string how="tick";
+      //--- history since placement (once a minute): catches a breach that happened during a restart/deploy and reversed
+      static datetime last_scan=0;
+      if(!through && TimeCurrent()-last_scan>=60 && g_rows[i].placed_time>0)
+        {
+         datetime from=(datetime)(g_rows[i].placed_time+60-(g_rows[i].placed_time%60));   // first FULL minute after placement
+         double hh[],ll[]; double spr=MathMax(0.0,ask-bid);
+         int nh=CopyHigh(_Symbol,PERIOD_M1,from,TimeCurrent(),hh), nl=CopyLow(_Symbol,PERIOD_M1,from,TimeCurrent(),ll);
+         if(g_rows[i].direction<0){ for(int k=0;k<nh;k++) if(hh[k]+spr>=g_rows[i].sl){ through=true; how="m1_history"; break; } }   // bars are bid: ask ~ bid high + spread
+         else                     { for(int k=0;k<nl;k++) if(ll[k]<=g_rows[i].sl){ through=true; how="m1_history"; break; } }
+        }
       if(!through) continue;
       if(!OrderSelect((ulong)g_rows[i].order_ticket)) continue;             // already filled or gone: binding/expiry decide
       bool del=g_trade.OrderDelete((ulong)g_rows[i].order_ticket);
@@ -1259,11 +1270,13 @@ void LiveInvalidatePendingsThroughSL()
          StringReplace(js,"\"auto_reason\":\"\"",StringFormat("\"auto_reason\":\"invalidated: price through SL %s while the pending order rested\"",DoubleToString(g_rows[i].sl,_Digits)));
          AtomicWriteText(sp,js);
         }
-      AuditLine("invalidated","","",StringFormat("sig:%d",g_rows[i].id),"rejected","pending_sl_through",StringFormat("ticket=%I64d sl=%s bid=%s ask=%s",g_rows[i].order_ticket,DoubleToString(g_rows[i].sl,_Digits),DoubleToString(bid,_Digits),DoubleToString(ask,_Digits)));
-      Print("Signal #",g_rows[i].id," pending order INVALIDATED: price through SL ",DoubleToString(g_rows[i].sl,_Digits)," before fill - order deleted");
+      AuditLine("invalidated","","",StringFormat("sig:%d",g_rows[i].id),"rejected","pending_sl_through",StringFormat("via=%s ticket=%I64d sl=%s bid=%s ask=%s",how,g_rows[i].order_ticket,DoubleToString(g_rows[i].sl,_Digits),DoubleToString(bid,_Digits),DoubleToString(ask,_Digits)));
+      Print("Signal #",g_rows[i].id," pending order INVALIDATED (",how,"): price through SL ",DoubleToString(g_rows[i].sl,_Digits)," before fill - order deleted");
       WriteJournal(g_journal_part);
      }
+   LivePendingScanStamp();
   }
+void LivePendingScanStamp(){ }   // (placeholder kept trivial: the per-row static throttles the history scan to once a minute)
 
 void ExpireStalePendings()
   {
@@ -1790,8 +1803,8 @@ void LiveSaveAllState()
      {
       if(g_rows[i].symbol!=_Symbol) continue;
       if(!g_rows[i].closed || !FileIsExist(RowStatePath(g_rows[i].id),FILE_COMMON)) LiveSaveRowState(i);
-      else if(g_rows[i].closed && g_rows[i].posid>0)
-        {   // closed row: make sure the final state (terminal, R) is on disk once, then freeze
+      else if(g_rows[i].closed)
+        {   // closed row (filled OR a pending that expired / was invalidated / cancelled unfilled): final state on disk once, then freeze
          string k[],v[],e; string t=ReadTextFile(RowStatePath(g_rows[i].id));
          if(JsonFlatParse(t,k,v,e) && JGet(k,v,"closed","false")!="true") LiveSaveRowState(i);
         }
@@ -2217,6 +2230,22 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
         }
       reason="ok"; return "accepted";
      }
+   //--- trader cancels a RESTING pending order (trader ruling 2026-09-17). Target = signal_id of the approved_pending row.
+   if(verb=="cancel_pending")
+     {
+      int sid=(int)StringToInteger(JGet(k,v,"signal_id","0"));
+      int idx=RowIdxBySid(sid);
+      if(sid<=0 || idx<0){ reason="unknown_signal"; return "rejected"; }
+      if(!g_rows[idx].is_pending || g_rows[idx].posid>0 || g_rows[idx].closed || g_rows[idx].order_ticket<=0){ reason=(g_rows[idx].posid>0 ? "already_filled" : "not_pending"); row_idx=idx; return "rejected"; }
+      if(!OrderSelect((ulong)g_rows[idx].order_ticket)){ reason="order_not_found"; row_idx=idx; return "rejected"; }
+      bool del=g_trade.OrderDelete((ulong)g_rows[idx].order_ticket);
+      if(!del && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); row_idx=idx; return "rejected"; }
+      g_rows[idx].decision="cancelled"; g_rows[idx].terminal="cancelled"; g_rows[idx].closed=true; g_rows[idx].is_pending=false;
+      string sp=LivePath(StringFormat("signals\\%s-%d.json",_Symbol,sid)); string js=ReadTextFile(sp);
+      if(js!=""){ StringReplace(js,"\"status\":\"approved_pending\"","\"status\":\"cancelled\""); AtomicWriteText(sp,js); }
+      WriteJournal(g_journal_part);
+      row_idx=idx; reason="ok"; return "accepted";
+     }
    //--- trader-issued TEST signal (live only, never in the tester): a synthetic setup at the current price with an
    //--- ATR-sized stop, published and parked exactly like a detector signal so the whole chain (ping, verdict, approve,
    //--- fill, position verbs) is exercised on the demo. Journal/signal strategy = "TEST" - graders filter it out.
@@ -2352,7 +2381,7 @@ void LiveProcessTasks()
       long target_id=StringToInteger(JGet(k,v,target_key,"0"));
       if(JGet(k,v,"schema_version","")!=(string)LIVE_SCHEMA_VERSION){ result="rejected"; reason="schema_version_unsupported"; }
       else if(tsym!=_Symbol){ result="rejected"; reason="symbol_mismatch"; }
-      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"){ result="rejected"; reason="unknown_verb"; }
+      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"&&verb!="cancel_pending"){ result="rejected"; reason="unknown_verb"; }
       else
         {
          datetime issued=IsoToTime(JGet(k,v,"issued_at",""));

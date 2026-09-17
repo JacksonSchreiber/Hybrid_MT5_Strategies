@@ -187,11 +187,16 @@ symbol is unchanged. Skip codes: 1-6 trader reasons, 7 legacy, 8 no response, 9 
 
 An approval with `entry_mode: pending` places a limit/stop order at the original entry (`decision: approved_pending`,
 `order_ticket` set, no `positions/` file until it fills). While it rests: the web app lists it under **Pending orders**
-(live distance to fill, EA cancel time) from the terminal feed (`feedd /orders`). It ends one of three ways:
+(live distance to fill, EA cancel time) from the terminal feed (`feedd /orders`). It ends one of four ways:
 1. **fills** → the fill binds to the row, a `positions/` file appears, Telegram "FILLED";
 2. **expires** unfilled at the 3rd H4 bar after placement (`InpPendingExpiryBars`, broker-clock bars; OANDA = UTC+3) →
    `decision: expired`, Telegram "PENDING ORDER EXPIRED";
 3. **invalidated** when price trades through its SL before filling (ask ≥ SL for a sell, bid ≤ SL for a buy; checked
    every tick, live only) → order deleted, `decision: rejected`, `terminal: invalidated`, signal `status: rejected` with
    `auto_reason: "invalidated: price through SL … while the pending order rested"`, audit `invalidated … pending_sl_through`,
-   Telegram "PENDING ORDER INVALIDATED". Same rule as a parked signal (§11-3).
+   Telegram "PENDING ORDER INVALIDATED". Same rule as a parked signal (§11-3). Detection: the current tick every tick, plus a
+   once-a-minute scan of M1 history since placement (bid high + current spread for sells, bid low for buys), so a breach
+   during a restart or deploy is still caught (audit `via=tick|m1_history`);
+4. **cancelled** by the trader (web **Cancel order** button → task verb `cancel_pending`, target `signal_id`) → order deleted,
+   `decision: cancelled`, `terminal: cancelled`, signal `status: cancelled`, Telegram "PENDING ORDER CANCELLED".
+   Ack reasons: `ok`, `unknown_signal`, `not_pending`, `already_filled`, `order_not_found`, `order_failed:<retcode>`.
