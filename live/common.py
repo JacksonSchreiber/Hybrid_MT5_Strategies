@@ -168,6 +168,21 @@ def position(cfg: dict, key: str) -> dict | None:
         if x: x["_closed"] = (sub == "closed"); return x
     return None
 
+def row_state(cfg: dict, symbol: str, signal_id) -> dict | None:
+    """the EA's own state for a journal row (state/<SYM>/<id>.json): decision, placed_time, order_ticket, posid..."""
+    try: sid = int(signal_id)
+    except (TypeError, ValueError): return None
+    return load_json(os.path.join(cfg["root"], "state", symbol, f"{sid}.json")) if safe_key(symbol) else None
+
+PENDING_EXPIRY_BARS = 3   # EA input InpPendingExpiryBars (H4 bars after the placement bar)
+def pending_cancel_at(placed_epoch: int, bars: int = PENDING_EXPIRY_BARS) -> datetime:
+    """approximate time the EA cancels an unfilled pending order: the Nth H4 bar open after the placement bar, skipping weekends."""
+    t = datetime.fromtimestamp(placed_epoch - placed_epoch % 14400, timezone.utc); n = 0
+    while n < bars:
+        t += timedelta(hours=4)
+        if t.weekday() < 5: n += 1
+    return t
+
 def ack(cfg: dict, task_id: str) -> dict | None:
     return load_json(os.path.join(cfg["root"], "acks", f"{task_id}.json")) if safe_key(task_id) else None
 

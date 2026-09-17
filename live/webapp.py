@@ -9,7 +9,7 @@ the boundary (trader ruling 2026-09-15); HTTP inside WireGuard.
 from __future__ import annotations
 import hashlib, html, json, os, re, sys, urllib.parse, threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
 from live import charts
@@ -99,6 +99,13 @@ def dashboard(q: dict) -> str:
     for s in opn:
         out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{cls_pill(s.get("decision_class"))}<span class="k">#{s["signal_id"]}</span></div>'
                    f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span></div></div></a>')
+    # pending orders (approved with "pending at the original entry"; resting on the broker until price comes back)
+    out.append("<h2>Pending orders</h2>")
+    pend = pending_orders()
+    if pend is None: out.append('<div class="card k">terminal feed unavailable - pending orders cannot be listed right now</div>')
+    elif not pend: out.append('<div class="card k">none</div>')
+    for o in pend or []:
+        out.append(pending_card(o, link=True))
     # positions
     pos = C.list_positions(CFG)
     out.append("<h2>Open positions</h2>")
@@ -107,7 +114,6 @@ def dashboard(q: dict) -> str:
         out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"><div class="row"><span class="big">{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
                    f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
     out.append('<h2>Instances</h2>')
-    out.append("<h2>Instances</h2>")
     for sym in syms:
         hb = C.heartbeat(CFG, sym); age = C.heartbeat_age_s(hb)
         alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]
@@ -170,6 +176,16 @@ def signal_page(key: str, q: dict) -> str:
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
                    + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form>'
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="delay"><button class="btn wait" style="width:100%">DELAY one bar</button></form></div>')
+    if s.get("status") == "approved_pending":
+        pend = pending_orders()
+        mine = [o for o in (pend or []) if o.get("signal_key") == key]
+        if mine: out.insert(1, '<h2>Pending order</h2>' + pending_card(mine[0]))
+        elif pend is not None:
+            pos = [p for p in C.list_positions(CFG) if p.get("symbol") == s["symbol"] and str(p.get("signal_id")) == str(s["signal_id"])]
+            row = C.row_state(CFG, s["symbol"], s["signal_id"]) or {}
+            if pos: out.insert(1, f'<div class="flash ok">pending order has FILLED - <a href="/position/{E(s["symbol"])}-{pos[0]["posid"]}">open position</a></div>')
+            elif row.get("decision") == "expired": out.insert(1, f'<div class="flash bad">pending order EXPIRED unfilled (EA cancelled it after {C.PENDING_EXPIRY_BARS} H4 bars)</div>')
+            else: out.insert(1, '<div class="flash bad">no resting order found for this signal (filled, cancelled or expired) - check Open positions</div>')
     # acks for this signal
     acks = [a for a in _acks() if a.get("signal_id") == s["signal_id"] and a.get("symbol") == s["symbol"]]
     if acks:
@@ -177,7 +193,7 @@ def signal_page(key: str, q: dict) -> str:
         for a in sorted(acks, key=lambda a: a.get("executed_at", "")):
             out.append(f'<tr><td class="k">{E(a.get("executed_at", ""))}</td><td>{E(a.get("verb", ""))}</td><td class="{"ok" if a.get("result") == "accepted" else "bad"}">{E(a.get("result", ""))}</td><td>{E(a.get("reason", ""))}</td></tr>')
         out.append("</table></div>")
-    return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home", refresh=60 if is_open else None)
+    return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home", refresh=60 if is_open else (20 if s.get("status") == "approved_pending" else None))
 
 def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None) -> str:
     """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load."""
@@ -219,6 +235,46 @@ def ev_cls(hours_until, cls: str | None, binding: bool | None) -> str:
     if h is not None and 6 <= h < 12 and cls in ("V", "C"): return "amber"
     if cls == "H": return "k"
     return ""
+
+def pending_orders() -> list[dict] | None:
+    """our resting orders (magic + 'Signal #N' comment), joined to their signal key."""
+    from live import mt5feed
+    raw = mt5feed.orders()
+    if raw is None: return None
+    out = []
+    for o in raw:
+        m = re.match(r"Signal #(\d+)\b", o.get("comment") or "")
+        o["signal_key"] = f'{o["symbol"]}-{m.group(1)}' if m else None
+        out.append(o)
+    return out
+
+def cancel_txt(o: dict) -> str:
+    try:
+        sid = (o.get("signal_key") or "").split("-")[-1]
+        row = C.row_state(CFG, o["symbol"], sid) or {}
+        placed = C.parse_iso(row.get("placed_time")) if isinstance(row.get("placed_time"), str) else (datetime.fromtimestamp(int(row["placed_time"]), timezone.utc) if row.get("placed_time") else None)
+        base = int(placed.timestamp()) if placed else int(o.get("setup") or 0)
+        at = C.pending_cancel_at(base)
+        return f'~{C.fmt_dt(at)} ({C.rel_time(at)}, {C.PENDING_EXPIRY_BARS} H4 bars after placement)'
+    except Exception:
+        return f"after {C.PENDING_EXPIRY_BARS} H4 bars"
+
+def pending_card(o: dict, link: bool = False) -> str:
+    s = C.signal(CFG, o["signal_key"]) if o.get("signal_key") else None
+    title = f'{E(o["symbol"])} {E(s["strategy"]) if s else ""} {E(o["type"])}'
+    dist = o.get("distance"); dr = o.get("distance_r")
+    near = dr is not None and dr <= 0.25
+    body = (f'<div class="card"><div class="row"><span class="big">{title}</span><span class="pill warn">resting</span>'
+            f'<span class="k">#{E(o["signal_key"].split("-")[-1]) if o.get("signal_key") else "?"} · ticket {o["ticket"]}</span></div>'
+            f'<div class="grid2"><div><span class="k">order price</span> <b class="v">{o["price"]}</b></div><div><span class="k">market ({"ask" if o["buy"] else "bid"})</span> <b class="v">{o.get("market")}</b></div>'
+            f'<div><span class="k">distance to fill</span> <b class="v {"ok" if near else ""}">{dist:.2f}</b> <span class="k">= {dr:.2f}R of the stop</span></div>' if dist is not None and dr is not None else
+            f'<div class="card"><div class="row"><span class="big">{title}</span><span class="pill warn">resting</span></div><div class="grid2"><div><span class="k">order price</span> <b class="v">{o["price"]}</b></div><div><span class="k">market</span> <b class="v">-</b></div><div><span class="k">distance</span> <b>-</b></div>')
+    body += (f'<div><span class="k">SL / TP</span> <b class="v bad">{o["sl"]}</b> / <b class="v">{o["tp"]}</b></div>'
+             f'<div><span class="k">lots</span> <b class="v">{o["volume"]}</b></div><div><span class="k">EA cancels if unfilled</span> <b class="v">{cancel_txt(o)}</b></div></div>'
+             f'<div class="k">fills when the {"ask" if o["buy"] else "bid"} reaches {o["price"]}; it then becomes an open position with the +1R bank and BE rules</div>')
+    if link and o.get("signal_key"): body = f'<a href="/signal/{E(o["signal_key"])}">' + body + '</div></a>'
+    else: body += '</div>'
+    return body
 
 def _acks() -> list[dict]:
     import glob

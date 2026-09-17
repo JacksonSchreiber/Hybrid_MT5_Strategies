@@ -54,6 +54,12 @@ class Monitor:
                 self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: auto-skipped (code 9) - {s.get('auto_reason')}")
             elif prev == "open" and stt in ("approved", "approved_pending", "skipped"):
                 pass  # the ack message covers it
+            if stt == "approved_pending":
+                row = C.row_state(self.cfg, s["symbol"], s["signal_id"]) or {}
+                tag = f"pend-exp:{key}"
+                if row.get("decision") == "expired" and tag not in self.st["acks"]:
+                    self.st["acks"].append(tag)
+                    self.send(f"PENDING ORDER EXPIRED unfilled: #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} at {lv.get('entry')} - the EA cancelled it after {C.PENDING_EXPIRY_BARS} H4 bars.")
             elif prev is None and stt != "open":
                 pass  # decided before the monitor started
             seen[key] = stt
@@ -89,10 +95,13 @@ class Monitor:
         seen = self.st["positions"]
         for p in C.list_positions(self.cfg):
             k = f"{p['symbol']}-{p['posid']}"; prev = seen.get(k) or {}
+            if not prev and self.st.get("positions_initialised"):
+                self.send(f"FILLED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} at {p.get('entry')} · {p.get('lots_live')} lots · SL {p.get('sl_live')} (pending order or market fill)\n{self.base}/position/{k}")
             if p.get("banked") and not prev.get("banked"):
                 self.send(f"+1R BANKED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · banked {C.r_fmt(p.get('banked_r'))}, {p.get('lots_live')} lots run · SL now {p.get('sl_live')}")
             if p.get("ratcheted") and not prev.get("ratcheted"): self.send(f"SL ratcheted to TP1: pos {p['posid']} {p['symbol']}")
             seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": True}
+        self.st["positions_initialised"] = True
         for p in C.list_positions(self.cfg, closed=True):
             k = f"{p['symbol']}-{p['posid']}"; prev = seen.get(k) or {}
             if prev.get("open") or (k not in seen and C.parse_iso(p.get("ts")) and C.now_utc() - C.parse_iso(p["ts"]) < timedelta(hours=12)):

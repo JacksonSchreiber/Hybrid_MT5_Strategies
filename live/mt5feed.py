@@ -94,6 +94,30 @@ def tick(symbol: str) -> dict | None:
         if k is None: return None
         return {"t": int(k.time), "bid": float(k.bid), "ask": float(k.ask)}
 
+ORDER_TYPES = {2: "BUY LIMIT", 3: "SELL LIMIT", 4: "BUY STOP", 5: "SELL STOP", 6: "BUY STOP LIMIT", 7: "SELL STOP LIMIT"}
+
+def orders(symbol: str | None = None) -> list[dict] | None:
+    """resting pending orders (all symbols or one), with the live quote and distance to the order price."""
+    if FEED_URL:
+        r = _remote("/orders" + (f"?symbol={symbol}" if symbol else ""), 4.0); return (r or {}).get("orders")
+    with _lock:
+        if not _ensure(): return None
+        try:
+            raw = _mt5.orders_get(symbol=symbol) if symbol else _mt5.orders_get()
+        except Exception:
+            _reset(); return None
+        out = []
+        for o in raw or []:
+            t = _mt5.symbol_info_tick(o.symbol)
+            buy = o.type in (2, 4, 6); px = (t.ask if buy else t.bid) if t else 0.0
+            stop = abs(o.price_open - o.sl) if o.sl else 0.0
+            out.append({"ticket": int(o.ticket), "symbol": o.symbol, "type": ORDER_TYPES.get(o.type, str(o.type)), "buy": buy,
+                        "volume": float(o.volume_current), "price": float(o.price_open), "sl": float(o.sl), "tp": float(o.tp),
+                        "magic": int(o.magic), "comment": o.comment, "setup": int(o.time_setup), "expiration": int(o.time_expiration),
+                        "bid": float(t.bid) if t else None, "ask": float(t.ask) if t else None, "market": float(px),
+                        "distance": abs(px - o.price_open) if px else None, "distance_r": (abs(px - o.price_open) / stop) if px and stop else None})
+        return out
+
 def status() -> dict:
     if FEED_URL:
         return _remote("/status", 3.0) or {"available": True, "connected": False, "daemon": "unreachable"}

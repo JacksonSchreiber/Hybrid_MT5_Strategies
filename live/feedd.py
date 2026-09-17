@@ -24,6 +24,10 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(sym) or tf not in mt5feed.TF: return self._j({"error": "bad request"}, 400)
                 return self._j({"bars": mt5feed.bars(sym, tf, n), "tick": mt5feed.tick(sym)})
             if u.path == "/tick": return self._j({"tick": mt5feed.tick(q.get("symbol", ""))})
+            if u.path == "/orders":
+                sym = q.get("symbol") or None
+                if sym and not C.safe_key(sym): return self._j({"error": "bad request"}, 400)
+                return self._j({"orders": mt5feed.orders(sym)})
             return self._j({"error": "not found"}, 404)
         except Exception as e:
             return self._j({"error": repr(e)}, 500)
