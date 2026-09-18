@@ -1,0 +1,65 @@
+{
+ "BTCUSD": {
+  "spread_today": 3.0,
+  "pct_of_price": 3.926598780136646e-05,
+  "median_stop": 632.7249999999985,
+  "median_price_graded": 28530.025,
+  "drag_today": 0.004741396341222501,
+  "drag_scaled": 0.0017705316110833028,
+  "n": 484
+ },
+ "EURUSD": {
+  "spread_today": 2e-05,
+  "pct_of_price": 1.742737142956728e-05,
+  "median_stop": 0.003249999999999975,
+  "median_price_graded": 1.10853,
+  "drag_today": 0.0061538461538462015,
+  "drag_scaled": 0.0059442350925594965,
+  "n": 1277
+ },
+ "GBPUSD": {
+  "spread_today": 4e-05,
+  "pct_of_price": 2.9947965410099952e-05,
+  "median_stop": 0.005140000000000033,
+  "median_price_graded": 1.30808,
+  "drag_today": 0.007782101167315125,
+  "drag_scaled": 0.0076214658742496675,
+  "n": 870
+ },
+ "US100": {
+  "spread_today": 2.3,
+  "pct_of_price": 7.812208103637432e-05,
+  "median_stop": 74.60000000000036,
+  "median_price_graded": 7907.3,
+  "drag_today": 0.030831099195710303,
+  "drag_scaled": 0.00828062642599088,
+  "n": 722
+ },
+ "US500": {
+  "spread_today": 0.5,
+  "pct_of_price": 6.540479024683768e-05,
+  "median_stop": 18.09999999999991,
+  "median_price_graded": 2778.4,
+  "drag_today": 0.02762430939226533,
+  "drag_scaled": 0.010039815979105787,
+  "n": 949
+ },
+ "USOIL": {
+  "spread_today": 0.071,
+  "pct_of_price": 0.0007018653802429837,
+  "median_stop": 0.8930000000000007,
+  "median_price_graded": 62.05,
+  "drag_today": 0.07950727883538627,
+  "drag_scaled": 0.048769033420019155,
+  "n": 786
+ },
+ "XAUUSD": {
+  "spread_today": 0.38,
+  "pct_of_price": 8.743048701082066e-05,
+  "median_stop": 11.678499999999985,
+  "median_price_graded": 1946.4375,
+  "drag_today": 0.03253842531146984,
+  "drag_scaled": 0.014571903802810673,
+  "n": 426
+ }
+}

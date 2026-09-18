@@ -1,0 +1,51 @@
+{
+ "BTCUSD.sim": {
+  "median_spread": 3.0,
+  "min": 3.0,
+  "max": 4.0,
+  "price": 76402.0,
+  "n": 12
+ },
+ "EURUSD.sim": {
+  "median_spread": 2e-05,
+  "min": 0.0,
+  "max": 3e-05,
+  "price": 1.14762,
+  "n": 12
+ },
+ "GBPUSD.sim": {
+  "median_spread": 4e-05,
+  "min": 3e-05,
+  "max": 5e-05,
+  "price": 1.33565,
+  "n": 12
+ },
+ "US100.sim": {
+  "median_spread": 2.3,
+  "min": 2.3,
+  "max": 2.5,
+  "price": 29441.1,
+  "n": 12
+ },
+ "US500.sim": {
+  "median_spread": 0.5,
+  "min": 0.5,
+  "max": 0.5,
+  "price": 7644.7,
+  "n": 12
+ },
+ "USOIL.sim": {
+  "median_spread": 0.071,
+  "min": 0.071,
+  "max": 0.071,
+  "price": 101.159,
+  "n": 12
+ },
+ "XAUUSD.sim": {
+  "median_spread": 0.38,
+  "min": 0.33,
+  "max": 0.49,
+  "price": 4346.31,
+  "n": 12
+ }
+}

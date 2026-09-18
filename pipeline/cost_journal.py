@@ -35,6 +35,13 @@ def main():
     if os.path.exists(ap_):
         for x in csv.DictReader(open(ap_, newline="")): acts[int(x["posid"])].append(x)
     out_rows = []; tot_off = tot_on = 0.0; n = 0; per_det = defaultdict(lambda: [0, 0.0, 0.0])
+    # zero-spread check (coach item 3, 2026-09-17): a .dk import fills every market order AT the detector's level, i.e.
+    # the run was mid-price. Any study on such a journal must charge the spread explicitly - this flag makes that visible.
+    fills = [(abs(float(r["entry"]) - float(r["orig_entry"])), float(r["entry"]))
+             for r in rows if r.get("decision") == "approved" and r.get("is_pending") == "0" and r.get("edited") == "0"
+             and r.get("entry") and r.get("orig_entry")]
+    max_gap = max((g for g, _ in fills), default=None)
+    zero_spread = bool(fills) and max_gap is not None and max_gap < 1e-9
     for r in rows:
         rr = dict(r); rr["costed_r"] = ""; rr["cost_swap_r"] = ""; rr["cost_comm_r"] = ""; rr["cost_spread_r"] = ""; rr["cost_nights"] = ""
         if r["decision"] in ("approved", "approved_pending") and r.get("r_multiple") and r.get("exit_time"):
@@ -52,7 +59,10 @@ def main():
     out = a.out or (a.journal[:-4] + ".costed.csv")
     with open(out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(out_rows[0].keys()) if out_rows else ["signal_id"]); w.writeheader(); w.writerows(out_rows)
-    summary = {"journal": os.path.basename(a.journal), "symbol": sym, "closed_trades": n, "total_r_off": round(tot_off, 3), "total_r_on": round(tot_on, 3),
+    summary = {"journal": os.path.basename(a.journal), "symbol": sym, "closed_trades": n,
+               "zero_spread_source": zero_spread, "max_fill_minus_level": max_gap,
+               "spread_warning": ("this journal carries NO spread (every market fill equals the detector level): the spread must be charged "
+                                  "explicitly - see data/study/spread_drag.md for the per-symbol discount") if zero_spread else None, "total_r_off": round(tot_off, 3), "total_r_on": round(tot_on, 3),
                "avg_r_off": round(tot_off / n, 4) if n else None, "avg_r_on": round(tot_on / n, 4) if n else None,
                "per_detector": {k: {"n": v[0], "total_off": round(v[1], 3), "total_on": round(v[2], 3)} for k, v in per_det.items()},
                "signals_per_detector": {k: sum(1 for r in rows if r["strategy"] == k) for k in sorted({r["strategy"] for r in rows})},
