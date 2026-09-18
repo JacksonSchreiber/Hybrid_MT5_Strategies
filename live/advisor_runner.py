@@ -75,7 +75,8 @@ def swing_block(sig: dict) -> str:
     return ("- **Recent swing structure (EA values — authoritative over your read of the image):**\n"
             f"    - swing highs, newest first: {row(tbl['hi'])}\n"
             f"    - swing lows, newest first: {row(tbl['lo'])}\n"
-            "    - 5-bar fractal (2 left / 2 right) on H4 over a 14-day rolling window — the same set the chart marks. "
+            "    - 5-bar fractal (2 left / 2 right) on H4 over a 14-day rolling window — the same set the chart marks, but only the "
+            "five most recent of each: the chart marks more, so an unlisted marker is not a spurious one. "
             f"Bars ago counts back from the newest bar on the chart (its right edge); {anchor}. The newest entry may still be "
             "confirmed against the unfinished current bar. No sweep column: the EA tracks no per-swing pool status.")
 

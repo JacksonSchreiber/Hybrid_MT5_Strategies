@@ -157,6 +157,9 @@ the picture cannot disagree.
   while window 15 was running, so it was never compiled or copied into the build path. Merge sequence once
   `terminal64` is free: `git merge swing-sidecar` → `pipeline/gate_chain.sh` (parity both builds + live self-test) →
   commit. Until then the tester card simply carries no table; the live card has one today.
+  **Then check for a stale daemon before the next window:** `pgrep -af os_shot_daemon.py` — a `--watch` process that
+  predates the merge is running the old `inbox_bridge` from memory, so the new EA would write sidecars nothing reads
+  and the tester card would lose its table silently, with no error anywhere. Kill it; `start_level.sh` starts its own.
 
 ## Standing items (checked when the named condition occurs)
 

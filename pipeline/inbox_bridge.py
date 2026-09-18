@@ -204,7 +204,8 @@ def swing_block(swings_csv: Path | None, k: int = 5) -> str:
             f"    - swing highs, newest first: {row(hi)}\n"
             f"    - swing lows, newest first: {row(lo)}\n"
             "    - 5-bar fractal (2 left / 2 right) on H4 over a 14-day rolling window — the same set the chart "
-            "marks. Bars ago counts back from the newest bar on the chart (its right edge), which is the decision "
+            "marks, but only the five most recent of each: the chart marks more, so an unlisted marker is not a "
+            "spurious one. Bars ago counts back from the newest bar on the chart (its right edge), which is the decision "
             "bar; the newest entry may still be confirmed against that unfinished bar. Relative counts only — they "
             "are never dates. No sweep column: the EA tracks no per-swing pool status.")
 
