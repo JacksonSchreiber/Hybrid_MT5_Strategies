@@ -134,6 +134,13 @@ input int    InpTaskPollSec      = 5;      // poll tasks/ at least this often (Q
 input int    InpHeartbeatSec     = 60;     // heartbeat at least this often (E5: <=60s)
 input int    InpLiveMaxAgeBars   = 3;      // G2: unanswered signal ages out after N H4 bars -> skip code 8 (live.json overrides)
 input int    InpElectionHorizonDays = 14;  // G1: NO-HOLD election gate horizon in calendar days (live.json overrides)
+//--- §10.2 stop-width floor (coach 2026-09-18, TEST ONLY per §10.5 - never set in any live config).
+//--- Widen-only: SL = max(structural stop, InpStopFloorATR x ATR(14) from entry). 0 = off.
+input double InpStopFloorATR       = 0.0;   // §10.2 ATR floor on the DETECTOR stop (0=off; window 15 uses 1.385)
+input string InpStopFloorSymbol    = "BTCUSD"; // symbol root the floor applies to (scoped: no other symbol is touched)
+//--- §10.1 weekend-flat (broker quotes Mon-Fri): no signals on Sat/Sun bars, and any open position is closed at the
+//--- first weekend bar (== the Friday close in continuous crypto data). 0 = off (every FX/index window is unaffected).
+input bool   InpWeekendFlat        = false; // §10.1: skip weekend bars and be flat over the weekend
 input int    InpSignalBars         = 500; // bars embedded in each signal JSON (H4 + D1). 0 = none: the web app/advisor pull bars from the terminal (MetaTrader5 API)
 //--- strategy selection
 input bool   InpUseSMC      = true;     // Strategy 1: liquidity sweep + MSS (priority 1)
@@ -302,6 +309,10 @@ struct JournalRow
    double   risk_mult_applied;  // per-symbol multiplier applied at sizing (C2)
    int      auto_skip;          // 1 = automatic skip (G1 election gate) - only with skip_reason 2
    string   entry_mode;         // market | market_now | pending_frozen | skip | auto_skip | expired
+   //--- §10.2 floor (only written when InpStopFloorATR>0, so default runs stay byte-identical)
+   double   stop_pre_floor;     // |entry-SL| as the detector drew it
+   double   stop_post_floor;    // |entry-SL| after the floor
+   int      floor_applied;      // 1 = the floor widened this stop
   };
 JournalRow g_rows[];
 
@@ -420,6 +431,7 @@ string StampCompact(datetime t)
 //--- live runtime state
 bool     g_trading_enabled  = false;   // kill switch; fail CLOSED when the file is missing/unparseable
 string   g_ev_day="";                 // live: day key of the last calendar (re)load
+double   g_floor_pre=0.0, g_floor_post=0.0; int g_floor_applied=0;   // §10.2 floor, per signal
 double   g_risk_mult        = 1.0;     // per-symbol risk multiplier (C2) - applied at order sizing ONLY
 int      g_cfg_max_age_bars = 3;       // G2 (live.json overrides the input)
 int      g_cfg_election_days= 14;      // G1 (live.json overrides the input)
@@ -1150,6 +1162,24 @@ void OnTick()
       if(ibars>=12) CloseInverse("AUTO12");
      }
 
+   //--- §10.1 weekend-flat (broker quotes Mon-Fri; the .dk import is 24/7). At the first weekend bar: close any open
+   //--- position (that bar's open == the Friday close in continuous crypto data), then take no signals until Monday.
+   if(InpWeekendFlat)
+     {
+      MqlDateTime wd; TimeToStruct(bar0,wd);
+      bool weekend=(wd.day_of_week==0 || wd.day_of_week==6);
+      if(weekend)
+        {
+         for(int i=ArraySize(g_rows)-1;i>=0;i--)
+            if(g_rows[i].posid>0 && !g_rows[i].closed && PositionSelectByTicket((ulong)g_rows[i].posid))
+              { Print("Weekend-flat: closing signal #",g_rows[i].id," at the weekend boundary (§10.1)."); ManualClose(i); }
+         for(int i=ArraySize(g_rows)-1;i>=0;i--)
+            if(g_rows[i].is_pending && g_rows[i].posid==0 && !g_rows[i].closed && g_rows[i].order_ticket>0)
+              { g_trade.OrderDelete((ulong)g_rows[i].order_ticket); g_rows[i].decision="expired"; g_rows[i].closed=true;
+                Print("Weekend-flat: cancelled unfilled pending #",g_rows[i].id," (§10.1)."); WriteJournal(g_journal_part); }
+         return;                      // no detectors, no delay replay: the weekend does not exist for this instrument
+        }
+     }
    //--- roll the econ-event overlay forward with the replay (reveals upcoming
    //--- events within the lookahead; bias stays hidden until each one fires)
    if(InpShowEvents) DrawEconEvents();
@@ -1378,6 +1408,7 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].banked=false; g_rows[n].closed_vol=0.0; g_rows[n].ratcheted=false; g_rows[n].rt_bankr=-99.0;
    g_rows[n].rt_tp1R=0.0; g_rows[n].rt_tp2R=0.0; g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0;
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct; g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=0; g_rows[n].entry_mode="rejected";
+   g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
    Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," REJECTED: ",why);
    WriteJournal(g_journal_part);
   }
@@ -1965,6 +1996,7 @@ void AdoptOrphans()
       r.to_entry=r.entry; r.to_sl=r.sl; r.to_tp1=0; r.to_tp2=0; r.mfe_r=0; r.pre_dip_r=0; r.post_dip_r=0; r.dipped=0; r.terminal="";
       r.imp_atr=0; r.imp_nbig=0; r.cal_lab=0; r.v2_r=0; r.v2_bank=0; r.v2_runner=-1; r.rt_tp1R=0; r.rt_tp2R=0; r.rt_touched1=0; r.rt_reached2=0; r.rt_redip1=0; r.rt_bankr=-99.0;
       r.live=true; r.account_id=g_account_login; r.risk_pct_gate=InpRiskPct; r.risk_mult_applied=g_risk_mult; r.auto_skip=0; r.entry_mode="adopted";
+      r.stop_pre_floor=0; r.stop_post_floor=0; r.floor_applied=0;
       g_rows[n]=r;
       AuditLine("adopt_orphan","","",StringFormat("pos:%I64d",pid),"adopted","",StringFormat("sig=%d %s lots=%.2f sl=%s",r.id,DirStr(r.direction),r.lots,DoubleToString(r.sl,_Digits)));
       LiveAlert(StringFormat("adopt_orphan:%I64d",pid));
@@ -2523,6 +2555,22 @@ void SelfTestTick()
 
 void HandleSignal(SignalCandidate &cand)
   {
+   //--- §10.2 ATR floor (widen-only, symbol-scoped, all detectors - a per-detector floor would be fitting).
+   //--- Structure is preserved: the structural invalidation level always sits INSIDE the widened stop.
+   g_floor_pre=MathAbs(cand.entry-cand.sl); g_floor_post=g_floor_pre; g_floor_applied=0;
+   if(InpStopFloorATR>0.0 && SymbolRoot()==InpStopFloorSymbol)
+     {
+      double fatr=SignalATR();
+      if(fatr>0.0)
+        {
+         double need=InpStopFloorATR*fatr;
+         if(g_floor_pre<need && cand.direction!=0)
+           {
+            cand.sl=NormPrice(cand.entry-cand.direction*need);
+            g_floor_post=MathAbs(cand.entry-cand.sl); g_floor_applied=1;
+           }
+        }
+     }
    int id;
    bool is_replay=g_delay_replaying;                                   // this call is a delay re-present
    if(g_delay_replaying){ id=g_delayed_id; g_delay_replaying=false; }  // re-present: keep id
@@ -2753,6 +2801,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    //--- PHASE 3 LIVE columns (never written in the tester; see WriteJournal)
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct;
    g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=(g_live_auto?1:0); g_rows[n].entry_mode=entry_mode;
+   g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
 
    if(want_inv)
      {
@@ -5019,15 +5068,18 @@ void WriteLiveJournals()
        if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
    for(int q=0;q<nm;q++)
      {
-      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto\n";
+      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+"\n";
       for(int i=0;i<ArraySize(g_rows);i++)
         {
          if(StampMonth(g_rows[i].time)!=months[q]) continue;
-         body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d\n",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip);
+         body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+"\n";
         }
       AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }
   }
+string FloorHeader(){ return (InpStopFloorATR>0.0 ? ",stop_pre_floor,stop_post_floor,floor_applied" : ""); }
+string FloorCols(JournalRow &r)
+  { return (InpStopFloorATR>0.0 ? StringFormat(",%s,%s,%d",DoubleToString(r.stop_pre_floor,_Digits),DoubleToString(r.stop_post_floor,_Digits),r.floor_applied) : ""); }
 void WriteJournal(string path)
   {
    if(InpLiveMode){ WriteLiveJournals(); LiveSaveAllState(); return; }   // live: monthly + atomic, no .part (also the init-time write)
@@ -5038,8 +5090,8 @@ void WriteJournal(string path)
       "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
       "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal,decision_class,"
-      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr\n");
-   for(int i=0;i<ArraySize(g_rows);i++) FileWriteString(h,JournalRowLine(g_rows[i])+"\n");
+      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"+FloorHeader()+"\n");
+   for(int i=0;i<ArraySize(g_rows);i++) FileWriteString(h,JournalRowLine(g_rows[i])+FloorCols(g_rows[i])+"\n");
    FileFlush(h); FileClose(h);
   }
 

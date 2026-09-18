@@ -73,8 +73,9 @@ case "$LEVEL" in
   12b) P=(USOIL.dk 2017.01.01 2017.12.31); A=();;   # Pair-12 (coach 2026-09-10): WTI 2017, fresh, single-shot. AA baseline DEFERRED until item-1 TP1-ratchet ruling lands so it carries the final exit doctrine.
   13a) P=(GBPUSD.dk 2023.01.01 2023.12.31); A=();;  # Pair-13 (coach 2026-09-10): GBPUSD 2023, fresh, single-shot. AA baseline = current doctrine.
   13b) P=(US100.dk 2019.01.01 2019.12.31); A=();;   # Pair-13 (coach 2026-09-10): NAS100 2019, fresh, single-shot. AA baseline = current doctrine.
-  14) P=(BTCUSD.dk 2019.01.01 2019.12.31); A=();;    # Window 14 (coach 2026-09-16): BTCUSD discretion window, trader-initiated (NOT a reopening of the closed mechanical study). Four-detector lineup. Per-symbol rules from config/symbol_rules.json (session rules off, weekend-hold off, overnight-timing advisory, USD V/W bind as index; class: crypto). Graded on COSTED figures (pipeline/cost_journal.py). Import covers 2017-05→2026-07 so the regime warm-up is complete before 2019-01-01.
-  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b, 9a, 9b, 10a, 10b, 11, 12a, 12b, 13a, 13b, 14)";;
+  14) P=(BTCUSD.dk 2019.01.01 2019.12.31); A=();;
+  15) P=(BTCUSD.dk 2023.01.01 2023.12.31); A=();;    # Window 15 (coach 2026-09-18): BTCUSD 2023, second window before any live seat. §10.2 ATR floor 1.385 (widen-only, BTCUSD only, TEST ONLY per §10.5) + §10.1 weekend-flat, both applied identically to the AA baseline and this run. A fail closes BTCUSD permanently (§10.3: no parameter changes before, during or after).    # Window 14 (coach 2026-09-16): BTCUSD discretion window, trader-initiated (NOT a reopening of the closed mechanical study). Four-detector lineup. Per-symbol rules from config/symbol_rules.json (session rules off, weekend-hold off, overnight-timing advisory, USD V/W bind as index; class: crypto). Graded on COSTED figures (pipeline/cost_journal.py). Import covers 2017-05→2026-07 so the regime warm-up is complete before 2019-01-01.
+  *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b, 9a, 9b, 10a, 10b, 11, 12a, 12b, 13a, 13b, 14, 15)";;
 esac
 if $ALT; then
   [[ ${#A[@]} -gt 0 ]] || die "level $LEVEL has no alternate window (final-exam levels are single-shot)"
@@ -94,9 +95,14 @@ BASELINE="$BASELINE_DIR/${SYMBOL}_${FROMC}_${TOC}_AA_ALL.csv"
 # interactive .set below read these SAME vars so they can never drift.
 # Extend the new-era list (11|12|...) as future windows are added.
 case "$LEVEL" in
-  11|12a|12b|13a|13b|14) LIVE_STRAT="SMC,Fib,TrendCont,EMArevQ"; SET_EMA=false; SET_EMAQ=true;  SET_TC=true;;
+  11|12a|12b|13a|13b|14|15) LIVE_STRAT="SMC,Fib,TrendCont,EMArevQ"; SET_EMA=false; SET_EMAQ=true;  SET_TC=true;;
   *)          LIVE_STRAT="SMC,Fib,EMA";               SET_EMA=true;  SET_EMAQ=false; SET_TC=false;;
 esac
+
+# --- per-window doctrine inputs (window 15: §10.2 ATR floor + §10.1 weekend-flat; TEST ONLY, never in a live config)
+STOP_FLOOR_ATR=""; STOP_FLOOR_SYM=""; WEEKEND_FLAT=""
+if [[ "$LEVEL" == "15" ]]; then STOP_FLOOR_ATR="1.385"; STOP_FLOOR_SYM="BTCUSD"; WEEKEND_FLAT="true"; fi
+export STOP_FLOOR_ATR STOP_FLOOR_SYM WEEKEND_FLAT
 
 log "=== Level $LEVEL$($ALT && echo ' (alternate window)') ==="
 log "    $SYMBOL  $FROM -> $TO  (H4, real ticks, \$25k, interactive)  lineup: $LIVE_STRAT"
@@ -148,6 +154,9 @@ mkdir -p "$SETDIR"
   echo "InpUseEmaRevInv=false"    # EMArev-Inverse backtest detector stays OFF in the training path
   echo "InpOfferInverse=$($INVERSE && echo true || echo false)"  # EMArev INVERSE dialog option (default OFF; --inverse to enable)
   echo "InpShotOnDecision=true"   # capture the H4 chart (with overlays) on each signal
+  [[ -n "$STOP_FLOOR_ATR" ]] && echo "InpStopFloorATR=$STOP_FLOOR_ATR"
+  [[ -n "$STOP_FLOOR_SYM" ]] && echo "InpStopFloorSymbol=$STOP_FLOOR_SYM"
+  [[ -n "$WEEKEND_FLAT" ]] && echo "InpWeekendFlat=$WEEKEND_FLAT"
   echo "InpBlindLabels=true"      # on-chart label carries no date -> blind screenshots
   echo "InpShowEvents=true"       # event lines ON (operator wants to see upcoming news). Blindness
                                   # is preserved by InpBlindLabels=true above: DrawEconEvents then

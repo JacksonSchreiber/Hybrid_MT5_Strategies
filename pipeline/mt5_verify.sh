@@ -77,6 +77,9 @@ mkdir -p "$SETDIR"
   [[ -n "${TEST_INV:-}" ]]      && echo "InpTestInverse=${TEST_INV}"
   [[ -n "${TEST_DELAY:-}" ]]    && echo "InpTestDelay=${TEST_DELAY}"
   [[ -n "${DELAY_MODE:-}" ]]    && echo "InpDelayMode=${DELAY_MODE}"   # 0=FREEZE(default) 1=SLIDE
+  [[ -n "${STOP_FLOOR_ATR:-}" ]] && echo "InpStopFloorATR=${STOP_FLOOR_ATR}"     # §10.2 floor (window 15; default off)
+  [[ -n "${STOP_FLOOR_SYM:-}" ]] && echo "InpStopFloorSymbol=${STOP_FLOOR_SYM}"
+  [[ -n "${WEEKEND_FLAT:-}" ]]  && echo "InpWeekendFlat=${WEEKEND_FLAT}"          # §10.1 weekend-flat (broker Mon-Fri)
   [[ -n "${V2_EXIT:-}" ]]       && echo "InpV2Exit=${V2_EXIT}"         # false=study re-run (old exit + v2 observer sidecar)
   [[ -n "${EMA_STRETCH:-}" ]]   && echo "InpEmaStretch=${EMA_STRETCH}" # stretch-threshold scan (coach 2026-09-09); default (unset) = EA 2.0
   $FORCE_PENDING && echo "InpForcePendingTest=true"
