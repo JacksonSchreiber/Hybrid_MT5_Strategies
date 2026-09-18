@@ -1,0 +1,24 @@
+{
+ "rows": 73,
+ "approved": 70,
+ "rejected": 3,
+ "closed": 70,
+ "bank_rate": 38.6,
+ "tp_rate": 10.0,
+ "sl_rate": 38.6,
+ "be_rate": 27.1,
+ "sumR_off": 0.65,
+ "costed_total": -6.4,
+ "costed_avg": -0.0914,
+ "weekend_candle_rows": 5,
+ "weekend_candle_approved": 5,
+ "weekend_candle_costed_sum": -2.638,
+ "costed_excluding_weekend_candles": -3.762,
+ "per_detector_signals": {
+  "TrendCont": 49,
+  "EMArevQ": 6,
+  "SweepMSS": 12,
+  "DeepFib": 6
+ },
+ "zero_spread": true
+}

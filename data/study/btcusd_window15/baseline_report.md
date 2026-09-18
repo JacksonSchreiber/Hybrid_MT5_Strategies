@@ -1,5 +1,11 @@
 # Window 15 — BTCUSD.dk 2023 — AA baseline report (coach 2026-09-18)
 
+> **§10.6 (coach, 2026-09-18): the §10.2 ATR floor is DROPPED for window 15** — refuted on its own mechanism on this
+> baseline (stop-outs rose while bank rate fell 7.2 points; −2.6R/yr). The input stays built and default-off; it is set
+> in no config, live or tester. **The official baseline is now the floor-OFF run below**; the floor run is kept for the
+> record as `*.floorON_dropped.csv`. §10.1 weekend-flat verified and stays in force. §10.7: weekend-candle rows are
+> flagged in the journal.
+
 **Baseline (official, graded against):** `journal/baselines/BTCUSD.dk_20230101_20231231_AA_ALL.csv` (+ `.actions.csv`,
 `.costed.csv`, README sidecar). Headless AA_ALL, real ticks, H4, $25k, four-detector lineup, **§10.2 ATR floor 1.385 ON**
 (BTCUSD only, widen-only) and **§10.1 weekend-flat ON**. A second run with the floor OFF (weekend-flat still on) is parked
@@ -48,3 +54,36 @@ DeepFib 6 · EMArevQ 6 · SweepMSS 12 · TrendCont 46
 ## Costing parameters
 Identical to window 14: OANDA BTCUSD.sim spec read 2026-09-16 — swaps −30.31%/−19.69% p.a. Mon–Fri, commission 0.0325%/side,
 spread $3.09 charged per round trip; costs computed in R. `zero_spread_source` on both journals: True.
+
+
+---
+
+## OFFICIAL baseline (floor OFF, weekend-flat ON) — regenerated 2026-09-18 with the §10.7 flag
+
+`journal/baselines/BTCUSD.dk_20230101_20231231_AA_ALL.csv` — 73 rows (70 approved, 3 rejected),
+last column **`weekend_candle`** (present because weekend-flat is on).
+
+| | value |
+|---|---|
+| blind total R, costs-off | +0.65 |
+| **blind total R, costed (the grading basis)** | **-6.40** (avg -0.0914) |
+| bank rate / TP rate | 38.6% / 10.0% |
+| SL rate / BE rate | 38.6% / 27.1% |
+| signals per detector | DeepFib 6 · EMArevQ 6 · SweepMSS 12 · TrendCont 49 |
+| zero-spread source | True (spread charged post hoc) |
+
+### §10.7 weekend-candle sensitivity (pre-computed for grading)
+5 rows carry `weekend_candle=1` — all 5 approved:
+2023.06.25 20:00:00 TrendCont BUY, 2023.07.02 20:00:00 TrendCont BUY, 2023.09.03 20:00:00 TrendCont SELL, 2023.10.08 20:00:00 TrendCont BUY, 2023.11.19 20:00:00 TrendCont BUY.
+
+| | costed R |
+|---|---|
+| baseline as traded (all rows) | **-6.40** |
+| the 5 weekend-candle rows alone | -2.638 |
+| baseline excluding them | -3.762 |
+
+So the weekend-candle residue is not neutral on the blind base: those five rows account for -2.64R of the
+-6.40R. Excluding them the base is -3.76R. Both numbers are stated so the grade can be read either way;
+the trader's own run will carry the same flag, so the same split can be computed on it.
+
+**The trader's bar is unchanged: costed absolute R ≥ +2R with zero violations, against this baseline of -6.40R.**

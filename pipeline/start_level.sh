@@ -74,7 +74,7 @@ case "$LEVEL" in
   13a) P=(GBPUSD.dk 2023.01.01 2023.12.31); A=();;  # Pair-13 (coach 2026-09-10): GBPUSD 2023, fresh, single-shot. AA baseline = current doctrine.
   13b) P=(US100.dk 2019.01.01 2019.12.31); A=();;   # Pair-13 (coach 2026-09-10): NAS100 2019, fresh, single-shot. AA baseline = current doctrine.
   14) P=(BTCUSD.dk 2019.01.01 2019.12.31); A=();;
-  15) P=(BTCUSD.dk 2023.01.01 2023.12.31); A=();;    # Window 15 (coach 2026-09-18): BTCUSD 2023, second window before any live seat. §10.2 ATR floor 1.385 (widen-only, BTCUSD only, TEST ONLY per §10.5) + §10.1 weekend-flat, both applied identically to the AA baseline and this run. A fail closes BTCUSD permanently (§10.3: no parameter changes before, during or after).    # Window 14 (coach 2026-09-16): BTCUSD discretion window, trader-initiated (NOT a reopening of the closed mechanical study). Four-detector lineup. Per-symbol rules from config/symbol_rules.json (session rules off, weekend-hold off, overnight-timing advisory, USD V/W bind as index; class: crypto). Graded on COSTED figures (pipeline/cost_journal.py). Import covers 2017-05→2026-07 so the regime warm-up is complete before 2019-01-01.
+  15) P=(BTCUSD.dk 2023.01.01 2023.12.31); A=();;    # Window 15 (coach 2026-09-18): BTCUSD 2023, second window before any live seat. §10.1 weekend-flat (the §10.2 ATR floor was refuted on the baseline and DROPPED per §10.6; input stays default-off) + §10.7 weekend-candle flag, both applied identically to the AA baseline and this run. A fail closes BTCUSD permanently (§10.3: no parameter changes before, during or after).    # Window 14 (coach 2026-09-16): BTCUSD discretion window, trader-initiated (NOT a reopening of the closed mechanical study). Four-detector lineup. Per-symbol rules from config/symbol_rules.json (session rules off, weekend-hold off, overnight-timing advisory, USD V/W bind as index; class: crypto). Graded on COSTED figures (pipeline/cost_journal.py). Import covers 2017-05→2026-07 so the regime warm-up is complete before 2019-01-01.
   *) die "unknown level '$LEVEL' (0-6, 7a, 7b, 7c, 8a, 8b, 9a, 9b, 10a, 10b, 11, 12a, 12b, 13a, 13b, 14, 15)";;
 esac
 if $ALT; then
@@ -101,7 +101,10 @@ esac
 
 # --- per-window doctrine inputs (window 15: §10.2 ATR floor + §10.1 weekend-flat; TEST ONLY, never in a live config)
 STOP_FLOOR_ATR=""; STOP_FLOOR_SYM=""; WEEKEND_FLAT=""
-if [[ "$LEVEL" == "15" ]]; then STOP_FLOOR_ATR="1.385"; STOP_FLOOR_SYM="BTCUSD"; WEEKEND_FLAT="true"; fi
+# §10.6 (coach 2026-09-18): the ATR floor is DROPPED for window 15 - refuted on its own mechanism on the baseline
+# (stop-outs rose while bank rate fell 7.2 points, -2.6R/yr). The input stays built and default-off. §10.1 weekend-flat
+# stays in force, and §10.7 flags weekend-candle rows for the grading sensitivity.
+if [[ "$LEVEL" == "15" ]]; then WEEKEND_FLAT="true"; fi
 export STOP_FLOOR_ATR STOP_FLOOR_SYM WEEKEND_FLAT
 
 log "=== Level $LEVEL$($ALT && echo ' (alternate window)') ==="

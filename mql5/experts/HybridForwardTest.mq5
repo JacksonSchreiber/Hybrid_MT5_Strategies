@@ -313,6 +313,7 @@ struct JournalRow
    double   stop_pre_floor;     // |entry-SL| as the detector drew it
    double   stop_post_floor;    // |entry-SL| after the floor
    int      floor_applied;      // 1 = the floor widened this stop
+   int      weekend_candle;     // §10.7: 1 = the signal candle is a Sat/Sun bar (decided on the Monday bar)
   };
 JournalRow g_rows[];
 
@@ -1409,6 +1410,7 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].rt_tp1R=0.0; g_rows[n].rt_tp2R=0.0; g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0;
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct; g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=0; g_rows[n].entry_mode="rejected";
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
+   g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time);
    Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," REJECTED: ",why);
    WriteJournal(g_journal_part);
   }
@@ -1996,7 +1998,7 @@ void AdoptOrphans()
       r.to_entry=r.entry; r.to_sl=r.sl; r.to_tp1=0; r.to_tp2=0; r.mfe_r=0; r.pre_dip_r=0; r.post_dip_r=0; r.dipped=0; r.terminal="";
       r.imp_atr=0; r.imp_nbig=0; r.cal_lab=0; r.v2_r=0; r.v2_bank=0; r.v2_runner=-1; r.rt_tp1R=0; r.rt_tp2R=0; r.rt_touched1=0; r.rt_reached2=0; r.rt_redip1=0; r.rt_bankr=-99.0;
       r.live=true; r.account_id=g_account_login; r.risk_pct_gate=InpRiskPct; r.risk_mult_applied=g_risk_mult; r.auto_skip=0; r.entry_mode="adopted";
-      r.stop_pre_floor=0; r.stop_post_floor=0; r.floor_applied=0;
+      r.stop_pre_floor=0; r.stop_post_floor=0; r.floor_applied=0; r.weekend_candle=0;
       g_rows[n]=r;
       AuditLine("adopt_orphan","","",StringFormat("pos:%I64d",pid),"adopted","",StringFormat("sig=%d %s lots=%.2f sl=%s",r.id,DirStr(r.direction),r.lots,DoubleToString(r.sl,_Digits)));
       LiveAlert(StringFormat("adopt_orphan:%I64d",pid));
@@ -2802,6 +2804,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct;
    g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=(g_live_auto?1:0); g_rows[n].entry_mode=entry_mode;
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
+   g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time);
 
    if(want_inv)
      {
@@ -5077,9 +5080,14 @@ void WriteLiveJournals()
       AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }
   }
-string FloorHeader(){ return (InpStopFloorATR>0.0 ? ",stop_pre_floor,stop_post_floor,floor_applied" : ""); }
+//--- §10.7: the signal candle is a weekend bar (the decision itself is taken on the Monday bar; a Mon-Fri broker would
+//--- not have printed this candle). Flagged so the coach can run a with/without sensitivity at grading.
+int WeekendCandle(datetime t){ MqlDateTime d; TimeToStruct(t,d); return ((d.day_of_week==0 || d.day_of_week==6) ? 1 : 0); }
+string FloorHeader(){ return (InpStopFloorATR>0.0 ? ",stop_pre_floor,stop_post_floor,floor_applied" : "")
+                             + (InpWeekendFlat ? ",weekend_candle" : ""); }
 string FloorCols(JournalRow &r)
-  { return (InpStopFloorATR>0.0 ? StringFormat(",%s,%s,%d",DoubleToString(r.stop_pre_floor,_Digits),DoubleToString(r.stop_post_floor,_Digits),r.floor_applied) : ""); }
+  { return (InpStopFloorATR>0.0 ? StringFormat(",%s,%s,%d",DoubleToString(r.stop_pre_floor,_Digits),DoubleToString(r.stop_post_floor,_Digits),r.floor_applied) : "")
+         + (InpWeekendFlat ? StringFormat(",%d",r.weekend_candle) : ""); }
 void WriteJournal(string path)
   {
    if(InpLiveMode){ WriteLiveJournals(); LiveSaveAllState(); return; }   // live: monthly + atomic, no .part (also the init-time write)
