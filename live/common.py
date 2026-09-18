@@ -40,6 +40,7 @@ _DEFAULT_CONFIG = {
     "calendar": {"dir": "", "refresh_utc": "02:30", "stale_days": 7, "python": "", "feed_url": ""},
     "feed": {"port": 8081, "url": ""},   # url set on the web/advisor side -> bars via the feedd process
     "brief": {"model": "claude-opus-5", "effort": "medium", "timeout_s": 150},
+    "symbol_rules_file": "",          # per-symbol doctrine flags (deployed copy of config/symbol_rules.json)
     "expected_symbols": [],           # the lineup the post-reboot check waits for ([] = whatever heartbeats exist)
 }
 
@@ -293,6 +294,24 @@ def _ssl_ctx():
             import certifi; _SSL = ssl.create_default_context(cafile=certifi.where())
         except ImportError: _SSL = ssl.create_default_context()
     return _SSL
+
+# ----------------------------------------------------------------------------- per-symbol doctrine flags
+_RULES_CACHE: dict = {}
+def symbol_rules(cfg: dict, symbol: str) -> dict:
+    """config/symbol_rules.json as deployed beside live_config.json (class, session flags, costs). {} when absent."""
+    p = (cfg.get("symbol_rules_file") or os.path.join(os.path.dirname(cfg.get("_path", "") or "."), "symbol_rules.json"))
+    mt = 0.0
+    try: mt = os.path.getmtime(p)
+    except OSError: return {}
+    if _RULES_CACHE.get("_path") != p or _RULES_CACHE.get("_mtime") != mt:
+        _RULES_CACHE.clear(); _RULES_CACHE.update({"_path": p, "_mtime": mt, "_data": load_json(p, {}) or {}})
+    return (_RULES_CACHE["_data"] or {}).get((symbol or "").split(".")[0].upper(), {})
+
+def symbol_rules_line(cfg: dict, symbol: str) -> str:
+    r = symbol_rules(cfg, symbol)
+    if not r: return ""
+    return (f"class: {r.get('class')} · late-Friday rule {r.get('late_friday_rule')} · weekend-hold flag {r.get('weekend_hold_flag')} · "
+            f"overnight-timing steps {r.get('overnight_timing_steps')} · event rows: {r.get('event_rows')} (config/symbol_rules.json)")
 
 def tv_symbol(cfg: dict, symbol: str) -> str:
     root = symbol.split(".")[0].upper()

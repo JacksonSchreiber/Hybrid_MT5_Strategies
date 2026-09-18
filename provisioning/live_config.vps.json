@@ -53,5 +53,6 @@
   "feed": {
     "port": 8081,
     "url": "http://127.0.0.1:8081"
-  }
+  },
+  "symbol_rules_file": "C:\\ProgramData\\hybrid\\live\\symbol_rules.json"
 }

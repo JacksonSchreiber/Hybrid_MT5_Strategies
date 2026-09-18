@@ -66,10 +66,13 @@ def build_setup_md(sig: dict, cfg: dict) -> str:
     entry_note = " (STOP entry - breakout order)" if lv.get("stop_entry") else ""
     tp2 = f", TP2 {lv.get('tp2')}" if lv.get("tp2") else ""
     r_tp1 = rr.get("tp1"); r_run = rr.get("runner") or rr.get("detector")
+    rules = C.symbol_rules(cfg, sig.get("symbol", "")); rules_line = C.symbol_rules_line(cfg, sig.get("symbol", ""))
+    klass = rules.get("class") or sig.get("asset_class")          # config wins: the EA's classifier has no crypto branch
     return f"""# LIVE SETUP — {sig.get('strategy')} {sig.get('direction')} — {sig.get('symbol')} #{sig.get('signal_id')}
 _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the calendar below._
 
-- **Symbol / class:** {sig.get('symbol')} ({sig.get('asset_class')})
+- **Symbol / class:** {sig.get('symbol')} ({klass})
+{('- **Symbol rules (journaled):** ' + rules_line) if rules_line else '- **Symbol rules:** standard session rules apply (no per-symbol entry in config/symbol_rules.json)'}
 - **Time:** {sig.get('sigtime_text', '')} — signal bar {sig.get('signal_time')}, presented {sig.get('published_at')} · session: {sig.get('session')}
 - **Decision deadline:** {dl.strftime('%a %d %b %H:%M UTC') if dl else '-'} ({sig.get('max_age_bars')} H4 bars of silence = expired) · delays so far: {sig.get('delay_count', 0)}
 - **{regime_line(sig)}**

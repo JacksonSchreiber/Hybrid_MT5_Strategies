@@ -17,6 +17,7 @@ $SSH "New-Item -ItemType Directory -Force -Path $APP/live/static, $ADV/advisor/.
 $SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$REPO"/live/calendar_refresh.py "$REPO"/live/backup.py "$REPO"/live/feedd.py "$REPO"/live/brief_runner.py "$HOST:$APP/live/"
 $SCP "$REPO"/live/static/lw.js "$REPO"/live/static/hybrid_chart.js "$HOST:$APP/live/static/"
 $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
+$SCP "$REPO"/config/symbol_rules.json "$HOST:$APP/symbol_rules.json"      # per-symbol doctrine flags (class + suspended session rules) for the advisor card
 $SCP "$REPO"/provisioning/live_tasks.ps1 "$HOST:C:/ProgramData/hybrid/live_tasks.ps1"
 $SCP "$REPO"/provisioning/maintenance.ps1 "$HOST:C:/ProgramData/hybrid/maintenance.ps1"
 log "code + config copied"
