@@ -15,8 +15,10 @@
       if (i >= 21) { var s = 0; for (var k = i - 20; k < i; k++) s += r[k][5]; var avg = s / 20; if (avg > 0 && r[i][5] > 2 * avg) z.push([r[i][3], r[i][2], r[i][4] >= r[i][1] ? 1 : -1, i]); } }
     for (var q = z.length - 1; q >= 0 && out.length < 15; q--) { var st = imbState(r, z[q][3], z[q][0], z[q][1], z[q][2]); if (st === 2) continue; out.push({ t0: r[z[q][3]][0], t1: r[cnt-1][0], lo: z[q][0], hi: z[q][1], state: st }); }
     return out; }
-  function swings(bars) { var r = bars.length > 1 ? bars.slice(0, -1) : bars, nb = Math.min(14 * 6 + 8, r.length), out = []; if (nb < 12) return out; var w = r.slice(-nb);
-    for (var i = 2; i < w.length - 2 && out.length < 120; i++) { var sh = true, sl = true; for (var k = 1; k <= 2; k++) { if (!(w[i][2] > w[i-k][2] && w[i][2] > w[i+k][2])) sh = false; if (!(w[i][3] < w[i-k][3] && w[i][3] < w[i+k][3])) sl = false; }
+  // mirrors DrawSwingMarkers / overlays.swings: the scan INCLUDES the forming last bar as a
+  // right-hand neighbour (the EA copies from index 0), newest centre first.
+  function swings(bars) { var nb = Math.min(14 * 6 + 8, bars.length), out = []; if (nb < 12) return out; var w = bars.slice(-nb);
+    for (var i = w.length - 3; i >= 2 && out.length < 120; i--) { var sh = true, sl = true; for (var k = 1; k <= 2; k++) { if (!(w[i][2] > w[i-k][2] && w[i][2] > w[i+k][2])) sh = false; if (!(w[i][3] < w[i-k][3] && w[i][3] < w[i+k][3])) sl = false; }
       if (sh) out.push({ t: w[i][0], p: w[i][2], kind: 'hi' }); if (sl) out.push({ t: w[i][0], p: w[i][3], kind: 'lo' }); } return out; }
   window.HybridChart = {
     mount: function (id, d) {

@@ -43,7 +43,7 @@ REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO.parent))
 from pipeline.inbox_bridge import (              # noqa: E402
     find_journal_row, blind_setup_md, setup_levels, render_d1,
-    INBOX, ARCHIVE, JOURNAL_DIR)
+    INBOX, ARCHIVE, JOURNAL_DIR, SWINGS_DIR)
 
 # The EA writes a per-signal sidecar here the INSTANT the signal fires (before the
 # dialog) — the blind numbers, FILE_COMMON so they're visible live. Reading this
@@ -201,7 +201,9 @@ def parse_visual(title: str):
 
 
 def build_bundle(sid: int, stamp: str, sym: str, raw: Path, row) -> bool:
-    md, sig_dt = blind_setup_md(row)
+    # swing sidecar: the EA's own swing markers (prices + relative bar counts), written with the
+    # D1 series at signal-fire. Absent on EA builds that predate it -> the card carries no table.
+    md, sig_dt = blind_setup_md(row, SWINGS_DIR / f"{sym}_{stamp}_{sid}.csv")
     # Symbol in the archive key: alt-window levels share a (stamp, id) with their
     # primary (e.g. GBPUSD and EURUSD both stamp 20220102/#1), so a bare key made
     # them collide — the second symbol's bundle overwrote the first's.

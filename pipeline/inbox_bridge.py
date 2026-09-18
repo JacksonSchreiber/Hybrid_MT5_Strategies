@@ -53,6 +53,7 @@ TERMINAL = Path("/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal")
 TERMINAL_ID = "EE0304F13905552AE0B5EAEFB04866EB"
 TESTER_ROOT = TERMINAL.parent / "Tester"          # sibling of Terminal/
 JOURNAL_DIR = TERMINAL / "Common" / "Files" / "journal"   # FILE_COMMON → shared, live
+SWINGS_DIR = JOURNAL_DIR / "swings"   # EA per-signal swing sidecar (WriteSwingSidecar): prices + relative bar counts
 
 
 def _default_shots_dir() -> Path:
@@ -174,7 +175,41 @@ def asset_class(symbol: str) -> str:
     return "(unclassified)"
 
 
-def blind_setup_md(row) -> tuple[str, datetime | None]:
+def swing_block(swings_csv: Path | None, k: int = 5) -> str:
+    """Blind "Recent swing structure" block from the EA's per-signal swing sidecar
+    (journal\\swings\\<sym>_<stamp>_<id>.csv: kind,price,bars_ago) — the EXACT set
+    DrawSwingMarkers labels on the chart, so the table and the picture can never disagree.
+    Trader-reported defect 2026-09-17: the advisor was estimating swing levels off the pixels.
+
+    Blind-safe: prices (already visible on the chart) and relative H4 bar counts only — no
+    times, no dates. Returns "" when the sidecar is absent (EA build predates it): the card
+    then simply has no table. Never estimate, never fabricate the rows."""
+    if not swings_csv or not Path(swings_csv).exists():
+        return ""
+    hi, lo = [], []
+    try:
+        with open(swings_csv, newline="", encoding="utf-8", errors="replace") as fh:
+            for r in csv.DictReader(fh):
+                px, ago = (r.get("price") or "").strip(), (r.get("bars_ago") or "").strip()
+                if not px or not ago:
+                    continue
+                (hi if (r.get("kind") or "").strip() == "hi" else lo).append(f"{px} ({ago} bars ago)")
+    except OSError:
+        return ""
+    if not hi and not lo:
+        return ""
+    def row(xs):
+        return " · ".join(xs[:k]) or "(none in the window)"
+    return ("- **Recent swing structure (EA values — authoritative over your read of the image):**\n"
+            f"    - swing highs, newest first: {row(hi)}\n"
+            f"    - swing lows, newest first: {row(lo)}\n"
+            "    - 5-bar fractal (2 left / 2 right) on H4 over a 14-day rolling window — the same set the chart "
+            "marks. Bars ago counts back from the newest bar on the chart (its right edge), which is the decision "
+            "bar; the newest entry may still be confirmed against that unfinished bar. Relative counts only — they "
+            "are never dates. No sweep column: the EA tracks no per-swing pool status.")
+
+
+def blind_setup_md(row, swings_csv: Path | None = None) -> tuple[str, datetime | None]:
     """Build the blind setup.md (no symbol, no date) + return the signal datetime
     (used for the D1 render). Numbers come from the journal row."""
     strat = (row.get("strategy") or "?").strip()
@@ -243,6 +278,8 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
     else:
         protocol_line = "PROTOCOL: (unavailable)"
 
+    swings_md = swing_block(swings_csv)
+
     lines = [
         f"# BLIND SETUP — {strat} {dstr}",
         "_No symbol, no date. For the blind advisor. Judge from the charts + the library only._",
@@ -257,6 +294,7 @@ def blind_setup_md(row) -> tuple[str, datetime | None]:
         f"TP1 {tp1}, TP2 {tp2}",
         f"- **Risk geometry:** SL {rmult(sl)} · TP1 {rmult(tp1)} · TP2 {rmult(tp2)} "
         "(detector already sized to 1% and cleared the R:R floor)",
+        *([swings_md] if swings_md else []),
         f"- **Calendar (blind):** high_impact_ahead={cal['high_impact_ahead']}, "
         f"hours_until={cal['hours_until']}, affects={cal['affects']}, "
         f"recent_event_bias={cal['recent_event_bias']}",
@@ -379,7 +417,7 @@ def process(png: Path, *, to_inbox: bool, verbose=True) -> bool:
             print(f"  {png.name}: no journal row for id {sig_id} — skipped")
         return False
 
-    md, sig_dt = blind_setup_md(row)
+    md, sig_dt = blind_setup_md(row, SWINGS_DIR / f"{symbol}_{stamp}_{sig_id}.csv")
     lv = setup_levels(row)
     arch = ARCHIVE / f"{stamp}_{sig_id}"
     arch.mkdir(parents=True, exist_ok=True)

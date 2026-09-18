@@ -18,6 +18,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
 from live import charts
+from live import overlays as OV
 from live import brief_runner
 
 SESSION_NS = uuid.UUID("5f0a3c1e-9b7d-4c1a-8f2e-2d3b4a5c6d7e")
@@ -57,6 +58,27 @@ def events_block(sig: dict, cfg: dict) -> str:
     if eg.get("hit"): lines.append(f"  - ELECTION GATE HIT: {eg.get('event')} — the EA auto-skips this signal (code 2).")
     return "\n".join(lines)
 
+def swing_block(sig: dict) -> str:
+    """Recent swing structure: the EA's own H4 fractal swings — the SAME set the chart marks
+    (overlays.swings mirrors DrawSwingMarkers line for line, and charts.py draws it from the same
+    call), so the table and the picture can never disagree. Trader-reported defect 2026-09-17: the
+    advisor was estimating swing levels off the pixels; these are the values, not an estimate."""
+    bars = charts.signal_bars(sig, "h4")
+    if len(bars) < 12:
+        return "- **Recent swing structure:** (unavailable — no H4 bars for this signal; do not estimate swing levels off the image, say the table is missing)"
+    tbl = OV.swing_table(bars, 5); dg = charts._digits(sig)
+    def row(xs): return " · ".join(f"{s['p']:.{dg}f} ({s['bars_ago']} bars ago)" for s in xs) or "(none in the window)"
+    idx = {b[0]: i for i, b in enumerate(bars)}; st = charts._epoch(sig.get("signal_time"))
+    ago = (len(bars) - 1 - idx[st]) if st in idx else None
+    anchor = (f"the signal bar is {ago} bar{'' if ago == 1 else 's'} back from that edge" if ago is not None
+              else "the signal bar is outside the drawn bar window")
+    return ("- **Recent swing structure (EA values — authoritative over your read of the image):**\n"
+            f"    - swing highs, newest first: {row(tbl['hi'])}\n"
+            f"    - swing lows, newest first: {row(tbl['lo'])}\n"
+            "    - 5-bar fractal (2 left / 2 right) on H4 over a 14-day rolling window — the same set the chart marks. "
+            f"Bars ago counts back from the newest bar on the chart (its right edge); {anchor}. The newest entry may still be "
+            "confirmed against the unfinished current bar. No sweep column: the EA tracks no per-swing pool status.")
+
 def build_setup_md(sig: dict, cfg: dict) -> str:
     lv = sig.get("levels") or {}; rr = sig.get("rr") or {}; sz = sig.get("sizing") or {}; ex = sig.get("exposure") or {}
     sig_t = C.parse_iso(sig.get("signal_time")); dl = C.parse_iso(sig.get("deadline"))
@@ -80,6 +102,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 - **Strategy read:** {sig.get('strategy_text', '')}
 - **Proposed levels:** entry {lv.get('entry')}{entry_note}, SL {lv.get('sl')}, TP1 {lv.get('tp1')}{tp2} (partial {lv.get('partial_fraction', 0.5):.0%} at TP1)
 - **Risk geometry:** SL 1.0R · TP1 {r_tp1}R · TP2 {r_run}R (floor {rr.get('floor')}R; detector already sized to the gate risk and cleared the R:R floor)
+{swing_block(sig)}
 - **Sizing:** {sz.get('lots_line', '')} · risk multiplier in effect {sz.get('risk_mult_applied', 1.0)} → effective {float(sz.get('risk_pct_effective', 0.01))*100:.2f}%
 - **Exposure:** {exposure}
 - **Kill switch:** trading {'ENABLED' if sig.get('trading_enabled') else 'DISABLED (approve would be refused)'}

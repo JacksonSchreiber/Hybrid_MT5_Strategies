@@ -1,8 +1,8 @@
 """
 overlays.py - the tester's display overlays recomputed from bars (mirrors DrawImbalances / DrawSwingMarkers /
 DrawFibo in HybridForwardTest.mq5) so the web chart and the advisor PNG show what the tester chart showed.
-bars: [[t,o,h,l,c,v]] oldest->newest; the LAST bar is treated as the forming bar and excluded from scans
-(the EA scans closed bars: CopyRates(...,1,...)).
+bars: [[t,o,h,l,c,v]] oldest->newest; the LAST bar is the forming bar (bar 0). imbalances() excludes it
+(DrawImbalances copies from index 1); swings() includes it as a neighbour (DrawSwingMarkers copies from 0).
 """
 from __future__ import annotations
 
@@ -48,16 +48,33 @@ def imbalances(bars: list[list], lookback: int = 120, vol_mult: float = 2.0, max
         out.append({"t0": r[i][0], "t1": r[cnt - 1][0], "lo": lo, "hi": hi, "dir": d, "state": st})
     return out
 
-def swings(bars: list[list], days: int = 14, n: int = 2, bars_per_day: int = 6) -> list[dict]:
-    """fractal swing highs/lows over the rolling window: [{t, p, kind: 'hi'|'lo'}]."""
-    r = bars[:-1] if len(bars) > 1 else bars
-    nb = min(days * bars_per_day + 8, len(r))
+def swings(bars: list[list], days: int = 14, n: int = 2, bars_per_day: int = 6, cap: int = 120) -> list[dict]:
+    """The chart's swing markers: 5-bar fractal highs/lows over the rolling window, NEWEST FIRST.
+
+    Line-for-line mirror of DrawSwingMarkers() in HybridForwardTest.mq5 (the persistent, signal-
+    independent overlay the tester chart labels "swing high"/"swing low"), so the advisor's swing
+    TABLE and the picture can never disagree. Faithful means: the scan window ends at the LAST bar
+    (bar 0, still forming) and uses it as a right-hand neighbour exactly as the EA does — the EA
+    copies from index 0, not 1. Centres run 2..nb-3 bars back, so the youngest possible entry is
+    2 bars ago and may be confirmed against the unfinished bar.
+
+    [{t, p, kind: 'hi'|'lo', bars_ago}] — bars_ago counted back from the last bar of `bars`.
+    """
+    nb = min(days * bars_per_day + 8, len(bars))
     if nb < 12: return []
-    w = r[-nb:]; out = []
-    for i in range(n, len(w) - n):
-        sh = all(w[i][2] > w[i - k][2] and w[i][2] > w[i + k][2] for k in range(1, n + 1))
-        sl = all(w[i][3] < w[i - k][3] and w[i][3] < w[i + k][3] for k in range(1, n + 1))
-        if sh: out.append({"t": w[i][0], "p": w[i][2], "kind": "hi"})
-        if sl: out.append({"t": w[i][0], "p": w[i][3], "kind": "lo"})
-        if len(out) >= 120: break
+    w = bars[-nb:]; out = []
+    for j in range(len(w) - n - 1, n - 1, -1):          # newest centre first, as the EA scans
+        sh = all(w[j][2] > w[j - k][2] and w[j][2] > w[j + k][2] for k in range(1, n + 1))
+        sl = all(w[j][3] < w[j - k][3] and w[j][3] < w[j + k][3] for k in range(1, n + 1))
+        ago = nb - 1 - j
+        if sh: out.append({"t": w[j][0], "p": w[j][2], "kind": "hi", "bars_ago": ago})
+        if sl: out.append({"t": w[j][0], "p": w[j][3], "kind": "lo", "bars_ago": ago})
+        if len(out) >= cap: break
     return out
+
+def swing_table(bars: list[list], k: int = 5, days: int = 14, n: int = 2) -> dict:
+    """{'hi': [{p, bars_ago}, ...], 'lo': [...]} - the k most recent of each, newest first.
+    Same set as swings() (hence the same set the chart marks); prices and relative bar counts only."""
+    sw = swings(bars, days, n)
+    return {kind: [{"p": s["p"], "bars_ago": s["bars_ago"]} for s in sw if s["kind"] == kind][:k]
+            for kind in ("hi", "lo")}

@@ -127,6 +127,37 @@ being read by the advisor. Two ways to handle it:
   always overwritten). Verified 2026-09-18 by planting two stale files, one nested: both removed, the 30 real files kept.
 - Or delete the stale file by hand on the box under `C:\ProgramData\hybrid\advisor\live\advisor\library\`.
 
+## Swing table on the setup card (coach 2026-09-17, trader-reported defect)
+
+The advisor was estimating swing highs/lows off the rendered chart and the trader kept correcting it. Both setup cards
+now carry a **Recent swing structure** block: the five most recent swing highs and five swing lows as price + **bars
+ago** (relative H4 counts, never times — blind-safe in the tester bundle by construction). The role files make the
+table authoritative over the advisor's pixel read; the chart stays authoritative for move character, zone freshness,
+trigger-candle shape and structural integrity.
+
+The set is the EA's **persistent** swing markers (`DrawSwingMarkers`: 5-bar fractal, 2 left/2 right, 14-day rolling H4
+window) — not the per-signal `DC_FillSwings` arrays, which only SMC and DeepFib fill and which the chart no longer
+labels. That is the only set that exists for all four detectors and it is the one the picture marks, so the table and
+the picture cannot disagree.
+
+- **Live bundle** (`live/advisor_runner.py: swing_block`): computed by `live/overlays.py: swing_table` from
+  `charts.signal_bars(sig, "h4")` — the same call and the same bars the H4 PNG is drawn from. Note the box runs
+  `InpSignalBars=0`, so those bars come from the terminal feed (`mt5feed`), not the signal JSON. No bars → the block
+  says "unavailable" rather than disappearing.
+- **Tester bundle** (`pipeline/inbox_bridge.py: swing_block`, used by `os_shot_daemon.py`): reads the EA sidecar
+  `Common\Files\journal\swings\<sym>_<stamp>_<id>.csv` (`kind,price,bars_ago`), written by `WriteSwingSidecar` beside
+  `WriteD1Series` at signal-fire. Sidecar absent (older EA build) → no block, never an estimate.
+- `overlays.swings()` and `hybrid_chart.js: swings()` were made faithful to `DrawSwingMarkers`: the scan includes the
+  forming bar as a right-hand neighbour (the EA copies from index 0, not 1) and runs newest-centre-first. On 500 real
+  H4 bars the only difference from the old version is one window-edge bar at 90 ago, outside the EA's centre range.
+- **No swept column.** The EA tracks no per-swing pool status (SMC's `m_pool_level`/`m_pool_type` is the single pool of
+  the current setup), so the column is omitted per the coach's "don't invent it". A mechanical "exceeded since printing"
+  flag is computable from the same bars if the coach rules on the definition.
+- **EA change is STAGED, not merged:** branch `swing-sidecar` (`CollectDisplaySwings` + `WriteSwingSidecar`), written
+  while window 15 was running, so it was never compiled or copied into the build path. Merge sequence once
+  `terminal64` is free: `git merge swing-sidecar` → `pipeline/gate_chain.sh` (parity both builds + live self-test) →
+  commit. Until then the tester card simply carries no table; the live card has one today.
+
 ## Standing items (checked when the named condition occurs)
 
 - **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and
