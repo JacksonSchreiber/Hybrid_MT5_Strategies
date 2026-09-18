@@ -2,6 +2,7 @@
 # deploy_live.sh - copy the live services + advisor material to the VPS over the tunnel and (re)start the tasks.
 #   provisioning/deploy_live.sh            # full deploy (code, config, advisor role/library, tasks) + restart
 #   provisioning/deploy_live.sh --code     # code + config only, restart
+#   provisioning/deploy_live.sh --prune    # full deploy + delete advisor library files that no longer exist locally
 # Requires the WireGuard tunnel up (sudo wg-quick up ~/.wireguard/hybridvps.conf) and the hybridops SSH key.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,7 +10,8 @@ TRAIN="/mnt/c/Users/jacks/OneDrive/Trading/hybrid_project/training"
 KEY="$HOME/.ssh/hybrid_vps_ed25519"; HOST="hybridops@10.77.0.1"
 SSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=15 $HOST"; SCP="scp -q -i $KEY -o BatchMode=yes"
 APP='C:/ProgramData/hybrid/live'; ADV='C:/ProgramData/hybrid/advisor/live'
-MODE="${1:-full}"
+MODE="${1:-full}"; PRUNE=false
+[[ "${2:-}" == "--prune" || "$MODE" == "--prune" ]] && { PRUNE=true; [[ "$MODE" == "--prune" ]] && MODE=full; }
 log(){ printf '%s\n' "$*" >&2; }
 $SSH "New-Item -ItemType Directory -Force -Path $APP/live/static, $ADV/advisor/.claude, $ADV/advisor/library, C:/ProgramData/hybrid/logs | Out-Null; 'dirs ok'" | tr -d '\r'
 $SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$REPO"/live/calendar_refresh.py "$REPO"/live/backup.py "$REPO"/live/feedd.py "$REPO"/live/brief_runner.py "$HOST:$APP/live/"
@@ -34,6 +36,18 @@ if [[ "$MODE" == "full" ]]; then
   $SCP -r "$TRAIN/advisor/library/." "$HOST:$ADV/advisor/library/"
   $SCP "$REPO/provisioning/advisor_settings.json" "$HOST:$ADV/advisor/.claude/settings.json"
   $SSH "foreach (\$f in '$ADV/advisor/notes.live.md','$ADV/advisor/verdicts.live.log') { if (-not (Test-Path \$f)) { New-Item -ItemType File -Path \$f | Out-Null } }; 'advisor material ok'" | tr -d '\r'
+  if [[ "${PRUNE:-false}" == "true" ]]; then
+    # coach 2026-09-17: the copy is additive, so a RETIRED library note would linger on the box and keep being read.
+    # --prune deletes any file under advisor/library that no longer exists locally. Compared by RELATIVE path through a
+    # manifest (a path built by string-replacement on the box was the 2026-09-17 bug: every file looked stale).
+    (cd "$TRAIN/advisor" && find library -type f | sed 's|\\|/|g' | sort) > /tmp/hybrid_library_manifest.txt
+    $SCP /tmp/hybrid_library_manifest.txt "$HOST:C:/ProgramData/hybrid/library_manifest.txt"
+    $SSH "\$root='C:\\ProgramData\\hybrid\\advisor\\live\\advisor'; \$keep=Get-Content 'C:\\ProgramData\\hybrid\\library_manifest.txt';
+          Get-ChildItem \"\$root\\library\" -Recurse -File | ForEach-Object {
+            \$rel = \$_.FullName.Substring(\$root.Length + 1) -replace '\\\\','/';
+            if (\$keep -notcontains \$rel) { Remove-Item \$_.FullName -Force; 'pruned ' + \$rel } }" | tr -d '\r'
+    rm -f /tmp/hybrid_library_manifest.txt
+  fi
   $SSH "powershell -NoProfile -ExecutionPolicy Bypass -File C:/ProgramData/hybrid/live_tasks.ps1" | tr -d '\r'
 fi
 # restart the three services (Stop kills the .cmd tree; Start relaunches in the task's own session)

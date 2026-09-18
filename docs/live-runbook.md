@@ -116,3 +116,20 @@ the page and in `briefs.log`. Files: `<root>\advisor\briefs\<UTC>.md`, `briefs.l
 bundle attaches the newest brief from the past **2 UTC days** (trader change to the coach's same-day rule) as
 `market-brief.md`; the runner writes `brief:yes|no` at the end of every verdict-log line. No Telegram push; the
 daily summary notes whether a brief is available. First generation on the box: 64 s, 9 sources, 746 words, no flags.
+
+## Advisor material on the box — additive copy, `--prune` for retirements (coach 2026-09-17)
+
+`provisioning/deploy_live.sh` copies the live role file, the quick reference and `library/` (recursively, including
+`full-texts/`). The copy ADDS and OVERWRITES but never deletes, so a note retired locally would linger on the box and keep
+being read by the advisor. Two ways to handle it:
+- `provisioning/deploy_live.sh --prune` — full deploy, then delete every file under `advisor/library` that no longer
+  exists locally (compared by relative path through a manifest; role file and quick reference are single files and are
+  always overwritten). Verified 2026-09-18 by planting two stale files, one nested: both removed, the 30 real files kept.
+- Or delete the stale file by hand on the box under `C:\ProgramData\hybrid\advisor\live\advisor\library\`.
+
+## Standing items (checked when the named condition occurs)
+
+- **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and
+  update `data/study/broker_sessions.md`. If BTCUSD quotes weekends there, §10.1's weekend-flat rule comes off rather
+  than persisting by inertia (coach, 2026-09-17). The shadow venue (OANDA demo) is Mon-Fri; FTMO says crypto hours vary
+  by platform.
