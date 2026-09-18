@@ -2665,6 +2665,7 @@ void HandleSignal(SignalCandidate &cand)
    //--- daily-context series is dumped FIRST so that whenever the pending sidecar
    //--- exists (what the daemon waits on) the matching D1 file is already there.
    WriteD1Series(id);
+   WriteSwingSidecar(id);      // swing table for the advisor card (same set the chart marks)
    WritePendingSetup(id,cand,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2);
 
    //--- PHASE 3 LIVE (Slice 2): no popup. Publish the signal to the file queue and PARK it on the
@@ -4806,17 +4807,23 @@ void FiboApplyLevels(string fb,double &lv[],string &lt[],bool remap)
 //| the per-signal prune (HFT_<id>_) nor the econ sweep (HFT_EVT) touch |
 //| it. Replaces the per-signal generic swing markers.                 |
 //+------------------------------------------------------------------+
-void DrawSwingMarkers()
+//--- ONE collector, TWO consumers: the on-chart markers below and the per-signal swing
+//--- sidecar (WriteSwingSidecar). The advisor's setup card tables exactly what the chart
+//--- labels, so its numbers can never disagree with its picture (coach 2026-09-17).
+//--- Newest first; index = bars ago from bar 0 (the forming bar, right edge of the chart).
+int CollectDisplaySwings(double &hp[],int &hb[],int &nh,double &lp[],int &lb[],int &nl)
   {
-   string swp=InpObjPrefix+"SW_";
-   ObjectsDeleteAll(0,swp);
+   nh=0; nl=0;
    int avail=Bars(_Symbol,g_tf);
    int nbars=(int)MathMin(InpSwingDays*6+8,avail-1);   // ~6 H4 bars/day + fractal margin
-   if(nbars<12) return;
+   if(nbars<12) return 0;
    MqlRates r[]; ArraySetAsSeries(r,true);
-   if(CopyRates(_Symbol,g_tf,0,nbars,r)<12) return;
-   int N=2, drawn=0;
-   for(int i=N;i<nbars-N && drawn<120;i++)
+   int got=CopyRates(_Symbol,g_tf,0,nbars,r);
+   if(got<12) return 0;
+   if(got<nbars) nbars=got;        // short history: scan what we actually got (never past the copy)
+   ArrayResize(hp,120); ArrayResize(hb,120); ArrayResize(lp,120); ArrayResize(lb,120);
+   int N=2, found=0;
+   for(int i=N;i<nbars-N && found<120;i++)
      {
       bool sh=true,sl=true;
       for(int k=1;k<=N;k++)
@@ -4824,41 +4831,77 @@ void DrawSwingMarkers()
          if(!(r[i].high>r[i-k].high && r[i].high>r[i+k].high)) sh=false;
          if(!(r[i].low <r[i-k].low  && r[i].low <r[i+k].low )) sl=false;
         }
-      if(sh)
-        {
-         string an=StringFormat("%sH_a%d",swp,i);
-         if(ObjectCreate(0,an,OBJ_ARROW_DOWN,0,r[i].time,r[i].high))
-           { ObjectSetInteger(0,an,OBJPROP_COLOR,clrOrangeRed);
-             ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
-             ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_BOTTOM);
-             ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false); }
-         string tn=StringFormat("%sH_t%d",swp,i);
-         if(ObjectCreate(0,tn,OBJ_TEXT,0,r[i].time,r[i].high))
-           { ObjectSetString(0,tn,OBJPROP_TEXT,"swing high");
-             ObjectSetInteger(0,tn,OBJPROP_COLOR,clrOrangeRed);
-             ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
-             ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_LOWER);
-             ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false); }
-         drawn++;
-        }
-      if(sl)
-        {
-         string an=StringFormat("%sL_a%d",swp,i);
-         if(ObjectCreate(0,an,OBJ_ARROW_UP,0,r[i].time,r[i].low))
-           { ObjectSetInteger(0,an,OBJPROP_COLOR,clrDodgerBlue);
-             ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
-             ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_TOP);
-             ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false); }
-         string tn=StringFormat("%sL_t%d",swp,i);
-         if(ObjectCreate(0,tn,OBJ_TEXT,0,r[i].time,r[i].low))
-           { ObjectSetString(0,tn,OBJPROP_TEXT,"swing low");
-             ObjectSetInteger(0,tn,OBJPROP_COLOR,clrDodgerBlue);
-             ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
-             ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_UPPER);
-             ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false); }
-         drawn++;
-        }
+      if(sh && nh<120){ hp[nh]=r[i].high; hb[nh]=i; nh++; found++; }
+      if(sl && nl<120){ lp[nl]=r[i].low;  lb[nl]=i; nl++; found++; }
      }
+   return found;
+  }
+
+void DrawSwingMarkers()
+  {
+   string swp=InpObjPrefix+"SW_";
+   ObjectsDeleteAll(0,swp);
+   double hp[],lp[]; int hb[],lb[],nh=0,nl=0;
+   if(CollectDisplaySwings(hp,hb,nh,lp,lb,nl)<=0) return;
+   for(int m=0;m<nh;m++)
+     {
+      int i=hb[m]; datetime t=iTime(_Symbol,g_tf,i);
+      string an=StringFormat("%sH_a%d",swp,i);
+      if(ObjectCreate(0,an,OBJ_ARROW_DOWN,0,t,hp[m]))
+        { ObjectSetInteger(0,an,OBJPROP_COLOR,clrOrangeRed);
+          ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
+          ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_BOTTOM);
+          ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false); }
+      string tn=StringFormat("%sH_t%d",swp,i);
+      if(ObjectCreate(0,tn,OBJ_TEXT,0,t,hp[m]))
+        { ObjectSetString(0,tn,OBJPROP_TEXT,"swing high");
+          ObjectSetInteger(0,tn,OBJPROP_COLOR,clrOrangeRed);
+          ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
+          ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_LOWER);
+          ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false); }
+     }
+   for(int m=0;m<nl;m++)
+     {
+      int i=lb[m]; datetime t=iTime(_Symbol,g_tf,i);
+      string an=StringFormat("%sL_a%d",swp,i);
+      if(ObjectCreate(0,an,OBJ_ARROW_UP,0,t,lp[m]))
+        { ObjectSetInteger(0,an,OBJPROP_COLOR,clrDodgerBlue);
+          ObjectSetInteger(0,an,OBJPROP_WIDTH,InpLineWidth);
+          ObjectSetInteger(0,an,OBJPROP_ANCHOR,ANCHOR_TOP);
+          ObjectSetInteger(0,an,OBJPROP_SELECTABLE,false); }
+      string tn=StringFormat("%sL_t%d",swp,i);
+      if(ObjectCreate(0,tn,OBJ_TEXT,0,t,lp[m]))
+        { ObjectSetString(0,tn,OBJPROP_TEXT,"swing low");
+          ObjectSetInteger(0,tn,OBJPROP_COLOR,clrDodgerBlue);
+          ObjectSetInteger(0,tn,OBJPROP_FONTSIZE,InpFontSize);
+          ObjectSetInteger(0,tn,OBJPROP_ANCHOR,ANCHOR_UPPER);
+          ObjectSetInteger(0,tn,OBJPROP_SELECTABLE,false); }
+     }
+  }
+
+//--- Per-signal SWING sidecar for the advisor bundle: the last 12 swing highs + 12 swing
+//--- lows the chart marks, newest first, as PRICE + BARS AGO. Blind by construction - no
+//--- times, no dates (a relative H4 count carries no calendar information, and the prices
+//--- are already visible on the chart the advisor is shown). Written next to the D1 series
+//--- at signal-fire, so "pending sidecar exists" still implies the whole bundle exists.
+void WriteSwingSidecar(int id)
+  {
+   if(!InpShotOnDecision) return;
+   double hp[],lp[]; int hb[],lb[],nh=0,nl=0;
+   if(CollectDisplaySwings(hp,hb,nh,lp,lb,nl)<=0) return;
+   FolderCreate("journal\\swings",FILE_COMMON);
+   string f=StringFormat("journal\\swings\\%s_%s_%d.csv",_Symbol,StampCompact(g_start_time),id);
+   int h=FileOpen(f,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h==INVALID_HANDLE)
+     { Print("Signal #",id," swing sidecar open failed err=",GetLastError()); return; }
+   FileWriteString(h,"kind,price,bars_ago\r\n");
+   int n=MathMax(nh,nl);
+   for(int i=0;i<n && i<12;i++)
+     {
+      if(i<nh) FileWriteString(h,StringFormat("hi,%s,%d\r\n",DoubleToString(hp[i],_Digits),hb[i]));
+      if(i<nl) FileWriteString(h,StringFormat("lo,%s,%d\r\n",DoubleToString(lp[i],_Digits),lb[i]));
+     }
+   FileClose(h);
   }
 
 //+------------------------------------------------------------------+
