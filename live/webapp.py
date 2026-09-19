@@ -445,7 +445,7 @@ def do_task(form: dict) -> tuple[str, bool, str]:
         tid = C.write_task(CFG, s["symbol"], verb, {}, signal_id=s["signal_id"])
         a = C.wait_ack(CFG, tid, 12.0)
         if not a: return f"/signal/{key}", False, "cancel: task written, no ack within 12 s - check again shortly"
-        return f"/signal/{key}", a.get("result") == "accepted", f"cancel pending order: {a.get('result')} - {a.get('reason')}"
+        return f"/signal/{key}", a.get("result") == "accepted", f"cancel pending order: {a.get('result')} - {C.reason_text(a.get('reason'))}"
     elif verb in C.VERBS_ADMIN:
         sym = form.get("symbol", "")
         if sym not in C.symbols(CFG): return "/settings", False, "unknown symbol"
@@ -458,14 +458,14 @@ def do_task(form: dict) -> tuple[str, bool, str]:
         if not a: return "/settings", False, "test_signal: task written, no ack within 12 s"
         sid = (a.get("refs") or {}).get("signal_id")
         if a.get("result") == "accepted" and sid: return f"/signal/{sym}-{sid}", True, f"TEST signal #{sid} published on {sym} - approve or skip it here"
-        return "/settings", False, f"test_signal: {a.get('result')} - {a.get('reason')}"
+        return "/settings", False, f"test_signal: {a.get('result')} - {C.reason_text(a.get('reason'))}"
     else:
         return "/", False, "unknown verb"
     a = C.wait_ack(CFG, tid, 12.0)
     if not a: return back, False, f"{verb}: task written, no ack within 12 s (EA busy or stopped?) — check again shortly"
     ok = a.get("result") == "accepted"
     refs = a.get("refs") or {}
-    return back, ok, f"{verb}: {a.get('result')} — {a.get('reason')}" + (f" · posid {refs.get('posid')} ticket {refs.get('order_ticket')}" if ok and verb == "approve" else "")
+    return back, ok, f"{verb}: {a.get('result')} — {C.reason_text(a.get('reason'))}" + (f" · posid {refs.get('posid')} ticket {refs.get('order_ticket')}" if ok and verb == "approve" else "")
 
 class H(BaseHTTPRequestHandler):
     server_version = "hybrid-live/1"

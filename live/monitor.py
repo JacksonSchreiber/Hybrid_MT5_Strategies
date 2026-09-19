@@ -92,7 +92,7 @@ class Monitor:
                 elif a.get("verb") in ("close", "close50", "sl_be", "ratchet_tp1", "skip", "delay"):
                     self.send(f"{a['verb']} accepted: {tgt} {a['symbol']}")
             else:
-                self.send(f"TASK {a.get('result', '').upper()}: {a.get('verb')} {tgt} {a['symbol']} — {a.get('reason')}")
+                self.send(f"TASK {a.get('result', '').upper()}: {a.get('verb')} {tgt} {a['symbol']} — {C.reason_text(a.get('reason'))}")
         self.st["acks"] = sorted(seen)[-2000:]
 
     def positions(self):

@@ -74,6 +74,12 @@ restart_during_execution, trading_disabled, events_not_loaded, election_gate, se
 stop_too_tight, lots_zero, ftmo_daily_headroom, ftmo_max_headroom, be_floor, be_stops_level, be_would_loosen,
 ratchet_not_banked, ratchet_already_used, ratchet_no_tp1, ratchet_not_past_tp1, ratchet_would_loosen, min_lot_split, order_failed`.
 
+`order_failed:<retcode>` carries the raw MT5 trade-server code, because that is all the EA is handed. The stored
+reason is never rewritten (the queue stays machine-readable); every place that SHOWS one — the web flash message and
+the Telegram task line — runs it through `common.reason_text()`, which appends the meaning:
+`order_failed:10018 (market closed)`. Unknown codes and worded reasons pass through unchanged. New codes go in
+`common.RETCODE`: display-only, no EA change and no journal change.
+
 ### Verb × state legality (the EA is the authority; the UI mirrors it)
 
 | verb | requires | re-checked at execution |

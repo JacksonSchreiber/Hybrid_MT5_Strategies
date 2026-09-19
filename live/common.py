@@ -5,7 +5,7 @@ Everything here is read-only on the EA's directories except: tasks/ (task files)
 (kill switch), and the service-owned dirs under <root>/web, <root>/advisor, <root>/monitor.
 """
 from __future__ import annotations
-import csv, glob, json, os, sys, time, uuid, urllib.request, urllib.parse, threading
+import csv, glob, json, os, re, sys, time, uuid, urllib.request, urllib.parse, threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -169,6 +169,35 @@ def position(cfg: dict, key: str) -> dict | None:
         x = load_json(os.path.join(cfg["root"], "positions", sub, f"{key}.json"))
         if x: x["_closed"] = (sub == "closed"); return x
     return None
+
+# --- MT5 trade-server return codes -------------------------------------------------------------
+# The EA can only report what the server gave it ("order_failed:10018"). The trader should not have
+# to look the number up, so every place that SHOWS an ack reason runs it through reason_text().
+RETCODE = {
+    10004: "requote", 10006: "rejected by dealer", 10007: "cancelled by trader", 10008: "order placed",
+    10009: "done", 10010: "done partially", 10011: "request processing error", 10012: "request timed out",
+    10013: "invalid request", 10014: "invalid volume", 10015: "invalid price", 10016: "invalid stops",
+    10017: "trading disabled", 10018: "market closed", 10019: "not enough money", 10020: "prices changed",
+    10021: "no quotes to process", 10022: "invalid order expiration", 10023: "order state changed",
+    10024: "too many requests", 10025: "no changes in the request", 10026: "autotrading disabled by the server",
+    10027: "autotrading disabled by the terminal", 10028: "request locked by dealer",
+    10029: "order or position frozen", 10030: "unsupported filling type", 10031: "no connection to the trade server",
+    10032: "real accounts only", 10033: "pending-order limit reached", 10034: "volume limit reached",
+    10035: "invalid or prohibited order type", 10036: "position already closed",
+    10038: "close volume exceeds the position", 10039: "a close order already exists",
+    10040: "position limit reached", 10041: "request rejected, order cancelled", 10042: "long positions only",
+    10043: "short positions only", 10044: "close-only", 10045: "FIFO close required",
+    10046: "opposite positions prohibited",
+}
+
+def reason_text(reason) -> str:
+    """'order_failed:10018' -> 'order_failed:10018 (market closed)'. Anything else is passed through
+    unchanged, so a reason the EA spells out in words (be_floor, stale_task, ...) reads as before."""
+    r = str(reason or "")
+    m = re.search(r"order_failed:(\d{4,6})\b", r)
+    if not m: return r
+    t = RETCODE.get(int(m.group(1)))
+    return r if not t else r[:m.end()] + f" ({t})" + r[m.end():]
 
 def row_state(cfg: dict, symbol: str, signal_id) -> dict | None:
     """the EA's own state for a journal row (state/<SYM>/<id>.json): decision, placed_time, order_ticket, posid..."""
