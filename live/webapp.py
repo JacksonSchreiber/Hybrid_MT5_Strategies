@@ -51,6 +51,19 @@ function tick(){document.querySelectorAll('[data-deadline]').forEach(function(el
 function utc(){var d=new Date();var p=function(n){return (n<10?'0':'')+n};var el=document.getElementById('utc');if(el)el.textContent=p(d.getUTCHours())+':'+p(d.getUTCMinutes())+':'+p(d.getUTCSeconds())+' UTC';}
 function els(){document.querySelectorAll('[data-started]').forEach(function(el){var s=Math.max(0,Math.floor((Date.now()-new Date(el.dataset.started))/1000));el.textContent=(s>=60?Math.floor(s/60)+'m ':'')+(s%60)+'s';});}
 setInterval(function(){tick();utc();els();},1000);tick();utc();els();
+(function(){var pb=document.getElementById('poslive');if(!pb||pb.dataset.closed==='1')return;var st=function(id,v){var e=document.getElementById(id);if(e&&v!==undefined&&v!==null)e.textContent=v;};
+ var t=setInterval(function(){fetch('/api/position/'+encodeURIComponent(pb.dataset.key)).then(function(r){return r.json();}).then(function(p){if(!p||p.error)return;
+  st('p-open_r',p.open_r);var o=document.getElementById('p-open_r');if(o)o.className='big v '+(p.open_r_ok?'ok':'bad');
+  st('p-banked_r',p.banked_r);st('p-sl_live',p.sl_live);st('p-tp_live',p.tp_live);st('p-lots_live',p.lots_live);st('p-bars_open',p.bars_open);st('p-flags',p.flags);
+  var be=document.querySelector('button[data-verb=sl_be]'),ra=document.querySelector('button[data-verb=ratchet_tp1]');if(be)be.disabled=!p.be_placeable;if(ra)ra.disabled=!p.ratchet_placeable;
+  if(p.closed){clearInterval(t);document.querySelectorAll('button[data-verb]').forEach(function(b){b.disabled=true;});
+   var n=document.createElement('div');n.className='flash ok';n.innerHTML='Position CLOSED - <a href="">reload for the final numbers</a>';pb.parentNode.insertBefore(n,pb);}
+ }).catch(function(){});},5000);})();
+(function(){var w=document.getElementById('sigwatch');if(!w)return;var shown=false;var t=setInterval(function(){fetch('/api/signal/'+encodeURIComponent(w.dataset.key)).then(function(r){return r.json();}).then(function(s){if(!s||s.error)return;
+  var cd=document.querySelector('[data-deadline]');if(cd&&s.deadline)cd.dataset.deadline=s.deadline;
+  if(!shown&&(s.status!==w.dataset.status||String(s.delay_count)!==w.dataset.delays)){shown=true;var n=document.createElement('div');n.className='flash '+(s.status==='open'?'ok':'bad');n.style.position='sticky';n.style.top='52px';n.style.zIndex='3';
+   n.innerHTML='Signal updated: now <b>'+s.status+'</b>'+(s.status==='open'?' (re-presented, delay '+s.delay_count+')':'')+(s.auto_reason?' - '+s.auto_reason:'')+' - <a href="">tap to reload</a>';var m=document.querySelector('main');m.insertBefore(n,m.firstChild);}
+ }).catch(function(){});},10000);})();
 (function(){var box=document.getElementById('advisor');if(!box)return;setInterval(function(){
  var typed=[].some.call(box.querySelectorAll('textarea'),function(t){return t.value.trim()!==''||t===document.activeElement;});if(typed)return;
  fetch('/api/advisor/'+encodeURIComponent(box.dataset.key)).then(function(r){return r.json();}).then(function(j){if(j&&j.v&&j.v!==box.dataset.v){box.innerHTML=j.html;box.dataset.v=j.v;els();}}).catch(function(){});},4000);})();
@@ -217,6 +230,26 @@ def eligibility_card() -> str:
     out.append("</div>")
     return "".join(out)
 
+
+def pos_flags(p: dict, closed: bool) -> str:
+    return (f"banked {p.get('banked')} · tp1_done {p.get('tp1_done')} · ratcheted {p.get('ratcheted')} · close-now {C.r_fmt(p.get('closenow_r'))}"
+            f" · updated {p.get('ts', '')}{' · CLOSED' if closed else ''}")
+
+def position_live(key: str) -> dict:
+    """the fields the position page updates in place every 5 s (formatted server-side, so the page and the poll agree)."""
+    p = C.position(CFG, key)
+    if not p: return {"error": "no such position"}
+    closed = bool(p.get("_closed"))
+    return {"open_r": C.r_fmt(p.get("open_r")), "open_r_ok": (p.get("open_r") or 0) >= 0, "banked_r": C.r_fmt(p.get("banked_r")),
+            "sl_live": p.get("sl_live"), "tp_live": p.get("tp_live") or "-", "lots_live": p.get("lots_live"), "bars_open": p.get("bars_open"),
+            "flags": pos_flags(p, closed), "closed": closed, "be_placeable": bool(p.get("be_placeable")) and not closed,
+            "ratchet_placeable": bool(p.get("ratchet_placeable")) and not closed}
+
+def signal_live(key: str) -> dict:
+    s = C.signal(CFG, key)
+    if not s: return {"error": "no such signal"}
+    return {"status": s.get("status", ""), "delay_count": s.get("delay_count", 0), "deadline": s.get("deadline", ""), "auto_reason": s.get("auto_reason", "")}
+
 # ----------------------------------------------------------------------------- pages
 def dashboard(q: dict) -> str:
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
@@ -352,7 +385,8 @@ def signal_page(key: str, q: dict) -> str:
         for a in sorted(acks, key=lambda a: a.get("executed_at", "")):
             out.append(f'<tr><td class="k">{E(a.get("executed_at", ""))}</td><td>{E(a.get("verb", ""))}</td><td class="{"ok" if a.get("result") == "accepted" else "bad"}">{E(a.get("result", ""))}</td><td>{E(a.get("reason", ""))}</td></tr>')
         out.append("</table></div>")
-    return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home", refresh=60 if is_open else (20 if s.get("status") == "approved_pending" else None))
+    out.append(f'<div id="sigwatch" data-key="{E(key)}" data-status="{E(s.get("status", ""))}" data-delays="{s.get("delay_count", 0)}"></div>')
+    return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home")   # no full-page refresh: /api/signal state poll + banner
 
 def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None) -> str:
     """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load."""
@@ -448,11 +482,11 @@ def position_page(key: str, q: dict) -> str:
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
     closed = p.get("_closed")
     out.append(f'<h1>{E(p["symbol"])} · {E(p["strategy"])} {E(p["direction"])} <span class="k">pos {p["posid"]} · signal #{p.get("signal_id")}</span></h1>'
-               f'<div class="card"><div class="grid2"><div><div class="k">open R</div><div class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</div></div><div><div class="k">banked R</div><div class="big v">{C.r_fmt(p.get("banked_r"))}</div></div>'
-               f'<div><span class="k">entry</span> <b class="v">{p.get("entry")}</b></div><div><span class="k">SL live</span> <b class="v bad">{p.get("sl_live")}</b> <span class="k">(risk basis {p.get("sl_risk_basis")})</span></div>'
-               f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b class="v">{p.get("tp_live") or "-"}</b></div>'
-               f'<div><span class="k">lots</span> <b class="v">{p.get("lots_live")}</b> <span class="k">of {p.get("lots_init")}</span></div><div><span class="k">bars open</span> <b class="v">{p.get("bars_open")}</b></div></div>'
-               f'<div class="k">banked {p.get("banked")} · tp1_done {p.get("tp1_done")} · ratcheted {p.get("ratcheted")} · close-now {C.r_fmt(p.get("closenow_r"))} · updated {E(p.get("ts", ""))}{" · CLOSED" if closed else ""}</div></div>')
+               f'<div class="card" id="poslive" data-key="{E(key)}" data-closed="{1 if closed else 0}"><div class="grid2"><div><div class="k">open R</div><div id="p-open_r" class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</div></div><div><div class="k">banked R</div><div id="p-banked_r" class="big v">{C.r_fmt(p.get("banked_r"))}</div></div>'
+               f'<div><span class="k">entry</span> <b class="v">{p.get("entry")}</b></div><div><span class="k">SL live</span> <b id="p-sl_live" class="v bad">{p.get("sl_live")}</b> <span class="k">(risk basis {p.get("sl_risk_basis")})</span></div>'
+               f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b id="p-tp_live" class="v">{p.get("tp_live") or "-"}</b></div>'
+               f'<div><span class="k">lots</span> <b id="p-lots_live" class="v">{p.get("lots_live")}</b> <span class="k">of {p.get("lots_init")}</span></div><div><span class="k">bars open</span> <b id="p-bars_open" class="v">{p.get("bars_open")}</b></div></div>'
+               f'<div class="k" id="p-flags">{E(pos_flags(p, closed))}</div></div>')
     src = C.signal(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
     plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
     if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None))
@@ -466,7 +500,7 @@ def position_page(key: str, q: dict) -> str:
     if not closed:
         def b(verb, label, enabled, cls=""):
             return (f'<form method="post" action="/task" class="inline"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="{verb}">'
-                    f'<button class="btn {cls}" {"" if enabled else "disabled"} onclick="return confirm(\'{label}?\')">{label}</button></form>')
+                    f'<button class="btn {cls}" data-verb="{verb}" {"" if enabled else "disabled"} onclick="return confirm(\'{label}?\')">{label}</button></form>')
         out.append('<div class="card"><h2>Manage</h2><div class="row">'
                    + b("sl_be", "SL → BE", bool(p.get("be_placeable"))) + b("ratchet_tp1", "SL → TP1", bool(p.get("ratchet_placeable")))
                    + b("close50", "Close 50%", True) + b("close", "Close all", True, "no") + '</div>'
@@ -477,7 +511,7 @@ def position_page(key: str, q: dict) -> str:
         for a in sorted(acks, key=lambda a: a.get("executed_at", "")):
             out.append(f'<tr><td class="k">{E(a.get("executed_at", ""))}</td><td>{E(a.get("verb", ""))}</td><td class="{"ok" if a.get("result") == "accepted" else "bad"}">{E(a.get("result", ""))}</td><td>{E(a.get("reason", ""))}</td></tr>')
         out.append("</table></div>")
-    return page(f"pos {p['posid']}", "".join(out), "home", refresh=None if closed else 30)
+    return page(f"pos {p['posid']}", "".join(out), "home")        # no full-page refresh: the live fields poll /api/position (the chart keeps its view)
 
 def journal_page(q: dict) -> str:
     sym = q.get("symbol") or None; rows = C.journal_rows(CFG, sym)
@@ -643,6 +677,9 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(sym) or tf not in mt5feed.TF: return self._send("bad request", "text/plain", 400)
                 b = mt5feed.bars(sym, tf, n); k = mt5feed.tick(sym)
                 return self._send(json.dumps({"symbol": sym, "tf": tf, "bars": b, "tick": k, "ts": C.now_iso(), "live": b is not None}, separators=(",", ":")), "application/json")
+            if parts[0] == "api" and len(parts) == 3 and parts[1] in ("position", "signal"):
+                if not C.safe_key(parts[2]): return self._send("bad request", "text/plain", 400)
+                return self._send(json.dumps(position_live(parts[2]) if parts[1] == "position" else signal_live(parts[2])), "application/json")
             if parts[0] == "api" and len(parts) == 3 and parts[1] == "advisor":
                 if not C.safe_key(parts[2]): return self._send("bad request", "text/plain", 400)
                 h, v = advisor_section(parts[2]); return self._send(json.dumps({"html": h, "v": v}), "application/json")
