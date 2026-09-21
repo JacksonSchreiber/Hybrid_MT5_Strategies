@@ -231,9 +231,20 @@ def eligibility_card() -> str:
     return "".join(out)
 
 
+
+def be_ok(p: dict) -> bool:
+    """SL->BE offered only if it would TIGHTEN: a stop already past entry (ratchet, or moved by hand in MT5) makes BE a loosen."""
+    try:
+        sl, e = float(p.get("sl_live") or 0), float(p.get("entry") or 0)
+        past = sl > 0 and ((sl >= e) if (p.get("direction") or "").upper() == "BUY" else (sl <= e))
+    except (TypeError, ValueError): past = False
+    return bool(p.get("be_placeable")) and not past
+
 def pos_flags(p: dict, closed: bool) -> str:
+    xe = p.get("last_external_edit") or ""
     return (f"banked {p.get('banked')} · tp1_done {p.get('tp1_done')} · ratcheted {p.get('ratcheted')} · close-now {C.r_fmt(p.get('closenow_r'))}"
-            f" · updated {p.get('ts', '')}{' · CLOSED' if closed else ''}")
+            + (f" · edited in MT5 ×{p.get('external_edits')}: {xe.split(' ', 1)[-1]}" if xe else "")
+            + f" · updated {p.get('ts', '')}{' · CLOSED' if closed else ''}")
 
 def position_live(key: str) -> dict:
     """the fields the position page updates in place every 5 s (formatted server-side, so the page and the poll agree)."""
@@ -242,7 +253,7 @@ def position_live(key: str) -> dict:
     closed = bool(p.get("_closed"))
     return {"open_r": C.r_fmt(p.get("open_r")), "open_r_ok": (p.get("open_r") or 0) >= 0, "banked_r": C.r_fmt(p.get("banked_r")),
             "sl_live": p.get("sl_live"), "tp_live": p.get("tp_live") or "-", "lots_live": p.get("lots_live"), "bars_open": p.get("bars_open"),
-            "flags": pos_flags(p, closed), "closed": closed, "be_placeable": bool(p.get("be_placeable")) and not closed,
+            "flags": pos_flags(p, closed), "closed": closed, "be_placeable": be_ok(p) and not closed,
             "ratchet_placeable": bool(p.get("ratchet_placeable")) and not closed}
 
 def signal_live(key: str) -> dict:
@@ -502,7 +513,7 @@ def position_page(key: str, q: dict) -> str:
             return (f'<form method="post" action="/task" class="inline"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="{verb}">'
                     f'<button class="btn {cls}" data-verb="{verb}" {"" if enabled else "disabled"} onclick="return confirm(\'{label}?\')">{label}</button></form>')
         out.append('<div class="card"><h2>Manage</h2><div class="row">'
-                   + b("sl_be", "SL → BE", bool(p.get("be_placeable"))) + b("ratchet_tp1", "SL → TP1", bool(p.get("ratchet_placeable")))
+                   + b("sl_be", "SL → BE", be_ok(p)) + b("ratchet_tp1", "SL → TP1", bool(p.get("ratchet_placeable")))
                    + b("close50", "Close 50%", True) + b("close", "Close all", True, "no") + '</div>'
                    f'<div class="k">BE {"placeable" if p.get("be_placeable") else "not yet (+0.5R floor / stops level)"} · ratchet {"placeable" if p.get("ratchet_placeable") else "not yet (needs bank + past TP1)"} — the EA re-checks every rule before acting</div></div>')
     acks = [a for a in _acks() if a.get("position_id") == p["posid"] and a.get("symbol") == p["symbol"]]

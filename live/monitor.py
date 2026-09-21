@@ -114,7 +114,10 @@ class Monitor:
             if p.get("banked") and not prev.get("banked"):
                 self.send(f"+1R BANKED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · banked {C.r_fmt(p.get('banked_r'))}, {p.get('lots_live')} lots run · SL now {p.get('sl_live')}")
             if p.get("ratcheted") and not prev.get("ratcheted"): self.send(f"SL ratcheted to TP1: pos {p['posid']} {p['symbol']}")
-            seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": True}
+            xe = p.get("last_external_edit") or ""
+            if xe and xe != prev.get("xedit", "") and prev:          # an SL/TP moved in the trader's own MT5 (journaled EXTERNAL_*)
+                self.send(f"EDITED IN MT5 (outside the app): pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {xe.split(' ', 1)[-1]} · open {C.r_fmt(p.get('open_r'))} - journaled for the coach")
+            seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": True, "xedit": xe}
         self.st["positions_initialised"] = True
         for p in C.list_positions(self.cfg, closed=True):
             k = f"{p['symbol']}-{p['posid']}"; prev = seen.get(k) or {}
