@@ -1,0 +1,19 @@
+# load-check stage 1 (18 charts)
+EURUSD.sim
+GBPUSD.sim
+US100.sim
+US500.sim
+XAUUSD.sim
+USOIL.sim
+BTCUSD.sim
+USDJPY.sim
+US30.sim
+XAGUSD.sim
+AUDUSD.sim
+USDCAD.sim
+USDCHF.sim
+NZDUSD.sim
+EURJPY.sim
+GBPJPY.sim
+AUDJPY.sim
+EURGBP.sim

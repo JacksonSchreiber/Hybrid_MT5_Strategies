@@ -41,6 +41,7 @@ $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
 $SCP "$REPO"/config/symbol_rules.json "$HOST:$APP/symbol_rules.json"      # per-symbol doctrine flags (class + suspended session rules) for the advisor card
 $SCP "$REPO"/provisioning/live_tasks.ps1 "$HOST:C:/ProgramData/hybrid/live_tasks.ps1"
 $SCP "$REPO"/provisioning/maintenance.ps1 "$HOST:C:/ProgramData/hybrid/maintenance.ps1"
+$SCP "$REPO"/provisioning/load_check.ps1 "$HOST:C:/ProgramData/hybrid/load_check.ps1"   # capacity check: terminal64 CPU/RAM + heartbeat ages
 log "code + config copied"
 if [[ "$MODE" == "full" || "$MODE" == "--calendar" ]]; then
   # calendar pipeline: normalizer + classifier + coverage test + rules + history (3 MB) - the box rebuilds econ_events.csv daily

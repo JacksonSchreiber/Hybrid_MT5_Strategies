@@ -161,6 +161,31 @@ the picture cannot disagree.
   predates the merge is running the old `inbox_bridge` from memory, so the new EA would write sidecars nothing reads
   and the tester card would lose its table silently, with no error anywhere. Kill it; `start_level.sh` starts its own.
 
+## Demo universe expansion, dual advisor, open exposure (coach 2026-09-21)
+
+**Universe.** `pipeline/universe_cost_filter.py` ran the spread-drag method over all 49 symbols in `ftmo_symbols.txt`
+(`data/study/universe_cost_filter.md` + `.csv`): 47 attach (drag ≤ 0.10R/trade), USDCNH excluded by ruling, EURCZK by cost
+(0.113R). The spread was sampled 16:07 UTC (London/NY overlap - the tightest hour); the exotics nearest the cap (EURPLN 0.078,
+USDCZK 0.060, EURHUF 0.056, USDPLN 0.054) are the ones to re-sample at a thin-hour bar open. Multipliers: US100 US500 USOIL
+XAUUSD ×1.0, everything else ×0.5. Attached 2026-09-21 16:14 UTC in two measured stages (6 → 18 → 47); capacity numbers in
+`docs/vps-provisioning.md`. The shadow clock did not restart; `config\lineup_history.json` records both configurations and
+the dashboard shows the day counts.
+
+**BTCUSD prerequisites.** §10.1 on the live path (EA, config-scoped by `live.json weekend_flat_symbols`): from the Fri 20:00
+broker bar (the last H4 bar before the 23:59 close) until the week reopens - positions closed (`WEEKEND_FLAT`), pendings
+cancelled, no new entries, approve refused `weekend_flat`. Verified on the box by the heartbeat (`weekend_flat:true,
+weekend_cutoff:"Fri 20:00 broker"`); the first real trigger is Friday. ATR floor off. Live card: class + symbol-rules line
+from `config/symbol_rules.json` (shipped 2026-09-18).
+
+**Dual advisor.** `advisor.models` in the live config: `sonnet-low` (sonnet, low, 150 s, 3 parallel) and `opus-high` (opus,
+high, 600 s, 2 parallel). One bundle per presentation, two independent sessions launched in parallel; per-model records,
+notes files and replies; runner-owned verdict log with a model field. Rate limits are never auto-retried - the panel says so,
+Telegram alerts, and "Run <model> again" re-runs one model. Dashboard: consults today per model. To drop Opus (subscription
+load), delete its entry from `advisor.models` and redeploy - nothing else depends on the pair.
+
+**Open exposure** (`live/exposure.py`, live card only) and **live eligibility** (`live/eligibility.py`, dashboard; the monitor
+prices each closed position once from the broker's deals into `web\costed_r.json`).
+
 ## Standing items (checked when the named condition occurs)
 
 - **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and

@@ -14,7 +14,8 @@ Last full pass: 2026-09-16 (steps 1–6 all executed on the current box; the tra
 | network | WireGuard server `10.77.0.1/24` UDP 51820; peers: engineer WSL `10.77.0.2`, trader phone `10.77.0.3`. Inbound allowed: UDP 51820, TCP 22 + 8080 on `10.77.0.1` only, DHCP, ICMP fragmentation. RDP + WinRM disabled at the service level |
 | secrets | `C:\ProgramData\hybrid\secrets\` (Administrators + SYSTEM only, never in the repo): `mt5.json` {login,password,investor_password,server}, `telegram.token`, `telegram.chat_id`, `advisor.token` (Claude Code OAuth from `claude setup-token`, bills the subscription), `hybridops.password`. Master copies: trader's KeePassXC |
 | broker / terminal | OANDA MT5 build 6198, demo `OANDA-Demo-1`, symbols carry `.sim`. Data dir `C:\Users\hybridops\AppData\Roaming\MetaQuotes\Terminal\EE0304F13905552AE0B5EAEFB04866EB`, queue root `…\Terminal\Common\Files\live` |
-| lineup (coach 2026-09-16) | `US100.sim US500.sim USOIL.sim XAUUSD.sim` ×1.0, `EURUSD.sim GBPUSD.sim` ×0.5 (`config\risk_mult.json` = `provisioning/risk_mult.json`); one EA instance per H4 chart; no US30, no USDJPY |
+| lineup (coach 2026-09-21, demo universe) | **47 symbols** = every FTMO symbol with spread drag ≤ 0.10R/trade (`data/study/universe_cost_filter.md`; USDCNH excluded by ruling, EURCZK by cost). `config\lineup.txt` = `provisioning/lineup.txt` (read by the launcher at MT5 start). Multipliers `config\risk_mult.json` = `provisioning/risk_mult.json`: US100 US500 USOIL XAUUSD ×1.0, every other symbol (EURUSD GBPUSD USDJPY BTCUSD …) ×0.5. `config\live.json` = `provisioning/live.json` (`max_parks` 4, `weekend_flat_symbols` BTCUSD). History: `config\lineup_history.json` (shadow start 2026-09-16 with 6; expansion 2026-09-21 16:14 UTC). One EA instance per H4 chart |
+| capacity (load check 2026-09-21) | 6 charts: terminal 575 MB private, 19 % of the box CPU · 18: 911 MB, 24 % · **47: 1,766 MB, 26 % (≈1 of 4 cores), box CPU 38 %, 4.6 GB free, all 47 heartbeats fresh (max age 60 s)**. Most of the CPU is fixed terminal cost (Market Watch ticks for ~49 symbols + the feed's IPC), ~0.4 % CPU and ~28 MB per extra chart |
 | runtime | Python 3.12 (+ pillow, certifi, pyyaml, MetaTrader5), Node 22 + `@anthropic-ai/claude-code`, WireGuard 0.5.3, OpenSSH (Windows capability) |
 | services (scheduled tasks) | `hybrid-mt5` (at logon), `hybrid-lock-console`, `hybrid-sshd-keeper`, `hybrid-web`, `hybrid-monitor`, `hybrid-advisor` (at startup +45 s, as hybridops), `hybrid-maintenance` (Sat 14:00 UTC, SYSTEM) |
 | web | `http://10.77.0.1:8080` from any peer; no login, plain HTTP (trader rulings: the tunnel is the boundary) |
@@ -73,10 +74,14 @@ never inline `-Command` strings (quoting silently broke a safety task).
    ExpertParameters=hft_live.set Script=HybridSaveTemplate Symbol=EURUSD.sim Period=H4` in a copy of the ini, start the
    terminal once with it (`Register-ScheduledTask … -User hybridops`, `Start-ScheduledTask`), confirm
    `MQL5\Profiles\Templates\hybrid_live.tpl` exists with `<expert>` + inputs, then restore `[StartUp] Script=HybridLiveLauncher`.
-7. Start `hybrid-mt5`. Expect within ~3 min: terminal in session 1, log `authorized on OANDA-Demo-1`, expert log
-   `Launcher: lineup=6 … template applied=…`, six `HybridForwardTest ACTIVE [LIVE(queue)]` lines, six
-   `live\heartbeat_<SYM>.json` rewritten every 60 s with `terminal_trade_allowed:true`, `events_count>0`.
-   After every EA rebuild: copy the `.ex5`, `Stop-Process terminal64`, `Start-ScheduledTask hybrid-mt5`. Re-save the
+7. `provisioning/deploy_live.sh --config` (lineup.txt, risk_mult.json, live.json, lineup_history.json → queue `config\`), then start `hybrid-mt5`.
+   Expect within ~3 min: terminal in session 1, log `authorized on OANDA-Demo-1`, expert log
+   `Launcher: lineup=47 (live\config\lineup.txt) opened=… template applied=…` (47 = opened/applied + already running),
+   47 `HybridForwardTest ACTIVE [LIVE(queue)]` lines, 47 `live\heartbeat_<SYM>.json` rewritten every 60 s with
+   `terminal_trade_allowed:true`, `events_count>0`; `heartbeat_BTCUSD.sim.json` has `weekend_flat:true, weekend_cutoff:"Fri 20:00 broker"`.
+   Load check: `C:\ProgramData\hybrid\load_check.ps1` (60 s CPU sample of terminal64 + box RAM/CPU + heartbeat ages).
+   After every EA rebuild (gate chain PASSED): `provisioning/deploy_live.sh --ea` (config + `HybridForwardTest-live.ex5` +
+   `HybridLiveLauncher.ex5`, then `Stop-Process terminal64`, `Start-ScheduledTask hybrid-mt5`). Re-save the
    template only when the EA's INPUTS change (the charts read the template, not `hft_live.set`).
 
 ## Step 4 — runtime + services

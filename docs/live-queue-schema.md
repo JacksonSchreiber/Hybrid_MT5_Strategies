@@ -72,7 +72,8 @@ Processed in `issued_at` order (file name as tie-break). A task older than `task
 unknown_verb, symbol_mismatch, unknown_signal, signal_not_open, unknown_position, position_closed, stale_task,
 restart_during_execution, trading_disabled, events_not_loaded, election_gate, setup_lock, geom_invalid, rr_below_floor,
 stop_too_tight, lots_zero, ftmo_daily_headroom, ftmo_max_headroom, be_floor, be_stops_level, be_would_loosen,
-ratchet_not_banked, ratchet_already_used, ratchet_no_tp1, ratchet_not_past_tp1, ratchet_would_loosen, min_lot_split, order_failed`.
+ratchet_not_banked, ratchet_already_used, ratchet_no_tp1, ratchet_not_past_tp1, ratchet_would_loosen, min_lot_split, order_failed,
+weekend_flat` (§10.1 live, 2026-09-21).
 
 `order_failed:<retcode>` carries the raw MT5 trade-server code, because that is all the EA is handed. The stored
 reason is never rewritten (the queue stays machine-readable); every place that SHOWS one — the web flash message and
@@ -113,19 +114,34 @@ Kill switch OFF: `approve` is refused (`trading_disabled`); skip/delay and every
   aggregate_risk_to_stop (§11-7), risk_mult_applied,
   ftmo{initial_balance, day_key, day_start_balance, day_start_equity, daily_floor, max_floor, buffer, headroom_daily, headroom_max} (G3: the numbers the EA enforces),
   open_positions[{posid, signal_id, strategy, direction, open_r, banked_r, lots, banked, ratcheted}],
-  parked_signal_id, last_signal_id, in_tester, alerts[ unprotected_position:<n> | terminal_trade_not_allowed | mql_trade_not_allowed | … ] }
+  parked_signal_id, last_signal_id, in_tester, alerts[ unprotected_position:<n> | terminal_trade_not_allowed | mql_trade_not_allowed | … ],
+  weekend_flat (bool: this symbol is held to §10.1 on the live path), weekend_cutoff "Fri HH:MM broker" and weekend_window_now (only when weekend_flat) }
 ```
+`positions/<SYM>-<posid>.json` also carries `risk_pct_effective` (= risk_pct_gate × risk_mult_applied, fraction of equity - the
+risk the position was SIZED at; the advisor's open-exposure block weights currency legs with it).
 
 ## `audit_<SYMBOL>.log` — one line per event, append-only
 
 `<ts>|<symbol>|<event>|<task_id>|<verb>|<target>|<result>|<reason>|<detail>` — events: `restart, stop, kill_switch, config,
 published, republished, auto_skip, invalidated, expired_code8, claimed, duplicate, gate, executed, rejected, acked,
-adopt_orphan, month_rollover, ftmo_reject`. A torn last line is possible; readers tolerate it.
+adopt_orphan, month_rollover, ftmo_reject, weekend_flat`. A torn last line is possible; readers tolerate it.
+
+**§10.1 live weekend-flat (coach 2026-09-21).** For every root listed in `live.json weekend_flat_symbols`: from the open of
+the last H4 bar before the broker's Friday close (`SymbolInfoSessionTrade`, BTCUSD.sim 23:59 → Fri 20:00 broker bar) until
+the week reopens, open positions are closed (journal action `WEEKEND_FLAT`, audit `weekend_flat|close`), resting pendings
+cancelled (`weekend_flat|cancel_pending`, row `expired`), detectors and the parked replay skipped, and `approve` is refused
+with ack reason **`weekend_flat`**. The flatten repeats at poll cadence, so a refused close retries. Tester path unchanged.
 
 ## Config files
 
-- `live.json` `{schema_version, election_horizon_days (14), max_age_bars (3), task_max_age_hours (24)}` — written with the
-  input defaults if missing.
+- `live.json` `{schema_version, election_horizon_days (14), max_age_bars (3), task_max_age_hours (24), max_parks (4),
+  weekend_flat_symbols ("BTCUSD" - comma list of roots)}` — written with the input defaults if missing. Source of truth:
+  `provisioning/live.json` (`deploy_live.sh --config`).
+- `lineup.txt` — the charts `HybridLiveLauncher` opens at terminal start (one symbol per line, `#` comments); falls back to
+  the script's compiled default when absent. Source: `provisioning/lineup.txt` (= `lineup_full.txt`, 47 symbols since
+  2026-09-21). A lineup change takes effect at the next MT5 start (`deploy_live.sh --ea` restarts it).
+- `lineup_history.json` `{events:[{date, event, lineup[], risk_mult?, basis?}]}` — the configuration timeline the shadow
+  report counts days against (the dashboard shows "shadow day N · current configuration since D").
 - `trading_enabled.json` `{"trading_enabled": true|false}` — read every second; **missing/unparseable ⇒ false**.
 - `risk_mult.json` `{"EURUSD": 0.5, "US100": 1.0, …}` keyed by symbol root (broker suffix stripped); missing symbol ⇒ 1.0 (+ one audit warning).
   Applied ONLY at order sizing (C2); the detectors' 1 % viability gate is untouched, so the emitted signal set equals the tester's.
@@ -173,8 +189,16 @@ no state file are adopted conservatively (`strategy=ADOPTED`, un-banked, no BE, 
 ## Advisor verdict log line (`verdicts.live.log`, runner-written)
 
 ```
-<UTC ts> | <symbol> | #<signal_id> | <strategy> <direction> | <VERDICT> (quick, <confidence>) | SH:<regime><news><corr> steps:<…> | Q:<A|B|C|-> | step: <decisive step> | <one-clause reason> | brief:yes|no
+<UTC ts> | <model: sonnet-low|opus-high> | <symbol> | #<signal_id> | <strategy> <direction> | <VERDICT> (quick, <confidence>) | SH:<regime><news><corr> steps:<…> | Q:<A|B|C|-> | step: <decisive step> | <one-clause reason> | brief:yes|no
 ```
+Model field added 2026-09-21 (dual advisor; lines before that date have no model field). Two advisors, one log: the RUNNER
+owns every append (serialized) - the models never write it. Per model: record `<root>\advisor\verdicts\<key>.<model>.json`
+`{schema_version 2, signal_key, model_id, model, effort, label, timeout_s, session_id (uuid5 of key|model), status
+idle|queued|running|ok|error|rate_limited|skipped, started_at|queued_at while pending, consults[{ts, kind verdict|reply, ok,
+text|error, elapsed_s, rate_limited?, timeout?, interrupted?}]}`; notes file `notes.live.<model>.md` (each consult may write only
+its own). `<root>\advisor\consults.log`: `ts|model|key|kind|ok|error|elapsed_s|rate_limited|timeout|error-snippet`, one line per
+attempt (dashboard daily counts, monitor rate-limit alert). Web → runner: `advisor\replies\<key>-<model>-<ts>.json`
+`{signal_key, model, text}` (continues that model's session) and `advisor\retry\<key>.<model>.json` (re-run one model).
 `brief:yes` when `market-brief.md` (the newest Context brief from the past 2 UTC days, trader ruling 2026-09-16) was
 in that consult's bundle. Reply lines: `<ts> | <symbol> | #<id> | reply | <one clause> | brief:yes|no`.
 Briefs: `<root>\advisor\briefs\<UTC>.md` (header comment: model, session, elapsed, sources, flags) + `briefs.log`
