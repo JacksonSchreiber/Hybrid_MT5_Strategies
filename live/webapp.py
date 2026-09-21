@@ -182,12 +182,15 @@ def eligibility_card() -> str:
     rows = ELIG.table(CFG)
     out = [f'<div class="card"><div class="k">Live eligibility (demo) · decisions = approved + skips 1–8 (code 9, auto and TEST excluded) · costed R from broker deals · flag at ≥ {ELIG.FLAG_N} decisions with R ≥ 0</div>'
            '<table><tr><th>symbol</th><th>dec</th><th>appr</th><th>skip</th><th>no-resp</th><th>closed</th><th>costed R</th><th></th></tr>']
-    for a in rows:
+    active = [a for a in rows if a["decisions"] or a["open"]]; idle = [a for a in rows if not (a["decisions"] or a["open"])]
+    for a in active:
         rr = a["costed_r"]; unc = f' <span class="k">+{a["uncosted"]} unpriced</span>' if a["uncosted"] else ""
         flag = '<span class="pill ok">≥20 · R≥0</span>' if a["flag"] else (f'<span class="k">{a["decisions"]}/{ELIG.FLAG_N}</span>' if a["decisions"] < ELIG.FLAG_N else '<span class="pill bad">R&lt;0</span>')
         out.append(f'<tr><td>{E(a["symbol"])}</td><td class="v">{a["decisions"]}</td><td class="v">{a["approved"]}</td><td class="v">{a["skipped"]}</td><td class="v">{a["no_response"]}</td>'
                    f'<td class="v">{a["closed"]}{f" +{a['open']} open" if a["open"] else ""}</td><td class="v {"ok" if rr >= 0 else "bad"}">{rr:+.2f}{unc}</td><td>{flag}</td></tr>')
-    out.append("</table></div>")
+    out.append("</table>")
+    if idle: out.append(f'<div class="k" style="margin-top:6px">no demo decisions yet ({len(idle)}): {E(", ".join(a["symbol"].split(".")[0] for a in idle))}</div>')
+    out.append("</div>")
     return "".join(out)
 
 # ----------------------------------------------------------------------------- pages
@@ -244,7 +247,10 @@ def dashboard(q: dict) -> str:
         rows_i.append(f'<tr><td>{E(sym)}{wf}</td><td><span class="pill {"ok" if alive else "bad"}">{"alive" if alive else "STALE"}</span>{flags}</td>'
                       f'<td class="k">{C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</td><td><a href="{tvl}" target="_blank">TV ↗</a></td></tr>'
                       + (f'<tr><td colspan="4" class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</td></tr>' if hb and hb.get("alerts") else ""))
-    out.append(f'<h2>Instances · {live_n}/{len(syms)} alive</h2><div class="card"><table><tr><th>symbol</th><th>EA</th><th>beat</th><th></th></tr>{"".join(rows_i)}</table></div>')
+    tbl = f'<table><tr><th>symbol</th><th>EA</th><th>beat</th><th></th></tr>{"".join(rows_i)}</table>'
+    all_ok = live_n == len(syms) and len(syms) > 0
+    out.append(f'<h2>Instances · <span class="{"ok" if all_ok else "bad"}">{live_n}/{len(syms)} alive</span></h2><div class="card"><details{"" if all_ok else " open"}><summary class="k">'
+               f'{"all EA instances alive - tap for the list and TradingView links" if all_ok else "SOME INSTANCES STALE - list"}</summary>{tbl}</details></div>')
     out.append('<h2>Advisors</h2>' + advisor_load_card())
     out.append('<h2>Live eligibility</h2>' + eligibility_card())
     # recent decided signals
