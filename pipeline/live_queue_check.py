@@ -32,7 +32,7 @@ REASON_ENUM = ["ok","schema_version_unsupported","malformed_json","bad_task_id",
   "unknown_signal","signal_not_open","unknown_position","position_closed","stale_task","restart_during_execution",
   "trading_disabled","events_not_loaded","election_gate","setup_lock","geom_invalid","rr_below_floor","stop_too_tight",
   "lots_zero","ftmo_daily_headroom","ftmo_max_headroom","be_floor","be_stops_level","be_would_loosen","ratchet_not_banked",
-  "ratchet_already_used","ratchet_no_tp1","ratchet_not_past_tp1","ratchet_would_loosen","min_lot_split","order_failed"]
+  "ratchet_already_used","ratchet_no_tp1","ratchet_not_past_tp1","ratchet_would_loosen","min_lot_split","order_failed","weekend_flat"]
 SIGNAL_STATUS = {"open","approved","approved_pending","skipped","auto_skipped","expired","rejected"}
 
 fails=[]; warns=[]; info=[]

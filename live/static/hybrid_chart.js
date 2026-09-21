@@ -38,7 +38,7 @@
         }).catch(function () { build((tf === 'h4' ? d.bars_h4 : d.bars_d1) || [], null); });
       }
       var cs, emaS = {}, closes = [], barsAll = [];
-      function setStatus(tick) { if (!status) return; status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live') : (d.live ? 'feed unavailable' : 'bars as of the signal'); }
+      function setStatus(tick) { if (!status) return; status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live · axis = broker clock (UTC+3 summer / +2 winter)') : (d.live ? 'feed unavailable' : 'bars as of the signal · axis = broker clock'); }
       function update(last, tick) {
         // series.update() accepts only the current bar or a newer one: push the forming bar and any new bar, never older ones
         var lastT = barsAll.length ? barsAll[barsAll.length - 1][0] : 0;

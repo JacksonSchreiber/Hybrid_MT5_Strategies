@@ -8,8 +8,9 @@ the signal bar. Charts are sighted (symbol + date in the title) - live has no fu
 """
 from __future__ import annotations
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from PIL import Image, ImageDraw, ImageFont
+from live import common as C
 
 BG = (13, 17, 23); GRID = (30, 36, 46); TXT = (201, 209, 217); DIM = (110, 118, 129)
 UP = (63, 185, 80); DN = (248, 81, 73); BLUE = (88, 166, 255)
@@ -67,7 +68,8 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
     # time axis labels (every ~n/6 bars)
     every = max(1, n // 6)
     for i in range(0, n, every):
-        t = datetime.fromtimestamp(show[i][0], timezone.utc)
+        t = datetime.fromtimestamp(show[i][0], timezone.utc)                          # bar epochs are the BROKER clock...
+        t = t - timedelta(hours=C.server_offset_h(t - timedelta(hours=3)))           # ...labels in true UTC, like the card
         d.line([(X(i), y1), (X(i), y1 + 4)], fill=DIM)
         d.text((X(i) - 20, y1 + 6), t.strftime("%d %b" if n_show > 100 else "%d %b %H:%M"), fill=DIM, font=f_small)
     # overlay zones (behind candles): zone / zone2 span zone.from..zone.to exactly as the tester rectangles
