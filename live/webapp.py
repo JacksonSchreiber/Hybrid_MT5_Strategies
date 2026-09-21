@@ -278,7 +278,7 @@ def signal_page(key: str, q: dict) -> str:
     for e in evs[:20]:
         out.append(f'<div class="ev {ev_cls(e.get("hours_until"), e.get("cls"), e.get("binding"))}">{E(C.fmt_dt(C.parse_iso(e.get("t_utc"))))} · {E(e.get("ccy", ""))} {E(e.get("name", ""))} <span class="k">[{E(e.get("cls", ""))} {E(e.get("label", ""))}]</span>{" BINDING" if e.get("binding") else ""}</div>')
     if not evs: out.append('<div class="k">no notable events inside the window</div>')
-    _, cov = C.load_events(CFG); st = C.parse_iso(s.get("signal_time"))
+    _, cov = C.load_events(CFG); st = C.parse_iso(s.get("signal_time_utc") or s.get("signal_time"))
     if cov and st and cov < st + timedelta(days=14): out.append(f'<div class="warn">calendar coverage ends {cov.strftime("%Y-%m-%d")} — later events unknown</div>')
     eg = s.get("election_gate") or {}
     if eg.get("hit"): out.append(f'<div class="bad">election gate: {E(eg.get("event", ""))}</div>')

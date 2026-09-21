@@ -44,7 +44,7 @@ def regime_line(sig: dict) -> str:
     return f"REGIME: {tag} · signal {rel} (D1 200-EMA/ADX)"
 
 def events_block(sig: dict, cfg: dict) -> str:
-    sig_t = C.parse_iso(sig.get("signal_time")); horizon = sig_t + timedelta(days=14) if sig_t else None
+    sig_t = C.parse_iso(sig.get("signal_time_utc") or sig.get("signal_time")); horizon = sig_t + timedelta(days=14) if sig_t else None
     lines = []
     for e in sig.get("events") or []:
         t = C.parse_iso(e.get("t_utc")); hrs = e.get("hours_until")
@@ -95,7 +95,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 
 - **Symbol / class:** {sig.get('symbol')} ({klass})
 {('- **Symbol rules (journaled):** ' + rules_line) if rules_line else '- **Symbol rules:** standard session rules apply (no per-symbol entry in config/symbol_rules.json)'}
-- **Time:** {sig.get('sigtime_text', '')} — signal bar {sig.get('signal_time')}, presented {sig.get('published_at')} · session: {sig.get('session')}
+- **Time:** {sig.get('sigtime_text', '')} — signal bar {sig.get('signal_time_utc') or sig.get('signal_time')}, presented {sig.get('published_at')} (all UTC) · session: {sig.get('session')}
 - **Decision deadline:** {dl.strftime('%a %d %b %H:%M UTC') if dl else '-'} ({sig.get('max_age_bars')} H4 bars of silence = expired) · delays so far: {sig.get('delay_count', 0)}
 - **{regime_line(sig)}**
 - **{protocol_line(sig)}**

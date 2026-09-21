@@ -135,6 +135,78 @@ def heartbeat_age_s(hb: dict | None) -> float | None:
     t = parse_iso(hb.get("ts")) or hb.get("_mtime")
     return (now_utc() - t).total_seconds() if t else None
 
+
+# ----------------------------------------------------------------------------- broker clock (found 2026-09-21)
+# The EA writes signal times (signal_time, decision_bar, published_at, deadline) on the BROKER clock but labels them
+# "Z", and builds sigtime_text / session / the events list against that clock. In the tester (.dk data on UTC) that was
+# invisible; on OANDA the server runs EET/EEST, so live cards were 2-3 h off: deadlines too generous, sessions skewed,
+# event hours short - and events in the first 2-3 h after the bar DROPPED (EA filter `t_utc < bar_server`). Every
+# reader goes through tz_fix_signal(): display fields become true UTC, the raw values stay under *_server (charts match
+# them against the feed's server-epoch bars), and the events list is rebuilt from the UTC calendar with the EA's filter.
+def _last_sunday(y: int, m: int) -> datetime:
+    d = datetime(y, m + 1, 1, tzinfo=timezone.utc) - timedelta(days=1) if m < 12 else datetime(y, 12, 31, tzinfo=timezone.utc)
+    return d - timedelta(days=(d.weekday() + 1) % 7)
+
+def server_offset_h(t_utc: datetime | None = None, cfg: dict | None = None) -> int:
+    """OANDA MT5 server clock = EET/EEST: UTC+3 from the last Sunday of March 01:00 UTC to the last Sunday of October
+    01:00 UTC, UTC+2 otherwise. cfg['server_offset_h'] (fixed int) overrides for another broker."""
+    if cfg and cfg.get("server_offset_h") is not None: return int(cfg["server_offset_h"])
+    t = t_utc or now_utc()
+    return 3 if (_last_sunday(t.year, 3) + timedelta(hours=1)) <= t < (_last_sunday(t.year, 10) + timedelta(hours=1)) else 2
+
+def _srv_to_utc(v, cfg) -> datetime | None:
+    t = parse_iso(v)
+    if not t: return None
+    return t - timedelta(hours=server_offset_h(t - timedelta(hours=3), cfg))
+
+def session_name(h: int) -> str:     # mirrors the EA's SessionName, fed the UTC hour
+    return "Asia" if h < 7 else ("London" if h < 13 else ("New York" if h < 21 else "late/off-hours"))
+
+_TOP_SKIP = ("german", "french", "spanish", "italian", "chinese", "japanese", "swiss", "canadian", "australian", "new zealand")
+_TOP_KEYS = ("federal funds", "fomc", "rate decision", "official bank rate", "main refinancing", "cash rate", "cpi", "non-farm",
+             "nonfarm", "gdp", "pce", "pmi", "unemployment rate", "ecb press", "monetary policy", "press conference", "interest rate",
+             "rate statement", "bank rate", "average hourly earnings", "average earnings", "retail sales", "claimant count")
+def _top_tier(cls: str, name: str) -> bool:   # the EA's g_ev_top
+    if cls in ("V", "W", "C"): return True
+    if cls: return False
+    e = name.lower()
+    return not any(x in e for x in _TOP_SKIP) and any(k in e for k in _TOP_KEYS)
+
+def events_for(cfg: dict, symbol: str, from_utc: datetime, days: int = 14, cap: int = 15, election_days: int = 14) -> list[dict]:
+    """the EA's BuildEventJson filter, on the UTC clock: [from, from+days], notable, base/quote/All, W anchored to its UTC
+    midnight, binding = W inside the election horizon or V inside 6 h."""
+    rows, _ = load_events(cfg); ccys = symbol_ccys(symbol); out = []
+    for r in rows:
+        t = r["t"]
+        if t < from_utc or t > from_utc + timedelta(days=days) or not _top_tier(r["cls"], r["name"]) or r["ccy"] not in ccys: continue
+        rt = t.replace(hour=0, minute=0, second=0) if r["cls"] == "W" else t
+        hrs = max(0.0, (rt - from_utc).total_seconds() / 3600.0)
+        out.append({"t_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "anchor_utc": rt.strftime("%Y-%m-%dT%H:%M:%SZ"), "hours_until": round(hrs, 1),
+                    "ccy": r["ccy"], "name": r["name"], "cls": r["cls"], "sig": "[HIGH]" if r["cls"] in ("V", "W") else ("[MED]" if r["cls"] == "C" else "[LOW]"),
+                    "label": EVENT_LABEL.get(r["cls"], ""), "binding": (r["cls"] == "W" and hrs <= election_days * 24.0) or (r["cls"] == "V" and hrs < 6.0)})
+        if len(out) >= cap: break
+    return out
+
+def tz_fix_signal(s: dict | None, cfg: dict, events: bool = True) -> dict | None:
+    if not s or s.get("_tz_fixed"): return s
+    for k in ("signal_time", "decision_bar", "published_at", "deadline"):
+        if s.get(k):
+            s[k + "_server"] = s[k]; u = _srv_to_utc(s[k], cfg)
+            if u: s[k + "_utc"] = u.strftime("%Y-%m-%dT%H:%M:%SZ")
+    for k in ("published_at", "deadline"):                         # display/sort fields -> true UTC
+        if s.get(k + "_utc"): s[k] = s[k + "_utc"]
+    db = parse_iso(s.get("decision_bar_utc"))
+    if db:
+        suffix = ""
+        if "(+" in (s.get("sigtime_text") or ""): suffix = "  " + s["sigtime_text"][s["sigtime_text"].index("(+"):]
+        s["sigtime_text"] = f"{db.strftime('%A')}  {db.strftime('%H:%M')} UTC{suffix}"
+        s["session"] = session_name(db.hour)
+        if events and s.get("symbol"):
+            ev = events_for(cfg, s["symbol"], db)
+            s["events_ea"] = s.get("events"); s["events"] = ev; s["events_count"] = len(ev)
+    s["_tz_fixed"] = True
+    return s
+
 def list_signals(cfg: dict, symbol: str | None = None, light: bool = True) -> list[dict]:
     """all signal files (newest first). light=True drops the bar arrays to keep the dashboard cheap."""
     pat = f"{symbol}-*.json" if symbol else "*.json"
@@ -144,7 +216,7 @@ def list_signals(cfg: dict, symbol: str | None = None, light: bool = True) -> li
         if not s or "signal_id" not in s: continue
         if light:
             s = {k: v for k, v in s.items() if k not in ("bars_h4", "bars_d1")}
-        s["_path"] = p; out.append(s)
+        s["_path"] = p; out.append(tz_fix_signal(s, cfg, events=not light))
     out.sort(key=lambda s: (parse_iso(s.get("published_at")) or datetime.min.replace(tzinfo=timezone.utc), s.get("signal_id", 0)), reverse=True)
     return out
 
@@ -152,7 +224,7 @@ def signal(cfg: dict, key: str) -> dict | None:
     if not safe_key(key): return None
     s = load_json(os.path.join(cfg["root"], "signals", f"{key}.json"))
     if s: s["_path"] = os.path.join(cfg["root"], "signals", f"{key}.json")
-    return s
+    return tz_fix_signal(s, cfg)
 
 def list_positions(cfg: dict, closed: bool = False) -> list[dict]:
     d = os.path.join(cfg["root"], "positions", "closed" if closed else "")
@@ -274,9 +346,13 @@ def wait_ack(cfg: dict, task_id: str, timeout_s: float = 12.0) -> dict | None:
     return None
 
 # ----------------------------------------------------------------------------- events (econ_events.csv, same class letters the EA uses)
+_EV_CACHE: dict = {}
 def load_events(cfg: dict) -> tuple[list[dict], datetime | None]:
-    """rows: {t: datetime, ccy, name, cls, sig}; returns (rows sorted, coverage_end)."""
+    """rows: {t: datetime, ccy, name, cls, sig}; returns (rows sorted, coverage_end). Cached per file mtime."""
     p = os.path.join(cfg["common_files"], "econ_events.csv"); rows = []
+    try: mt = os.path.getmtime(p)
+    except OSError: mt = None
+    if mt is not None and _EV_CACHE.get("p") == p and _EV_CACHE.get("mt") == mt: return _EV_CACHE["v"]
     try:
         with open(p, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -289,7 +365,9 @@ def load_events(cfg: dict) -> tuple[list[dict], datetime | None]:
                              "sig": parts[5].strip() if len(parts) > 5 else "", "label": EVENT_LABEL.get(cls, "")})
     except OSError: pass
     rows.sort(key=lambda r: r["t"])
-    return rows, (rows[-1]["t"] if rows else None)
+    v = (rows, (rows[-1]["t"] if rows else None))
+    if mt is not None: _EV_CACHE.update(p=p, mt=mt, v=v)
+    return v
 
 def symbol_ccys(symbol: str) -> set[str]:
     root = symbol.split(".")[0].upper()
