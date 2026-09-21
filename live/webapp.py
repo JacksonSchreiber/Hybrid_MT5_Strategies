@@ -128,7 +128,9 @@ def advisor_section(key: str) -> tuple[str, str]:
     """both advisor panels + the AGREE / DISAGREE badge. Returns (html, version) - the page polls /api/advisor/<key>
     and swaps the html in the moment a verdict lands."""
     ms = AR.models(CFG)
+    sig = C.signal(CFG, key) or {}
     recs = {m["id"]: C.load_json(os.path.join(CFG["root"], "advisor", "verdicts", f"{key}.{m['id']}.json")) for m in ms}
+    recs = {k: (r if AR.rec_matches(r, sig) else None) for k, r in recs.items()}    # never show another publication's verdicts
     words = {mid: _last_word(r) for mid, r in recs.items()}
     have = [w for w in words.values() if w]
     unpaired = [m for m in ms if (recs[m["id"]] or {}).get("policy_skip")]

@@ -149,7 +149,13 @@ def models(cfg: dict) -> list[dict]:
              "max_parallel": 3, "label": "Sonnet · low effort · fast"}]
 def model_cfg(cfg: dict, mid: str) -> dict | None: return next((m for m in models(cfg) if m["id"] == mid), None)
 def notes_file(mid: str) -> str: return f"notes.live.{mid}.md"
-def session_id(key: str, mid: str) -> str: return str(uuid.uuid5(SESSION_NS, f"{key}|{mid}"))
+def pub_of(sig: dict) -> str: return str(sig.get("published_at_server") or sig.get("published_at") or "")
+def session_id(key: str, mid: str, pub: str = "") -> str: return str(uuid.uuid5(SESSION_NS, f"{key}|{mid}" + (f"|{pub}" if pub else "")))
+def rec_matches(rec: dict | None, sig: dict) -> bool:
+    """a record belongs to THIS publication of the key (2026-09-21: a restart re-used EURUSD id 3 for a new setup, which then
+    inherited the old setup's verdicts). Records written before the field existed are assumed to match."""
+    rp = (rec or {}).get("published_at_server"); sp = pub_of(sig)
+    return not rp or not sp or rp == sp
 
 # ----------------------------------------------------------------------------- claude
 def claude_env(cfg: dict) -> dict:
@@ -239,7 +245,7 @@ def new_record(cfg: dict, sig: dict, m: dict) -> dict:
     key = sig["signal_key"]
     return {"schema_version": 2, "signal_key": key, "symbol": sig["symbol"], "signal_id": sig["signal_id"], "model_id": m["id"],
             "model": m["model"], "effort": m["effort"], "label": m.get("label", m["id"]), "timeout_s": m.get("timeout_s"),
-            "session_id": session_id(key, m["id"]), "status": "idle", "consults": []}
+            "session_id": session_id(key, m["id"], pub_of(sig)), "published_at_server": pub_of(sig), "status": "idle", "consults": []}
 
 # ----------------------------------------------------------------------------- Opus fallback (coach 2026-09-21, pre-approved)
 # Trigger (evaluated by the monitor): rate-limit errors on >= 2 days in a week, or Opus unavailable on > 20 % of a day's
@@ -307,8 +313,14 @@ class Runner:
     def busy(self, key: str, slot: str) -> bool:
         with self.mu: return (key, slot) in self.inflight
 
-    def needs_consult(self, key: str, mid: str) -> bool:
+    def archive(self, key: str, mid: str, rec: dict) -> None:
+        src = verdict_path(self.cfg, key, mid); dst = src[:-5] + f".superseded-{C.now_utc().strftime('%Y%m%dT%H%M%S')}.json"
+        try: os.replace(src, dst); self.log(f"{key}/{mid}: record belonged to an earlier publication of this id -> {os.path.basename(dst)}")
+        except OSError: pass
+
+    def needs_consult(self, key: str, mid: str, sig: dict | None = None) -> bool:
         rec = load_record(self.cfg, key, mid)
+        if rec and sig is not None and not rec_matches(rec, sig): return True
         if rec and rec.get("policy_skip"): return False
         if not rec or not rec.get("consults"): return True
         cs = rec["consults"]
@@ -326,7 +338,7 @@ class Runner:
     def _launch(self, sig: dict, todo: list[dict], force: bool = False) -> None:
         """render the shared bundle ONCE per presentation, then start every model's consult in its own thread."""
         key = sig["signal_key"]; bdir = os.path.join(self.cfg["advisor"]["live_dir"], "bundles", key)
-        mark = os.path.join(bdir, ".rendered"); stamp = str(sig.get("delay_count", 0))
+        mark = os.path.join(bdir, ".rendered"); stamp = f"{pub_of(sig)}|{sig.get('delay_count', 0)}"
         try: have = open(mark).read().strip() == stamp and os.path.exists(os.path.join(bdir, "setup.md"))
         except OSError: have = False
         if not have:
@@ -335,7 +347,9 @@ class Runner:
 
     def consult(self, sig: dict, m: dict, force: bool = False) -> None:
         key = sig["signal_key"]; mid = m["id"]
-        rec = load_record(self.cfg, key, mid) or new_record(self.cfg, sig, m)
+        rec = load_record(self.cfg, key, mid)
+        if rec and not rec_matches(rec, sig): self.archive(key, mid, rec); rec = None
+        rec = rec or new_record(self.cfg, sig, m)
         why = None if force else policy_skip(self.cfg, sig, m)
         if why:                                              # recorded, so the panel says so and the unpaired set is explicit
             rec.update(status="skipped", note=why, policy_skip=True); rec.pop("queued_at", None); save_record(self.cfg, rec)
@@ -402,7 +416,7 @@ class Runner:
             if sig.get("status") != "open": continue
             key = sig["signal_key"]
             if self.busy(key, "bundle"): continue
-            todo = [m for m in ms if not self.busy(key, m["id"]) and self.needs_consult(key, m["id"])]
+            todo = [m for m in ms if not self.busy(key, m["id"]) and self.needs_consult(key, m["id"], sig)]
             if not todo: continue
             full = C.signal(self.cfg, key)
             if full: self._spawn(key, "bundle", self._launch, full, todo)
