@@ -69,9 +69,16 @@ class Monitor:
         for p in glob.glob(os.path.join(self.cfg["root"], "advisor", "verdicts", "*.json")):
             rec = C.load_json(p)
             if not rec or not rec.get("consults"): continue
-            last = rec["consults"][-1]; tag = f"adv-fail:{rec['signal_key']}:{last.get('ts')}"
+            last = rec["consults"][-1]; mid = rec.get("model_id") or "advisor"; tag = f"adv-fail:{rec['signal_key']}:{mid}:{last.get('ts')}"
+            if last.get("interrupted"): continue                     # restart artefact: the runner re-runs it by itself
             if not last.get("ok") and tag not in self.st["acks"] and C.parse_iso(last.get("ts")) and C.now_utc() - C.parse_iso(last["ts"]) < timedelta(hours=6):
-                self.st["acks"].append(tag); self.send(f"advisor consult FAILED for {rec['signal_key']}: {str(last.get('error'))[:200]}")
+                self.st["acks"].append(tag)
+                if last.get("rate_limited"):
+                    n = self._rate_limits_today()
+                    self.send(f"ADVISOR RATE-LIMITED: {mid} on {rec['signal_key']} - no verdict from it; the other advisor's verdict stands. "
+                              f"{n} rate-limit error(s) today. Opus-high on every signal is real subscription load - see the dashboard's advisor counts.")
+                elif last.get("timeout"): self.send(f"advisor {mid} TIMED OUT on {rec['signal_key']} ({str(last.get('error'))[:80]}) - the other advisor's verdict stands")
+                else: self.send(f"advisor {mid} consult FAILED for {rec['signal_key']}: {str(last.get('error'))[:200]}")
 
     def acks(self):
         seen = set(self.st["acks"])
@@ -204,9 +211,12 @@ class Monitor:
         closed = [float(r["r_multiple"]) for r in rows if r.get("r_multiple") and (r.get("exit_time") or "").startswith(day)]
         parts = [f"DAILY {now.strftime('%a %d %b')}: signals {len(today_rows)} (" + ", ".join(f"{d}:{sum(1 for r in today_rows if r.get('decision') == d)}" for d in ("approved", "approved_pending", "skipped", "rejected")) + ")",
                  f"closed today: {len(closed)} · {sum(closed):+.2f}R" if closed else "closed today: none"]
-        for sym in C.symbols(self.cfg):
-            hb = C.heartbeat(self.cfg, sym) or {}; f = hb.get("ftmo") or {}
-            parts.append(f"{sym}: equity {hb.get('equity')} · daily headroom {f.get('headroom_daily')} · max headroom {f.get('headroom_max')} · open {len(hb.get('open_positions') or [])}")
+        # one account line (every instance reports the same account) + instance health: ~40 charts after the expansion
+        syms = C.symbols(self.cfg); hbs = [C.heartbeat(self.cfg, x) or {} for x in syms]
+        acct = next((h for h in hbs if (h.get("ftmo") or {}).get("initial_balance")), hbs[0] if hbs else {}); f = acct.get("ftmo") or {}
+        alive = sum(1 for h in hbs if h.get("status") == "running" and (C.heartbeat_age_s(h) or 1e9) < self.cfg["monitor"]["heartbeat_stale_s"])
+        parts.append(f"account: equity {acct.get('equity')} · daily headroom {f.get('headroom_daily')} · max headroom {f.get('headroom_max')} · aggregate risk-to-stop {acct.get('aggregate_risk_to_stop')}")
+        parts.append(f"instances alive {alive}/{len(syms)} · open positions {len(C.list_positions(self.cfg))}")
         try:
             from live import brief_runner; b = brief_runner.latest_brief(self.cfg, 2.0)
             parts.append("context brief available (" + C.rel_time(b["t"]) + ")" if b else "no context brief in the last 2 days - generate one from the Context page if you want the advisor to have it")
@@ -214,8 +224,22 @@ class Monitor:
         parts.append(f"{self.base}/")
         self.send("\n".join(parts))
 
+    def _rate_limits_today(self) -> int:
+        day = C.now_utc().strftime("%Y-%m-%d"); n = 0
+        try:
+            with open(os.path.join(self.cfg["root"], "advisor", "consults.log"), encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    x = ln.split("|")
+                    if len(x) > 6 and x[0].startswith(day) and x[6] == "rate_limited": n += 1
+        except OSError: pass
+        return n
+
+    def eligibility(self):
+        from live import eligibility as ELIG
+        ELIG.refresh(self.cfg, 25, self.log)          # prices newly closed positions from the broker deals (cached)
+
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()

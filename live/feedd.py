@@ -1,7 +1,7 @@
 """
 feedd.py - the MetaTrader5 feed in its own process (127.0.0.1:8081). The MetaTrader5 package can block the calling
 process while the terminal is busy/restarting; isolating it here means the web app only ever waits on a short HTTP
-timeout. Endpoints: /bars?symbol=&tf=&n=  /tick?symbol=  /status  /health
+timeout. Endpoints: /bars?symbol=&tf=&n=  /tick?symbol=  /positions  /orders  /status  /health
 """
 from __future__ import annotations
 import json, os, sys, urllib.parse
@@ -24,6 +24,11 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(sym) or tf not in mt5feed.TF: return self._j({"error": "bad request"}, 400)
                 return self._j({"bars": mt5feed.bars(sym, tf, n), "tick": mt5feed.tick(sym)})
             if u.path == "/tick": return self._j({"tick": mt5feed.tick(q.get("symbol", ""))})
+            if u.path == "/positions": return self._j({"positions": mt5feed.positions()})
+            if u.path == "/deals":
+                try: pid = int(q.get("position", "0"))
+                except ValueError: return self._j({"error": "bad request"}, 400)
+                return self._j({"deals": mt5feed.position_costs(pid)})
             if u.path == "/orders":
                 sym = q.get("symbol") or None
                 if sym and not C.safe_key(sym): return self._j({"error": "bad request"}, 400)

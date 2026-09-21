@@ -75,6 +75,8 @@ def bars(symbol: str, tf: str = "h4", n: int = 500, max_age_s: float = 2.0) -> l
         if not _ensure(): return None
         try:
             r = _mt5.copy_rates_from_pos(symbol, getattr(_mt5, TF[tf]), 0, n)
+            if r is None and _mt5.symbol_select(symbol, True):     # not in Market Watch yet (expanded universe): add it, retry once
+                r = _mt5.copy_rates_from_pos(symbol, getattr(_mt5, TF[tf]), 0, n)
         except Exception:
             _reset(); return None
         if r is None:
@@ -89,7 +91,9 @@ def tick(symbol: str) -> dict | None:
         r = _remote(f"/tick?symbol={symbol}", 3.0); return (r or {}).get("tick")
     with _lock:
         if not _ensure(): return None
-        try: k = _mt5.symbol_info_tick(symbol)
+        try:
+            k = _mt5.symbol_info_tick(symbol)
+            if k is None and _mt5.symbol_select(symbol, True): k = _mt5.symbol_info_tick(symbol)
         except Exception: _reset(); return None
         if k is None: return None
         return {"t": int(k.time), "bid": float(k.bid), "ask": float(k.ask)}
@@ -118,6 +122,46 @@ def orders(symbol: str | None = None) -> list[dict] | None:
                         "distance": abs(px - o.price_open) if px else None, "distance_r": (abs(px - o.price_open) / stop) if px and stop else None,
                         "server_offset_h": max(-12, min(14, round(((t.time if t else time.time()) - time.time()) / 3600.0)))})   # broker clock vs UTC (OANDA = +3)
         return out
+
+def positions() -> list[dict] | None:
+    """every open position on the ACCOUNT (any symbol, any magic) with its risk to the current stop as % of equity -
+    the exposure block uses it to list positions the EA does not manage. None when the terminal is unavailable."""
+    if FEED_URL:
+        r = _remote("/positions", 4.0); return (r or {}).get("positions")
+    with _lock:
+        if not _ensure(): return None
+        try:
+            raw = _mt5.positions_get(); ai = _mt5.account_info()
+        except Exception:
+            _reset(); return None
+        eq = float(ai.equity) if ai and ai.equity else 0.0
+        out = []
+        for x in raw or []:
+            si = _mt5.symbol_info(x.symbol)
+            risk = None
+            if x.sl and si and si.trade_tick_size:
+                risk = abs(x.price_open - x.sl) / si.trade_tick_size * si.trade_tick_value * x.volume
+            out.append({"ticket": int(x.ticket), "symbol": x.symbol, "direction": "BUY" if x.type == 0 else "SELL",
+                        "volume": float(x.volume), "price_open": float(x.price_open), "sl": float(x.sl), "magic": int(x.magic),
+                        "time": int(x.time), "risk_ccy": risk, "risk_pct": (risk / eq * 100.0) if (risk is not None and eq) else None})
+        return out
+
+def position_costs(posid: int) -> dict | None:
+    """every deal of one position (entry AND exits): net = profit + swap + commission + fee, plus the symbol's tick value /
+    size so the caller can price the stop in account currency. The eligibility counter's costed R comes from here."""
+    if FEED_URL:
+        r = _remote(f"/deals?position={int(posid)}", 6.0); return (r or {}).get("deals")
+    with _lock:
+        if not _ensure(): return None
+        try:
+            ds = _mt5.history_deals_get(position=int(posid))
+        except Exception:
+            _reset(); return None
+        if not ds: return {"n": 0}
+        sym = ds[0].symbol; si = _mt5.symbol_info(sym)
+        tot = {k: float(sum(getattr(d, k, 0.0) or 0.0 for d in ds)) for k in ("profit", "swap", "commission", "fee")}
+        return {"n": len(ds), "symbol": sym, **tot, "net": sum(tot.values()),
+                "tick_value": float(si.trade_tick_value) if si else None, "tick_size": float(si.trade_tick_size) if si else None}
 
 def status() -> dict:
     if FEED_URL:

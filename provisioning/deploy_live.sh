@@ -3,6 +3,9 @@
 #   provisioning/deploy_live.sh            # full deploy (code, config, advisor role/library, tasks) + restart
 #   provisioning/deploy_live.sh --code     # code + config only, restart
 #   provisioning/deploy_live.sh --prune    # full deploy + delete advisor library files that no longer exist locally
+#   provisioning/deploy_live.sh --config   # queue config only: lineup.txt, risk_mult.json, live.json, lineup_history.json (no restart;
+#                                          #   the EAs re-read risk_mult/live.json on their own; a NEW lineup needs --ea or an MT5 restart)
+#   provisioning/deploy_live.sh --ea       # EA + launcher binaries (built locally, gate chain PASSED) -> box MT5 tree, then restart MT5
 # Requires the WireGuard tunnel up (sudo wg-quick up ~/.wireguard/hybridvps.conf) and the hybridops SSH key.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,8 +16,26 @@ APP='C:/ProgramData/hybrid/live'; ADV='C:/ProgramData/hybrid/advisor/live'
 MODE="${1:-full}"; PRUNE=false
 [[ "${2:-}" == "--prune" || "$MODE" == "--prune" ]] && { PRUNE=true; [[ "$MODE" == "--prune" ]] && MODE=full; }
 log(){ printf '%s\n' "$*" >&2; }
+QCFG='C:/Users/hybridops/AppData/Roaming/MetaQuotes/Terminal/Common/Files/live/config'
+if [[ "$MODE" == "--config" || "$MODE" == "--ea" ]]; then
+  # queue config (single source: provisioning/). risk_mult + live.json are re-read by every EA at its poll/heartbeat cadence.
+  $SCP "$REPO"/provisioning/lineup.txt "$REPO"/provisioning/risk_mult.json "$REPO"/provisioning/live.json "$REPO"/provisioning/lineup_history.json "$HOST:$QCFG/"
+  log "queue config copied (lineup.txt, risk_mult.json, live.json, lineup_history.json)"
+fi
+if [[ "$MODE" == "--ea" ]]; then
+  MT5LOCAL="/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/EE0304F13905552AE0B5EAEFB04866EB/MQL5"
+  TERM=$($SSH "(Get-ChildItem 'C:/Users/hybridops/AppData/Roaming/MetaQuotes/Terminal' -Directory | Where-Object { Test-Path (Join-Path \$_.FullName 'MQL5/Experts') } | Select-Object -First 1).FullName" | tr -d '\r')
+  [[ -n "$TERM" ]] || { log "ERROR: box terminal data dir not found"; exit 1; }
+  TERM="${TERM//\\//}"
+  $SCP "$MT5LOCAL/Experts/HybridForwardTest-live.ex5" "$HOST:$TERM/MQL5/Experts/"
+  $SCP "$MT5LOCAL/Scripts/HybridLiveLauncher.ex5" "$HOST:$TERM/MQL5/Scripts/"
+  log "binaries copied to $TERM (EA -live + launcher); restarting MT5 (the documented box procedure: stop, then the hybrid-mt5 task)"
+  $SSH "Stop-Process -Name terminal64 -Force -ErrorAction SilentlyContinue; Start-Sleep 5; Start-ScheduledTask hybrid-mt5; Start-Sleep 3; (Get-ScheduledTask hybrid-mt5).State" | tr -d '\r'
+  exit 0
+fi
+[[ "$MODE" == "--config" ]] && exit 0
 $SSH "New-Item -ItemType Directory -Force -Path $APP/live/static, $ADV/advisor/.claude, $ADV/advisor/library, C:/ProgramData/hybrid/logs | Out-Null; 'dirs ok'" | tr -d '\r'
-$SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$REPO"/live/calendar_refresh.py "$REPO"/live/backup.py "$REPO"/live/feedd.py "$REPO"/live/brief_runner.py "$HOST:$APP/live/"
+$SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$REPO"/live/calendar_refresh.py "$REPO"/live/backup.py "$REPO"/live/feedd.py "$REPO"/live/brief_runner.py "$REPO"/live/exposure.py "$REPO"/live/eligibility.py "$HOST:$APP/live/"
 $SCP "$REPO"/live/static/lw.js "$REPO"/live/static/hybrid_chart.js "$HOST:$APP/live/static/"
 $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
 $SCP "$REPO"/config/symbol_rules.json "$HOST:$APP/symbol_rules.json"      # per-symbol doctrine flags (class + suspended session rules) for the advisor card
@@ -36,7 +57,7 @@ if [[ "$MODE" == "full" ]]; then
   $SCP "$TRAIN/advisor/CLAUDE.live.md" "$HOST:$ADV/advisor/CLAUDE.md"
   $SCP -r "$TRAIN/advisor/library/." "$HOST:$ADV/advisor/library/"
   $SCP "$REPO/provisioning/advisor_settings.json" "$HOST:$ADV/advisor/.claude/settings.json"
-  $SSH "foreach (\$f in '$ADV/advisor/notes.live.md','$ADV/advisor/verdicts.live.log') { if (-not (Test-Path \$f)) { New-Item -ItemType File -Path \$f | Out-Null } }; 'advisor material ok'" | tr -d '\r'
+  $SSH "foreach (\$f in '$ADV/advisor/verdicts.live.log') { if (-not (Test-Path \$f)) { New-Item -ItemType File -Path \$f | Out-Null } }; 'advisor material ok'" | tr -d '\r'
   if [[ "${PRUNE:-false}" == "true" ]]; then
     # coach 2026-09-17: the copy is additive, so a RETIRED library note would linger on the box and keep being read.
     # --prune deletes any file under advisor/library that no longer exists locally. Compared by RELATIVE path through a

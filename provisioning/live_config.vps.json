@@ -18,7 +18,25 @@
     "timeout_s": 150,
     "live_dir": "C:\\ProgramData\\hybrid\\advisor\\live\\advisor",
     "node_path": "C:\\Program Files\\nodejs;C:\\Users\\hybridops\\AppData\\Roaming\\npm",
-    "token_file": "C:\\ProgramData\\hybrid\\secrets\\advisor.token"
+    "token_file": "C:\\ProgramData\\hybrid\\secrets\\advisor.token",
+    "models": [
+      {
+        "id": "sonnet-low",
+        "model": "sonnet",
+        "effort": "low",
+        "timeout_s": 150,
+        "max_parallel": 3,
+        "label": "Sonnet · low effort · fast"
+      },
+      {
+        "id": "opus-high",
+        "model": "opus",
+        "effort": "high",
+        "timeout_s": 600,
+        "max_parallel": 2,
+        "label": "Opus · high effort · deep"
+      }
+    ]
   },
   "monitor": {
     "interval_s": 15,

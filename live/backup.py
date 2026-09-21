@@ -31,7 +31,7 @@ def build(cfg: dict, days: int = 30) -> tuple[bytes, str, dict]:
             p = os.path.join(dirpath, f); a = "live/" + (rel + "/" if rel != "." else "") + f
             n += _add(z, p, a, since, always or a == "live/web/web_audit.log")
     if adv and os.path.isdir(adv):
-        for f in ("verdicts.live.log", "notes.live.md", "CLAUDE.md"):
+        for f in ("verdicts.live.log", "notes.live.md", "notes.live.sonnet-low.md", "notes.live.opus-high.md", "CLAUDE.md"):
             n += _add(z, os.path.join(adv, f), "advisor/" + f, since, True)
     if cal and os.path.isdir(cal):
         for f in ("forward.json",):

@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
 from live import charts
+from live import advisor_runner as AR
+from live import eligibility as ELIG
 
 CFG: dict = {}
 LOG = None
@@ -35,13 +37,23 @@ pre{white-space:pre-wrap;word-break:break-word;font:14px/1.4 ui-monospace,Menlo,
 textarea,select,input{width:100%;background:#0b0f14;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:16px}
 .ev.bind{color:var(--dn);font-weight:600}.ev.amber{color:var(--warn);font-weight:600}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}@media(max-width:640px){.grid2{grid-template-columns:1fr}}
 .flash{padding:10px;border-radius:6px;margin:8px 0}.flash.ok{background:#12301a;border:1px solid #2ea043}.flash.bad{background:#3a1d1d;border:1px solid #a33}
+.advs{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:760px){.advs{grid-template-columns:1fr}}
+.adv{border:1px solid var(--line);border-left:5px solid var(--line);border-radius:8px;padding:10px;background:#11161d;min-width:0}
+.adv.fam-sonnet{border-left-color:#58a6ff}.adv.fam-opus{border-left-color:#bc8cff}.advs.dis .adv{border-top-color:#a33;border-right-color:#a33;border-bottom-color:#a33;box-shadow:0 0 0 1px #a33}
+.advtag{display:inline-block;padding:3px 9px;border-radius:10px;font-size:13px;font-weight:700}.advtag.fam-sonnet{background:#132a45;color:#79c0ff}.advtag.fam-opus{background:#2d1f47;color:#d2a8ff}
+.badge{display:inline-block;padding:4px 12px;border-radius:12px;font-weight:800;font-size:14px;letter-spacing:.05em}.badge.agree{background:#12301a;color:#3fb950;border:1px solid #2ea043}.badge.disagree{background:#3a1d1d;color:#ff7b72;border:1px solid #f85149}.badge.wait{background:#21262d;color:var(--dim)}
+.vw{font-size:18px;font-weight:800}
 .cd{font-weight:600}.brief h2{color:var(--txt);text-transform:none;letter-spacing:0;font-size:17px;margin-top:14px}.brief p,.brief li{font-size:15px;line-height:1.5}.brief a{word-break:break-all}
 """
 JS = """
 function tick(){document.querySelectorAll('[data-deadline]').forEach(function(el){var d=new Date(el.dataset.deadline);var s=Math.floor((d-Date.now())/1000);
  if(s<=0){el.textContent='EXPIRED';el.className='cd bad';return;}var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;el.textContent=(h>0?h+'h ':'')+m+'m '+x+'s';el.className='cd '+(s<3600?'warn':'ok');});}
 function utc(){var d=new Date();var p=function(n){return (n<10?'0':'')+n};var el=document.getElementById('utc');if(el)el.textContent=p(d.getUTCHours())+':'+p(d.getUTCMinutes())+':'+p(d.getUTCSeconds())+' UTC';}
-setInterval(function(){tick();utc();},1000);tick();utc();
+function els(){document.querySelectorAll('[data-started]').forEach(function(el){var s=Math.max(0,Math.floor((Date.now()-new Date(el.dataset.started))/1000));el.textContent=(s>=60?Math.floor(s/60)+'m ':'')+(s%60)+'s';});}
+setInterval(function(){tick();utc();els();},1000);tick();utc();els();
+(function(){var box=document.getElementById('advisor');if(!box)return;setInterval(function(){
+ var typed=[].some.call(box.querySelectorAll('textarea'),function(t){return t.value.trim()!==''||t===document.activeElement;});if(typed)return;
+ fetch('/api/advisor/'+encodeURIComponent(box.dataset.key)).then(function(r){return r.json();}).then(function(j){if(j&&j.v&&j.v!==box.dataset.v){box.innerHTML=j.html;box.dataset.v=j.v;els();}}).catch(function(){});},4000);})();
 var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.querySelector('textarea:focus')){setTimeout(function(){if(!document.querySelector('textarea:focus'))location.reload();},parseInt(meta.content)*1000);}
 """
 
@@ -71,6 +83,113 @@ def ftmo_block(hb: dict) -> str:
             f'<div><div class="k">Max-loss headroom</div><div class="big v {"bad" if hm < 0.01 * f["initial_balance"] else "ok"}">{hm:,.0f} <span class="k">({pct(hm)})</span></div><div class="k">floor {f.get("max_floor", 0):,.0f} · initial {f["initial_balance"]:,.0f}</div></div></div>'
             f'<div class="k">equity {eq:,.2f} · aggregate risk-to-stop {hb.get("aggregate_risk_to_stop", 0):,.0f} · buffer {f.get("buffer", 0):,.0f}</div>')
 
+
+# ----------------------------------------------------------------------------- advisors (coach 2026-09-21: two per signal)
+def _fam(mid: str) -> str: return "opus" if "opus" in mid else ("sonnet" if "sonnet" in mid else "other")
+
+def _last_word(rec: dict | None) -> str | None:
+    for c in reversed((rec or {}).get("consults") or []):
+        if c.get("ok"):
+            w = AR.verdict_word(c.get("text"))
+            if w: return w
+    return None
+
+def advisor_section(key: str) -> tuple[str, str]:
+    """both advisor panels + the AGREE / DISAGREE badge. Returns (html, version) - the page polls /api/advisor/<key>
+    and swaps the html in the moment a verdict lands."""
+    ms = AR.models(CFG)
+    recs = {m["id"]: C.load_json(os.path.join(CFG["root"], "advisor", "verdicts", f"{key}.{m['id']}.json")) for m in ms}
+    words = {mid: _last_word(r) for mid, r in recs.items()}
+    have = [w for w in words.values() if w]
+    if len(ms) > 1 and len(have) == len(ms):
+        agree = len(set(have)) == 1
+        badge = (f'<span class="badge agree">AGREE · {E(have[0])}</span>' if agree else
+                 '<span class="badge disagree">DISAGREE · ' + " vs ".join(E(f"{words[m['id']]} ({m['id'].split('-')[0].title()})") for m in ms) + '</span>')
+    else:
+        agree = True
+        badge = f'<span class="badge wait">{len(have)} of {len(ms)} verdicts in</span>'
+    panels = []
+    for m in ms:
+        mid = m["id"]; rec = recs[mid] or {}; st = rec.get("status") or "idle"; lab = m.get("label", mid)
+        other = next((x for x in ms if x["id"] != mid and words.get(x["id"])), None)
+        stands = f" {other.get('label', other['id']).split(' ·')[0]}'s verdict stands." if other else ""
+        cs = rec.get("consults") or []; last = cs[-1] if cs else {}
+        if st == "queued": line = f'<span class="warn">queued — waiting for a free {E(m["model"])} slot</span> <span class="k" data-started="{E(rec.get("queued_at", ""))}"></span>'
+        elif st == "running": line = f'<span class="warn">running{" (reply)" if rec.get("running_kind") == "reply" else ""}…</span> <b class="v" data-started="{E(rec.get("started_at", ""))}"></b> <span class="k">of {m.get("timeout_s")}s max</span>'
+        elif st == "rate_limited": line = f'<span class="bad"><b>RATE-LIMITED</b> — {E(lab.split(" ·")[0])} did not answer (subscription limit).{E(stands)}</span>'
+        elif st == "error" and last.get("timeout"): line = f'<span class="bad"><b>Timed out</b> after {m.get("timeout_s")}s — no verdict.{E(stands)}</span>'
+        elif st == "error" and last.get("interrupted"): line = '<span class="warn">interrupted by an advisor restart — it will run again shortly</span>'
+        elif st == "error": line = f'<span class="bad"><b>Failed</b>: {E(str(last.get("error"))[:200])}.{E(stands)}</span>'
+        elif st == "skipped": line = f'<span class="k">not run — {E(rec.get("note", "signal decided first"))}</span>'
+        elif st == "ok": line = f'<span class="ok">answered</span> <span class="k">in {last.get("elapsed_s")}s</span>'
+        else: line = '<span class="k">waiting to start…</span>'
+        body = []
+        for c in cs:
+            if c.get("kind") == "reply": body.append(f'<div class="k">you · {E(c.get("ts", ""))}</div><pre>{E(c.get("prompt", ""))}</pre>')
+            if c.get("ok"): body.append(f'<div class="k">{E(mid)} · {E(c.get("ts", ""))} · {c.get("elapsed_s")}s</div><pre>{E(c.get("text") or "")}</pre>')
+            elif c.get("kind") == "verdict" and not c.get("interrupted"): body.append(f'<div class="k bad">{E(mid)} · {E(c.get("ts", ""))} · no answer: {E(str(c.get("error"))[:160])}</div>')
+        w = words.get(mid)
+        answered = any(c.get("ok") for c in cs)
+        can_reply = answered and st not in ("running", "queued")
+        can_rerun = (not answered) and st in ("error", "rate_limited", "skipped")
+        panels.append(f'<div class="adv fam-{_fam(mid)}"><div class="row"><span class="advtag fam-{_fam(mid)}">{E(lab)}</span>'
+                      + (f'<span class="vw">{E(w)}</span>' if w else "") + f'</div><div style="margin:6px 0">{line}</div>' + "".join(body)
+                      + (f'<form method="post" action="/reply"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="model" value="{E(mid)}">'
+                         f'<textarea name="text" rows="2" placeholder="reply to {E(lab.split(" ·")[0])} (its own session)"></textarea><div style="margin-top:6px"><button class="btn">Reply to {E(lab.split(" ·")[0])}</button></div></form>' if can_reply else "")
+                      + (f'<form method="post" action="/advisor_retry" class="inline"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="model" value="{E(mid)}">'
+                         f'<button class="btn">Run {E(lab.split(" ·")[0])} again</button></form>' if can_rerun else "")
+                      + '</div>')
+    legacy = C.load_json(os.path.join(CFG["root"], "advisor", "verdicts", f"{key}.json"))
+    leg = ""
+    if legacy and legacy.get("consults"):
+        leg = '<details><summary class="k">earlier single-advisor verdict (before 2026-09-21)</summary>' + "".join(
+            f'<div class="k">advisor · {E(c.get("ts", ""))}</div><pre>{E(c.get("text") or ("ERROR: " + str(c.get("error"))))}</pre>' for c in legacy["consults"]) + '</details>'
+    html_ = f'<div class="row" style="margin-bottom:8px">{badge}</div><div class="advs{"" if agree else " dis"}">{"".join(panels)}</div>{leg}'
+    v = hashlib.sha1(json.dumps({k: [(r or {}).get("status"), len((r or {}).get("consults") or []), ((r or {}).get("consults") or [{}])[-1].get("ts")] for k, r in recs.items()}, sort_keys=True).encode()).hexdigest()[:12]
+    return html_, v
+
+def advisor_load_card() -> str:
+    """today's consult count per model (UTC day) from the runner's consults.log - Opus-high is real subscription load."""
+    p = os.path.join(CFG["root"], "advisor", "consults.log"); day = C.now_utc().strftime("%Y-%m-%d")
+    cnt: dict[str, dict] = {m["id"]: {"n": 0, "ok": 0, "err": 0, "rl": 0, "to": 0, "sec": 0.0} for m in AR.models(CFG)}
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                x = ln.rstrip("\n").split("|")
+                if len(x) < 7 or not x[0].startswith(day): continue
+                c = cnt.setdefault(x[1], {"n": 0, "ok": 0, "err": 0, "rl": 0, "to": 0, "sec": 0.0})
+                c["n"] += 1; c["ok" if x[4] == "ok" else "err"] += 1; c["rl"] += x[6] == "rate_limited"; c["to"] += x[6] == "timeout"
+                try: c["sec"] += float(x[5])
+                except ValueError: pass
+    except OSError: pass
+    cells = []
+    for mid, c in cnt.items():
+        m = AR.model_cfg(CFG, mid) or {"label": mid}
+        warn = f' <span class="pill bad">{c["rl"]} rate-limited</span>' if c["rl"] else ""
+        cells.append(f'<div><span class="advtag fam-{_fam(mid)}">{E(m.get("label", mid))}</span><div class="big v">{c["n"]}</div>'
+                     f'<div class="k">{c["ok"]} ok · {c["err"]} failed{f" ({c['to']} timeout)" if c["to"] else ""} · avg {(c["sec"] / c["n"]) if c["n"] else 0:.0f}s</div>{warn}</div>')
+    return f'<div class="card"><div class="k">Advisor consults today (UTC {day})</div><div class="grid2">{"".join(cells)}</div></div>'
+
+def shadow_line() -> str:
+    h = C.load_json(os.path.join(CFG["root"], "config", "lineup_history.json"), None)
+    if not h or not h.get("events"): return ""
+    ev = h["events"]; start = C.parse_iso(ev[0].get("date") + "T00:00:00Z"); last = C.parse_iso(ev[-1].get("date") + "T00:00:00Z")
+    now = C.now_utc(); d_all = (now - start).days if start else 0; d_last = (now - last).days if last else 0
+    tail = f" · current configuration ({E(ev[-1].get('event', ''))}, {len(ev[-1].get('lineup') or [])} symbols) since {E(ev[-1]['date'])}: {d_last} day{'s' if d_last != 1 else ''}" if len(ev) > 1 else ""
+    return f'<div class="k">shadow day {d_all} (since {E(ev[0]["date"])}){tail}</div>'
+
+def eligibility_card() -> str:
+    rows = ELIG.table(CFG)
+    out = [f'<div class="card"><div class="k">Live eligibility (demo) · decisions = approved + skips 1–8 (code 9, auto and TEST excluded) · costed R from broker deals · flag at ≥ {ELIG.FLAG_N} decisions with R ≥ 0</div>'
+           '<table><tr><th>symbol</th><th>dec</th><th>appr</th><th>skip</th><th>no-resp</th><th>closed</th><th>costed R</th><th></th></tr>']
+    for a in rows:
+        rr = a["costed_r"]; unc = f' <span class="k">+{a["uncosted"]} unpriced</span>' if a["uncosted"] else ""
+        flag = '<span class="pill ok">≥20 · R≥0</span>' if a["flag"] else (f'<span class="k">{a["decisions"]}/{ELIG.FLAG_N}</span>' if a["decisions"] < ELIG.FLAG_N else '<span class="pill bad">R&lt;0</span>')
+        out.append(f'<tr><td>{E(a["symbol"])}</td><td class="v">{a["decisions"]}</td><td class="v">{a["approved"]}</td><td class="v">{a["skipped"]}</td><td class="v">{a["no_response"]}</td>'
+                   f'<td class="v">{a["closed"]}{f" +{a['open']} open" if a["open"] else ""}</td><td class="v {"ok" if rr >= 0 else "bad"}">{rr:+.2f}{unc}</td><td>{flag}</td></tr>')
+    out.append("</table></div>")
+    return "".join(out)
+
 # ----------------------------------------------------------------------------- pages
 def dashboard(q: dict) -> str:
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
@@ -84,6 +203,7 @@ def dashboard(q: dict) -> str:
                f'<form method="post" action="/kill" class="inline" style="margin-left:auto"><input type="hidden" name="enable" value="{0 if ks else 1}"><button class="btn {"no" if ks else "go"}" onclick="return confirm(\'{"Disable" if ks else "Enable"} trading?\')">{"Disable" if ks else "Enable"}</button></form></div></div>')
     acct = next((hb for hb in (C.heartbeat(CFG, x) for x in syms) if hb and (hb.get("ftmo") or {}).get("initial_balance")), None)
     if acct: out.append(f'<div class="card"><div class="k">Account · from {E(acct.get("symbol", ""))} beat {C.rel_time(C.parse_iso(acct.get("ts")))}</div>' + ftmo_block(acct) + '</div>')
+    out.append(shadow_line())
     # backup + telegram test (trader rulings 2026-09-16: manual 30-day zip instead of a nightly pull)
     from live import backup
     ds = backup.days_since(CFG); lb = backup.last(CFG)
@@ -113,15 +233,20 @@ def dashboard(q: dict) -> str:
     for p in pos:
         out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"><div class="row"><span class="big">{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
                    f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
-    out.append('<h2>Instances</h2>')
+    # instances: one compact table (the expanded universe runs ~40 charts - a card each would bury everything below)
+    live_n = 0; rows_i = []
     for sym in syms:
         hb = C.heartbeat(CFG, sym); age = C.heartbeat_age_s(hb)
-        alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]
+        alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]; live_n += bool(alive)
         flags = "" if not hb else ("" if hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed") else ' <span class="pill bad">AutoTrading OFF</span>')
+        wf = ' <span class="pill">weekend-flat</span>' if hb and hb.get("weekend_flat") else ""
         tvs = C.tv_symbol(CFG, sym); tvl = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
-        out.append(f'<div class="card"><div class="row"><span class="big">{E(sym)}</span><span class="pill {"ok" if alive else "bad"}">{"EA alive" if alive else "EA STALE / STOPPED"}</span>{flags}<span class="k">beat {C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</span>'
-                   f'<a class="btn" href="{tvl}" target="_blank" style="margin-left:auto;padding:6px 10px;font-size:13px">TradingView ↗</a></div>'
-                   + (f'<div class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</div>' if hb and hb.get("alerts") else "") + '</div>')
+        rows_i.append(f'<tr><td>{E(sym)}{wf}</td><td><span class="pill {"ok" if alive else "bad"}">{"alive" if alive else "STALE"}</span>{flags}</td>'
+                      f'<td class="k">{C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</td><td><a href="{tvl}" target="_blank">TV ↗</a></td></tr>'
+                      + (f'<tr><td colspan="4" class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</td></tr>' if hb and hb.get("alerts") else ""))
+    out.append(f'<h2>Instances · {live_n}/{len(syms)} alive</h2><div class="card"><table><tr><th>symbol</th><th>EA</th><th>beat</th><th></th></tr>{"".join(rows_i)}</table></div>')
+    out.append('<h2>Advisors</h2>' + advisor_load_card())
+    out.append('<h2>Live eligibility</h2>' + eligibility_card())
     # recent decided signals
     out.append("<h2>Recent signals</h2><div class='card'><table><tr><th>#</th><th>signal</th><th>status</th><th>time</th></tr>")
     for s in [x for x in sigs if x.get("status") != "open"][:12]:
@@ -158,15 +283,9 @@ def signal_page(key: str, q: dict) -> str:
     eg = s.get("election_gate") or {}
     if eg.get("hit"): out.append(f'<div class="bad">election gate: {E(eg.get("event", ""))}</div>')
     out.append("</div>")
-    # advisor
-    rec = C.load_json(os.path.join(CFG["root"], "advisor", "verdicts", f"{key}.json"))
-    out.append('<div class="card"><h2>Advisor</h2>')
-    if not rec or not rec.get("consults"): out.append('<div class="k">verdict pending…</div>')
-    else:
-        for c in rec["consults"]:
-            if c.get("kind") == "reply": out.append(f'<div class="k">you · {E(c.get("ts", ""))}</div><pre>{E(c.get("prompt", ""))}</pre>')
-            out.append(f'<div class="k">advisor · {E(c.get("ts", ""))} · {c.get("elapsed_s")}s</div><pre>{E(c.get("text") or ("ERROR: " + str(c.get("error"))))}</pre>')
-    out.append(f'<form method="post" action="/reply"><input type="hidden" name="key" value="{E(key)}"><textarea name="text" rows="2" placeholder="reply to the advisor (same session)"></textarea><div style="margin-top:6px"><button class="btn">Send reply</button></div></form></div>')
+    # advisors: two independent consults, each panel fills in the moment its verdict lands
+    html_adv, v = advisor_section(key)
+    out.append(f'<div class="card"><h2>Advisors</h2><div id="advisor" data-key="{E(key)}" data-v="{v}">{html_adv}</div></div>')
     # actions
     if is_open:
         modes = s.get("entry_modes") or ["market"]
@@ -488,6 +607,9 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(sym) or tf not in mt5feed.TF: return self._send("bad request", "text/plain", 400)
                 b = mt5feed.bars(sym, tf, n); k = mt5feed.tick(sym)
                 return self._send(json.dumps({"symbol": sym, "tf": tf, "bars": b, "tick": k, "ts": C.now_iso(), "live": b is not None}, separators=(",", ":")), "application/json")
+            if parts[0] == "api" and len(parts) == 3 and parts[1] == "advisor":
+                if not C.safe_key(parts[2]): return self._send("bad request", "text/plain", 400)
+                h, v = advisor_section(parts[2]); return self._send(json.dumps({"html": h, "v": v}), "application/json")
             if parts[0] == "backup.zip":
                 from live import backup
                 data, name, man = backup.build(CFG, 30); backup.record(CFG, man, name)
@@ -517,10 +639,16 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/task":
                 back, ok, msg = do_task(form); return self._redirect(back, msg, ok)
             if u.path == "/reply":
-                key = form.get("key", ""); text = (form.get("text") or "").strip()
-                if not C.safe_key(key) or not C.signal(CFG, key) or not text: return self._redirect("/", "bad reply", False)
-                C.atomic_write_json(os.path.join(CFG["root"], "advisor", "replies", f"{key}-{C.now_utc().strftime('%Y%m%dT%H%M%S')}.json"), {"signal_key": key, "text": text[:4000], "ts": C.now_iso()})
-                return self._redirect(f"/signal/{key}", "reply queued — the answer appears here in ~10-30 s", True)
+                key = form.get("key", ""); text = (form.get("text") or "").strip(); mid = form.get("model") or AR.models(CFG)[0]["id"]
+                m = AR.model_cfg(CFG, mid)
+                if not C.safe_key(key) or not C.signal(CFG, key) or not text or not m: return self._redirect("/", "bad reply", False)
+                C.atomic_write_json(os.path.join(CFG["root"], "advisor", "replies", f"{key}-{mid}-{C.now_utc().strftime('%Y%m%dT%H%M%S')}.json"), {"signal_key": key, "model": mid, "text": text[:4000], "ts": C.now_iso()})
+                return self._redirect(f"/signal/{key}", f"reply queued for {m.get('label', mid)} — the answer appears in its panel", True)
+            if u.path == "/advisor_retry":
+                key = form.get("key", ""); mid = form.get("model", ""); m = AR.model_cfg(CFG, mid)
+                if not C.safe_key(key) or not C.signal(CFG, key) or not m: return self._redirect("/", "bad request", False)
+                C.atomic_write_json(os.path.join(CFG["root"], "advisor", "retry", f"{key}.{mid}.json"), {"signal_key": key, "model": mid, "ts": C.now_iso()})
+                return self._redirect(f"/signal/{key}", f"{m.get('label', mid)} will run again — its panel shows progress", True)
             if u.path == "/brief":
                 from live import brief_runner
                 brief_runner.request(CFG, "web"); C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|brief_requested|by=web")
@@ -543,7 +671,7 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--config"); ap.add_argument("--bind"); ap.add_argument("--port", type=int); a = ap.parse_args()
     CFG = C.load_config(a.config); LOG = C.Log("web", CFG["logs_dir"])
     bind = a.bind or CFG["web"]["bind"]; port = a.port or CFG["web"]["port"]
-    for sub in ("web/charts", "advisor/replies", "tasks"): os.makedirs(os.path.join(CFG["root"], sub), exist_ok=True)
+    for sub in ("web/charts", "advisor/replies", "advisor/retry", "tasks"): os.makedirs(os.path.join(CFG["root"], sub), exist_ok=True)
     srv = ThreadingHTTPServer((bind, port), H); srv.daemon_threads = True
     LOG(f"serving http://{bind}:{port}  root={CFG['root']}")
     try: srv.serve_forever()
