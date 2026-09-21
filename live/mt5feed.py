@@ -86,6 +86,21 @@ def bars(symbol: str, tf: str = "h4", n: int = 500, max_age_s: float = 2.0) -> l
         _cache[key] = (time.time(), out)
         return out
 
+def bars_range(symbol: str, tf: str, t_from: int, t_to: int) -> list[list] | None:
+    """[[t,o,h,l,c,v]] between two SERVER-clock epochs (the bar clock), oldest first - the monthly export's blind outcomes."""
+    if FEED_URL:
+        r = _remote(f"/range?symbol={symbol}&tf={tf}&from={int(t_from)}&to={int(t_to)}", 20.0); return (r or {}).get("bars")
+    from datetime import datetime as _dt, timezone as _tz
+    with _lock:
+        if not _ensure(): return None
+        try:
+            _mt5.symbol_select(symbol, True)
+            r = _mt5.copy_rates_range(symbol, getattr(_mt5, TF[tf]), _dt.fromtimestamp(int(t_from), _tz.utc), _dt.fromtimestamp(int(t_to), _tz.utc))
+        except Exception:
+            _reset(); return None
+        if r is None: return None
+        return [[int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), int(x[5])] for x in r]
+
 def tick(symbol: str) -> dict | None:
     if FEED_URL:
         r = _remote(f"/tick?symbol={symbol}", 3.0); return (r or {}).get("tick")

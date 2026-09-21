@@ -25,6 +25,12 @@ class H(BaseHTTPRequestHandler):
                 return self._j({"bars": mt5feed.bars(sym, tf, n), "tick": mt5feed.tick(sym)})
             if u.path == "/tick": return self._j({"tick": mt5feed.tick(q.get("symbol", ""))})
             if u.path == "/positions": return self._j({"positions": mt5feed.positions()})
+            if u.path == "/range":
+                sym = q.get("symbol", ""); tf = q.get("tf", "m15")
+                try: a_, b_ = int(q.get("from", "0")), int(q.get("to", "0"))
+                except ValueError: return self._j({"error": "bad request"}, 400)
+                if not C.safe_key(sym) or tf not in mt5feed.TF or b_ <= a_ or b_ - a_ > 120 * 86400: return self._j({"error": "bad request"}, 400)
+                return self._j({"bars": mt5feed.bars_range(sym, tf, a_, b_)})
             if u.path == "/deals":
                 try: pid = int(q.get("position", "0"))
                 except ValueError: return self._j({"error": "bad request"}, 400)

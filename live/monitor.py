@@ -36,7 +36,7 @@ class Monitor:
             dc = int(s.get("delay_count") or 0); pdc = int(self.st.setdefault("delays", {}).get(key, 0) or 0)
             if stt == "open" and prev == "open" and dc > pdc:
                 dl = C.parse_iso(s.get("deadline")); left = max(0, int(s.get("max_age_bars") or 3) - int(s.get("implicit_streak") or 0))
-                take_note = " TAKE-class: letting it expire is a chargeable violation (§11.9) - approve, or skip only for event/correlation." if s.get("decision_class") == "TAKE" else ""
+                take_note = " TAKE-class: expiring is journaled but not charged (§11.9b, 2026-09-21); a skip is legal only for event (2) or correlation (5)." if s.get("decision_class") == "TAKE" else ""
                 self.send(f"REVISIT #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class', '')}]: re-presented at bar close (delay {dc}); {left} bar(s) of silence left before it expires, deadline {C.fmt_dt(dl)}.{take_note} "
                           f"Price {'bid ' + str((s.get('sizing') or {}).get('mkt_bid')) if (s.get('sizing') or {}).get('mkt_bid') else ''}entry {lv.get('entry')} SL {lv.get('sl')}.\n{self.base}/signal/{key}")
             self.st["delays"][key] = dc
@@ -47,8 +47,11 @@ class Monitor:
                           f"entry {lv.get('entry')} SL {lv.get('sl')} TP1 {lv.get('tp1')} ({rr.get('tp1')}R) · {(s.get('sizing') or {}).get('lots')} lots\n"
                           f"{(s.get('regime') or {}).get('pretty', '')} · deadline {C.fmt_dt(dl)} ({C.rel_time(dl)})\n{self.base}/signal/{key}")
             elif prev == "open" and stt in ("expired", "rejected", "auto_skipped"):
-                why = {"expired": "no decision before the deadline (skip code 8)", "rejected": "invalidated (price through SL while parked)", "auto_skipped": "election gate: " + str(s.get("auto_reason", ""))}[stt]
-                if stt == "expired" and s.get("decision_class") == "TAKE": why += " — TAKE-class: a CHARGEABLE VIOLATION under §11.9 (a TAKE may only end by approve, event/correlation skip, invalidation or supersession)"
+                ar = str(s.get("auto_reason", ""))
+                why = {"expired": "no decision before the deadline (skip code 8)", "rejected": "invalidated (price through SL while parked)",
+                       "auto_skipped": ("EA auto-reject (code 10): FTMO headroom - " + ar.replace("EA_AUTO_REJECT ", "") + " - not a trader decision" if ar.startswith("EA_AUTO_REJECT")
+                                        else "election gate: " + ar)}[stt]
+                if stt == "expired" and s.get("decision_class") == "TAKE": why += " — TAKE-class: journaled, NOT charged (§11.9b amended 2026-09-21); it goes in the monthly export with its blind outcome"
                 self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class', '')}]: {stt} — {why}")
             elif prev == "open" and stt == "skipped" and str(s.get("auto_reason", "")).startswith("superseded"):
                 self.send(f"signal #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']}: auto-skipped (code 9) - {s.get('auto_reason')}")
@@ -234,12 +237,46 @@ class Monitor:
         except OSError: pass
         return n
 
+    def opus_fallback(self):
+        """coach 2026-09-21 (pre-approved): flip Opus to step A, then B, when the trigger fires; never back automatically."""
+        from live import advisor_runner as AR
+        fb = self.cfg["advisor"].get("opus_fallback") or {}; mid = fb.get("model_id", "opus-high")
+        if not AR.model_cfg(self.cfg, mid): return
+        pol = AR.opus_policy(self.cfg); step = pol.get("step", "none")
+        if step == "B": return
+        since = C.parse_iso(pol.get("since")) if step == "A" else None           # step B needs strain AFTER step A began
+        now = C.now_utc(); week = now - timedelta(days=7)
+        rl_days = set(); per_day: dict = {}
+        try:
+            with open(os.path.join(self.cfg["root"], "advisor", "consults.log"), encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    x = ln.rstrip("\n").split("|")
+                    if len(x) < 7 or x[1] != mid or x[3] != "verdict": continue
+                    t = C.parse_iso(x[0])
+                    if not t or t < week or (since and t < since): continue
+                    if x[6] == "rate_limited": rl_days.add(x[0][:10])
+                    per_day.setdefault(x[0][:10], {})[x[2]] = (x[4] == "ok")         # last attempt per signal wins
+        except OSError: return
+        bad_days = {d: (sum(1 for ok in v.values() if not ok), len(v)) for d, v in per_day.items() if v and sum(1 for ok in v.values() if not ok) / len(v) > 0.20}
+        reason = None
+        if len(rl_days) >= 2: reason = f"rate-limit errors on {len(rl_days)} days in the last 7 ({', '.join(sorted(rl_days))})"
+        elif bad_days:
+            d, (nb, nt) = sorted(bad_days.items())[-1]; reason = f"Opus unavailable on {nb}/{nt} signals ({nb / nt:.0%}) on {d}"
+        if not reason: return
+        new_step = "A" if step == "none" else "B"
+        pol["history"] = (pol.get("history") or []) + [{"step": new_step, "since": C.now_iso(), "reason": reason}]
+        pol.update(step=new_step, since=C.now_iso(), reason=reason)
+        C.atomic_write_json(os.path.join(self.cfg["root"], "advisor", "opus_policy.json"), pol)
+        what = "no Opus on TAKE-class signals" if new_step == "A" else "Opus on the 8 tested symbols only (and still not on TAKE-class)"
+        self.log(f"opus fallback -> step {new_step}: {reason}")
+        self.send(f"OPUS FALLBACK step {new_step} is now active ({what}) - trigger: {reason}. Pre-approved by the coach; logged in advisor/opus_policy.json with the start time.")
+
     def eligibility(self):
         from live import eligibility as ELIG
         ELIG.refresh(self.cfg, 25, self.log)          # prices newly closed positions from the broker deals (cached)
 
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()

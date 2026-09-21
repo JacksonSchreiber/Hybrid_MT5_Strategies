@@ -230,3 +230,24 @@ An approval with `entry_mode: pending` places a limit/stop order at the original
 4. **cancelled** by the trader (web **Cancel order** button → task verb `cancel_pending`, target `signal_id`) → order deleted,
    `decision: cancelled`, `terminal: cancelled`, signal `status: cancelled`, Telegram "PENDING ORDER CANCELLED".
    Ack reasons: `ok`, `unknown_signal`, `not_pending`, `already_filled`, `order_not_found`, `order_failed:<retcode>`.
+
+## Rulings 2026-09-21 (§11.9(b) amended) — code 8, code 10, Opus fallback, monthly export
+
+- **Code 8 on a TAKE-class signal is journaled, NOT charged.** The `expired_code8` audit line carries
+  `class=TAKE … TAKE_EXPIRED_NOT_CHARGED` (it carried `CHARGEABLE_VIOLATION` before 2026-09-21). `max_age_bars` stays 3.
+  A TAKE-class skip for any reason other than 2 (event) or 5 (correlation) is still chargeable.
+- **Skip code 10 = EA auto-reject, FTMO headroom.** When `approve` fails the pre-order FTMO check (`ftmo_daily_headroom`,
+  and `ftmo_max_headroom` - same class), the ack is `rejected: ftmo_…`, and the EA closes the signal: signal status
+  `auto_skipped` with `auto_reason "EA_AUTO_REJECT ftmo_…"`, journal `skipped, 10, auto=1`, audit
+  `auto_skip|<task_id>|approve|sig:<id>|skipped|ftmo_daily_headroom|EA_AUTO_REJECT code=10 class=<TAKE|DISCRETION> …`.
+  Never a trader decision or violation, including on an approved TAKE-class signal. `auto=1` now marks every EA-made
+  skip: 2 election gate, 9 superseded, 10 FTMO auto-reject.
+- **Opus fallback** (pre-approved): `<root>\advisor\opus_policy.json` `{step: none|A|B, since, reason, history[]}` - written
+  by the monitor when rate-limit errors hit ≥ 2 days in 7, or Opus fails on > 20 % of a day's signals. A = no Opus on
+  TAKE-class signals; B = additionally Opus only on the 8 tested symbols (`advisor.opus_fallback.tested_symbols`). A
+  skipped consult is recorded in `verdicts/<key>.opus-high.json` as `status skipped, policy_skip true, note …` - the
+  unpaired set is explicit. Never reverts automatically (edit the file to reset).
+- **Monthly export** `/export/<YYYYMM>.zip` (`live/month_export.py`): the month's journals/actions/delays for every symbol,
+  `take_expiries_<YYYYMM>.csv` + `take_expiry_report_<YYYYMM>.md` (every code-8 TAKE with its mechanical blind outcome,
+  the TAKE-expiry rate, split by UTC hour of presentation), the month's verdict-log and consult-log lines,
+  `opus_policy.json`, `lineup_history.json`. Also written to `<root>\export\<YYYYMM>\`.

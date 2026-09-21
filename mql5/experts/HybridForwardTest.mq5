@@ -307,7 +307,7 @@ struct JournalRow
    long     account_id;         // AccountInfoInteger(ACCOUNT_LOGIN)
    double   risk_pct_gate;      // the detectors' viability gate risk (InpRiskPct, 1%)
    double   risk_mult_applied;  // per-symbol multiplier applied at sizing (C2)
-   int      auto_skip;          // 1 = automatic skip (G1 election gate) - only with skip_reason 2
+   int      auto_skip;          // 1 = automatic (EA-made) skip: 2 election gate, 9 superseded, 10 FTMO headroom auto-reject
    string   entry_mode;         // market | market_now | pending_frozen | skip | auto_skip | expired
    //--- §10.2 floor (only written when InpStopFloorATR>0, so default runs stay byte-identical)
    double   stop_pre_floor;     // |entry-SL| as the detector drew it
@@ -1827,7 +1827,7 @@ void LivePresent(int id,SignalCandidate &cand,double lots,bool is_replay,
    if(g_park.implicit_streak>=g_cfg_max_age_bars)
      {
       WriteSignalJson("expired","no-response: max_age reached");
-      AuditLine("expired_code8","","",StringFormat("sig:%d",id),"skipped","no_response",StringFormat("class=%s bars=%d%s",g_sig_class,g_park.implicit_streak,(g_sig_class=="TAKE"?" CHARGEABLE_VIOLATION":"")));   // §11.9: a TAKE left to expire is an illegal skip
+      AuditLine("expired_code8","","",StringFormat("sig:%d",id),"skipped","no_response",StringFormat("class=%s bars=%d%s",g_sig_class,g_park.implicit_streak,(g_sig_class=="TAKE"?" TAKE_EXPIRED_NOT_CHARGED":"")));   // §11.9(b) amended 2026-09-21: journaled, not charged
       Print("Signal #",id," ",cand.strategy," EXPIRED (code 8, no response in ",g_cfg_max_age_bars," bars).");
       CommitDecision(id,cand,caption,orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,false,8,0,false,false,"expired");
       LiveUnpark();
@@ -2302,7 +2302,21 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       double lots=SizeByRisk(cand.entry,cand.sl);
       if(lots<=0.0){ reason="lots_zero"; return "rejected"; }
       string fwhy="";
-      if(!FtmoHeadroomOK(lots,cand.entry,cand.sl,fwhy,task_id)){ reason=fwhy; return "rejected"; }
+      if(!FtmoHeadroomOK(lots,cand.entry,cand.sl,fwhy,task_id))
+        {
+         //--- §11.9(b) amended 2026-09-21: an FTMO headroom refusal is an EA AUTO-REJECT, never a trader decision or violation
+         //--- (incl. an approved TAKE-class signal). The signal closes as skipped code 10 with auto=1; audit tag EA_AUTO_REJECT.
+         string ftag=(StringFind(fwhy,"ftmo_max_headroom")==0 ? "ftmo_max_headroom" : "ftmo_daily_headroom");
+         WriteSignalJson("auto_skipped","EA_AUTO_REJECT "+fwhy);
+         AuditLine("auto_skip",task_id,"approve",StringFormat("sig:%d",sid),"skipped",ftag,StringFormat("EA_AUTO_REJECT code=10 class=%s %s",g_sig_class,fwhy));
+         Print("Signal #",sid," AUTO-REJECTED by the EA (code 10, ",ftag,"): ",fwhy);
+         g_live_auto=1;
+         CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
+                        false,10,(long)(now-g_park.published_at)*1000,false,false,"auto_skip");
+         g_live_auto=0;
+         LiveUnpark(); row_idx=RowIdxBySid(sid);
+         reason=fwhy; return "rejected";
+        }
       //--- commit exactly as the tester would after an Accept click
       CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
                      true,0,(long)(now-g_park.published_at)*1000,false,false,entry_mode);
@@ -2565,9 +2579,9 @@ void SelfTestTick()
       else          { st_sid_done=kk; }   // m==0: no task -> must expire code 8
      }
    //--- FTMO scenario cleanup: once the tightened approve is acked, restore the default rules and skip that signal
-   if(!st_ftmo_restored && g_live_parked && g_park.sid==9 && FileIsExist(LivePath("acks\\st-9-approve-ftmo.json"),FILE_COMMON))
+   if(!st_ftmo_restored && FileIsExist(LivePath("acks\\st-9-approve-ftmo.json"),FILE_COMMON))
      { st_ftmo_restored=true; AtomicWriteText(LivePath("config\\account.json"),"{\"schema_version\":1,\"initial_balance\":0,\"daily_loss_pct\":0.05,\"max_loss_pct\":0.10,\"buffer_pct\":0.005,\"day_reset_mode\":\"server_midnight\",\"day_reset_hour\":0,\"day_ref\":\"balance\",\"daily_base\":\"initial\"}");
-       LiveFtmoLoad(); SelfTestWriteTask("st-9-skip","signal_id",9,"skip","{\"reason_code\":6}"); }
+       LiveFtmoLoad(); }   // no skip task: the EA auto-rejected #9 itself (code 10, auto=1)
    //--- kill-switch cleanup: once the refused approve is acked, switch ON and approve for real (must be accepted)
    if(!st_kill_restored && g_live_parked && g_park.sid==5 && FileIsExist(LivePath("acks\\st-5-approve-killed.json"),FILE_COMMON))
      { st_kill_restored=true; AtomicWriteText(LivePath("config\\trading_enabled.json"),"{\"trading_enabled\":true}");

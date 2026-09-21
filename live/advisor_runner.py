@@ -241,6 +241,28 @@ def new_record(cfg: dict, sig: dict, m: dict) -> dict:
             "model": m["model"], "effort": m["effort"], "label": m.get("label", m["id"]), "timeout_s": m.get("timeout_s"),
             "session_id": session_id(key, m["id"]), "status": "idle", "consults": []}
 
+# ----------------------------------------------------------------------------- Opus fallback (coach 2026-09-21, pre-approved)
+# Trigger (evaluated by the monitor): rate-limit errors on >= 2 days in a week, or Opus unavailable on > 20 % of a day's
+# signals. Step A: no Opus on TAKE-class signals (TAKE-default unless a veto fires - a deep read adds least). Step B (only
+# if still straining): Opus on the 8 tested symbols only. The active step and its start live in <root>/advisor/opus_policy.json;
+# the coach grades the Sonnet/Opus comparison on the paired subset only.
+TESTED_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "US100", "US500", "USOIL", "XAUUSD", "BTCUSD"]
+
+def opus_policy(cfg: dict) -> dict:
+    return C.load_json(os.path.join(cfg["root"], "advisor", "opus_policy.json"), None) or {"step": "none", "since": None, "history": []}
+
+def policy_skip(cfg: dict, sig: dict, m: dict) -> str | None:
+    """why this model does NOT run on this signal under the active fallback step (None = it runs)."""
+    fb = cfg["advisor"].get("opus_fallback") or {}
+    if m["id"] != fb.get("model_id", "opus-high"): return None
+    pol = opus_policy(cfg); step = pol.get("step", "none")
+    if step in ("A", "B") and (sig.get("decision_class") or "") == "TAKE":
+        return f"Opus fallback step {step} (since {pol.get('since')}): TAKE-class signals get Sonnet only"
+    tested = fb.get("tested_symbols") or TESTED_SYMBOLS
+    if step == "B" and (sig.get("symbol") or "").split(".")[0].upper() not in tested:
+        return f"Opus fallback step B (since {pol.get('since')}): Opus runs on the {len(tested)} tested symbols only"
+    return None
+
 def header(m: dict) -> str:
     return (f"[ADVISOR: {m['id']} · {m.get('label', m['id'])}] You are the {m.get('label', m['id'])} advisor of the two that run on every "
             f"signal (CLAUDE.live.md §Two advisors). Your notes file is `{notes_file(m['id'])}` - read it at session start in place of "
@@ -287,6 +309,7 @@ class Runner:
 
     def needs_consult(self, key: str, mid: str) -> bool:
         rec = load_record(self.cfg, key, mid)
+        if rec and rec.get("policy_skip"): return False
         if not rec or not rec.get("consults"): return True
         cs = rec["consults"]
         if any(c.get("kind") == "reply" for c in cs): return False
@@ -313,6 +336,10 @@ class Runner:
     def consult(self, sig: dict, m: dict, force: bool = False) -> None:
         key = sig["signal_key"]; mid = m["id"]
         rec = load_record(self.cfg, key, mid) or new_record(self.cfg, sig, m)
+        why = None if force else policy_skip(self.cfg, sig, m)
+        if why:                                              # recorded, so the panel says so and the unpaired set is explicit
+            rec.update(status="skipped", note=why, policy_skip=True); rec.pop("queued_at", None); save_record(self.cfg, rec)
+            self.log(f"{key}/{mid}: not run - {why}"); return
         rec.update(status="queued", queued_at=C.now_iso(), running_kind="verdict"); save_record(self.cfg, rec)
         with self.sem[mid]:                                   # per-model cap: waiting here never blocks the other model
             cur = C.signal(self.cfg, key)

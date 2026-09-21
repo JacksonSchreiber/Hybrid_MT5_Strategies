@@ -288,3 +288,10 @@ assumed to live in the execution path rather than the UI. Both now specified cor
   trader pick the better of concurrent setups), reported at n≥10, never graded.
 - TEST rows and the malformed-ack test from the first live night were purged from the shadow journals on 2026-09-16
   before real shadow records count (audit logs keep the `test_signal` lines, append-only).
+
+**§11.9(b) AMENDED 2026-09-21 (trader ruling):** an unanswered TAKE-class signal that expires
+(code 8) is journaled and **not charged**; there is no offline window. The monthly export
+reports every expired TAKE-class signal with its blind outcome, the TAKE-expiry rate, and its
+hour-of-day split. A TAKE-class SKIP with a reason other than event (2) or correlation (5)
+remains chargeable. A `ftmo_daily_headroom` refusal is an EA auto-reject — journaled, tagged,
+never a trader violation, including on an approved TAKE-class signal.

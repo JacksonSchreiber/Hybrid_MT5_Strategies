@@ -44,7 +44,7 @@ existing file (refuses without the flag, err 5020), nested `FolderCreate` works.
 | illegal batch at start | bad schema, unknown verb, unknown signal, unknown position, malformed JSON, stale `issued_at` | each `rejected` with its named reason (`stale_task` ⇒ `expired`), no execution |
 | signal ordinal ≡ 1 (mod 4) | `approve market` | accepted → position; `duplicate` audit when the same `task_id` is re-issued (one ack only) |
 | ordinal 5 | kill switch OFF then `approve` | `rejected trading_disabled`, no `executed`; switch ON → same signal accepted |
-| ordinal 9 | `daily_loss_pct` 0.1 % then `approve` | `rejected ftmo_daily_headroom` + `ftmo_reject` audit; rules restored → `skip 6` accepted |
+| ordinal 9 | `daily_loss_pct` 0.1 % then `approve` | `rejected ftmo_daily_headroom` + `ftmo_reject` audit; the EA closes the signal itself: journal `skipped,10,auto=1`, audit `EA_AUTO_REJECT code=10` (since 2026-09-21); rules restored |
 | ordinal 13 | `risk_mult.json` 0.5 then `approve` | journal `risk_mult_applied=0.500`, risk-to-stop halved |
 | ordinal ≡ 2 | `skip 3` | accepted, journal `skipped,3` |
 | ordinal ≡ 3 | `delay` then `approve pending` | delay row `implicit=0`, pending order at the frozen entry |
@@ -185,6 +185,18 @@ load), delete its entry from `advisor.models` and redeploy - nothing else depend
 
 **Open exposure** (`live/exposure.py`, live card only) and **live eligibility** (`live/eligibility.py`, dashboard; the monitor
 prices each closed position once from the broker's deals into `web\costed_r.json`).
+
+## Rulings on the expansion flags (coach 2026-09-21)
+
+- **Code 8 on TAKE: journaled, not charged** (§11.9(b) amended). Telegram and the REVISIT ping say so; the monthly export
+  (dashboard → "Monthly export": last month / this month so far) lists every expired TAKE with its blind outcome
+  (mechanical doctrine-v2 walk on M15 from the presentation bar, costs off), the TAKE-expiry rate and its hour split.
+- **FTMO headroom refusal = EA auto-reject, code 10, auto=1** (see the schema doc). The signal page shows the room first:
+  "room for N more at 0.5 % · M at 1.0 %" from the EA's own check, with a warning when this signal would not fit.
+- **Opus fallback** flips itself (monitor → `advisor/opus_policy.json`, Telegram, dashboard line). Reset: set `"step": "none"`
+  in that file. Step A/B skips are recorded per signal, so the coach's paired subset is exact.
+- Swing table: live since 2026-09-17; tester card from the 2026-09-21 build (EA sidecar = Python mirror on 16/16 signals).
+  No swept column - the EA tracks no per-swing pool status.
 
 ## Standing items (checked when the named condition occurs)
 

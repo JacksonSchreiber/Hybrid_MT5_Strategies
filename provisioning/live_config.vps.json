@@ -36,7 +36,20 @@
         "max_parallel": 2,
         "label": "Opus · high effort · deep"
       }
-    ]
+    ],
+    "opus_fallback": {
+      "model_id": "opus-high",
+      "tested_symbols": [
+        "EURUSD",
+        "GBPUSD",
+        "USDJPY",
+        "US100",
+        "US500",
+        "USOIL",
+        "XAUUSD",
+        "BTCUSD"
+      ]
+    }
   },
   "monitor": {
     "interval_s": 15,

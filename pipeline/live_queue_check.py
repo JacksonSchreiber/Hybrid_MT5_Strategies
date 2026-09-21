@@ -143,7 +143,7 @@ def main():
         info.append(f"journal {os.path.basename(p)}: {len(rows)} rows, skip8={f8}, skip2(auto)={f2}")
     info.append(f"journal totals: {len(all_rows)} rows, skip8={skip8}, skip2(auto)={skip2auto}")
     if st.get("expired",0) and skip8==0: fail("signals expired but no skip_reason=8 journal row")
-    if a.expect_live_cols and st.get("auto_skipped",0) and skip2auto==0: fail("signals auto_skipped but no journal row with skip_reason=2 & auto=1")
+    if a.expect_live_cols and st.get("auto_skipped",0) and not any(r.get("auto","0")=="1" and r.get("skip_reason") in ("2","10") for r in all_rows): fail("signals auto_skipped but no journal row with skip_reason 2|10 & auto=1")
     # --- delays (torn last line tolerated) ---
     for p in glob.glob(os.path.join(R,"journal",f"{S}_*.delays.csv")):
         lines=open(p,encoding="ascii",errors="replace").read().split("\n")
@@ -181,8 +181,12 @@ def main():
         elif fk["result"]!="rejected" or not fk["reason"].startswith("ftmo_daily_headroom"): fail(f"selftest: st-9-approve-ftmo -> {fk['result']}/{fk['reason']} (expected rejected/ftmo_daily_headroom)")
         else:
             if not any("|ftmo_reject|" in l for l in open(ap_,encoding="ascii",errors="replace")): fail("selftest: FTMO rejection has no ftmo_reject audit line")
-            sk=acks.get("st-9-skip")
-            if not sk or sk["result"]!="accepted": fail("selftest: st-9-skip after the FTMO rejection was not accepted (rules not restored / signal not still open)")
+            # §11.9(b) amended 2026-09-21: the refusal is an EA AUTO-REJECT - signal 9 closes as skipped code 10, auto=1, tagged
+            if not any("|auto_skip|" in l and "EA_AUTO_REJECT code=10" in l and "|sig:9|" in l for l in open(ap_,encoding="ascii",errors="replace")):
+                fail("selftest: FTMO refusal has no EA_AUTO_REJECT auto_skip audit line for sig 9")
+            r9=[r for r in all_rows if r.get("signal_id")=="9"]
+            if not r9 or r9[-1].get("decision")!="skipped" or r9[-1].get("skip_reason")!="10" or r9[-1].get("auto","0")!="1":
+                fail(f"selftest: signal 9 after the FTMO refusal is not journaled skipped/10/auto=1 ({[(r.get('decision'), r.get('skip_reason'), r.get('auto')) for r in r9]})")
         gates={"sl_be":0,"ratchet_tp1":0,"close50":0,"close":0}
         for x in acks.values():
             if x["verb"] in gates: gates[x["verb"]]+=1

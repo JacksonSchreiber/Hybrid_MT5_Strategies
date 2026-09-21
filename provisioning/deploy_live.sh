@@ -35,7 +35,7 @@ if [[ "$MODE" == "--ea" ]]; then
 fi
 [[ "$MODE" == "--config" ]] && exit 0
 $SSH "New-Item -ItemType Directory -Force -Path $APP/live/static, $ADV/advisor/.claude, $ADV/advisor/library, C:/ProgramData/hybrid/logs | Out-Null; 'dirs ok'" | tr -d '\r'
-$SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$REPO"/live/calendar_refresh.py "$REPO"/live/backup.py "$REPO"/live/feedd.py "$REPO"/live/brief_runner.py "$REPO"/live/exposure.py "$REPO"/live/eligibility.py "$HOST:$APP/live/"
+$SCP "$REPO"/live/__init__.py "$REPO"/live/common.py "$REPO"/live/charts.py "$REPO"/live/webapp.py "$REPO"/live/monitor.py "$REPO"/live/advisor_runner.py "$REPO"/live/mt5feed.py "$REPO"/live/overlays.py "$REPO"/live/calendar_refresh.py "$REPO"/live/backup.py "$REPO"/live/feedd.py "$REPO"/live/brief_runner.py "$REPO"/live/exposure.py "$REPO"/live/eligibility.py "$REPO"/live/month_export.py "$HOST:$APP/live/"
 $SCP "$REPO"/live/static/lw.js "$REPO"/live/static/hybrid_chart.js "$HOST:$APP/live/static/"
 $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
 $SCP "$REPO"/config/symbol_rules.json "$HOST:$APP/symbol_rules.json"      # per-symbol doctrine flags (class + suspended session rules) for the advisor card

@@ -84,6 +84,23 @@ def ftmo_block(hb: dict) -> str:
             f'<div class="k">equity {eq:,.2f} · aggregate risk-to-stop {hb.get("aggregate_risk_to_stop", 0):,.0f} · buffer {f.get("buffer", 0):,.0f}</div>')
 
 
+
+def ftmo_room_block(s: dict) -> str:
+    """'room for N more at 0.5% / M at 1.0%' - the EA's own pre-order check (equity - aggregate risk-to-stop - this trade must
+    stay above the daily AND max floors + buffer), from the freshest heartbeat. Approving past it = EA auto-reject, code 10."""
+    hbs = [h for h in (C.heartbeat(CFG, x) for x in C.symbols(CFG)) if h and (h.get("ftmo") or {}).get("initial_balance")]
+    if not hbs: return '<div class="card k">FTMO room: unknown (no heartbeat with the account limits yet)</div>'
+    hb = max(hbs, key=lambda h: C.parse_iso(h.get("ts")) or C.now_utc()); f = hb["ftmo"]; eq = float(hb.get("equity") or 0)
+    spare = min(float(f.get("headroom_daily", 0)), float(f.get("headroom_max", 0))) - float(f.get("buffer", 0))
+    n05 = max(0, int(spare // (0.005 * eq))) if eq > 0 else 0; n10 = max(0, int(spare // (0.01 * eq))) if eq > 0 else 0
+    this = float((s.get("sizing") or {}).get("risk_pct_effective") or 0)
+    fits = eq > 0 and spare >= this * eq
+    cls = "ok" if (fits and n05 >= 2) else ("warn" if fits else "bad")
+    note = ("" if fits else " — <b>this signal does NOT fit: approving it would be auto-rejected by the EA (code 10)</b>")
+    return (f'<div class="card"><div class="k">FTMO room before this approval (aggregate risk-to-stop {float(hb.get("aggregate_risk_to_stop") or 0):,.0f}, '
+            f'spare {spare:,.0f} above the tighter floor + buffer)</div><div class="big {cls}">room for {n05} more at 0.5% · {n10} at 1.0%</div>'
+            f'<div class="k">this signal sizes at {this * 100:.2f}%{note}</div></div>')
+
 # ----------------------------------------------------------------------------- advisors (coach 2026-09-21: two per signal)
 def _fam(mid: str) -> str: return "opus" if "opus" in mid else ("sonnet" if "sonnet" in mid else "other")
 
@@ -101,7 +118,11 @@ def advisor_section(key: str) -> tuple[str, str]:
     recs = {m["id"]: C.load_json(os.path.join(CFG["root"], "advisor", "verdicts", f"{key}.{m['id']}.json")) for m in ms}
     words = {mid: _last_word(r) for mid, r in recs.items()}
     have = [w for w in words.values() if w]
-    if len(ms) > 1 and len(have) == len(ms):
+    unpaired = [m for m in ms if (recs[m["id"]] or {}).get("policy_skip")]
+    if unpaired and len(have) == len(ms) - len(unpaired) and have:
+        agree = True
+        badge = f'<span class="badge wait">{E(have[0])} · {E(ms[0]["label"].split(" ·")[0])} only - {E((recs[unpaired[0]["id"]] or {}).get("note", "fallback"))}</span>'
+    elif len(ms) > 1 and len(have) == len(ms):
         agree = len(set(have)) == 1
         badge = (f'<span class="badge agree">AGREE · {E(have[0])}</span>' if agree else
                  '<span class="badge disagree">DISAGREE · ' + " vs ".join(E(f"{words[m['id']]} ({m['id'].split('-')[0].title()})") for m in ms) + '</span>')
@@ -168,7 +189,10 @@ def advisor_load_card() -> str:
         warn = f' <span class="pill bad">{c["rl"]} rate-limited</span>' if c["rl"] else ""
         cells.append(f'<div><span class="advtag fam-{_fam(mid)}">{E(m.get("label", mid))}</span><div class="big v">{c["n"]}</div>'
                      f'<div class="k">{c["ok"]} ok · {c["err"]} failed{f" ({c['to']} timeout)" if c["to"] else ""} · avg {(c["sec"] / c["n"]) if c["n"] else 0:.0f}s</div>{warn}</div>')
-    return f'<div class="card"><div class="k">Advisor consults today (UTC {day})</div><div class="grid2">{"".join(cells)}</div></div>'
+    pol = AR.opus_policy(CFG); st = pol.get("step", "none")
+    pl = ('<div class="k">Opus fallback: <b class="ok">none</b> - Opus runs on every signal (step A / B flip automatically on the coach\'s trigger)</div>' if st == "none" else
+          f'<div class="k">Opus fallback: <b class="warn">step {E(st)}</b> since {E(str(pol.get("since")))} - {E(str(pol.get("reason", "")))}</div>')
+    return f'<div class="card"><div class="k">Advisor consults today (UTC {day})</div><div class="grid2">{"".join(cells)}</div>{pl}</div>'
 
 def shadow_line() -> str:
     h = C.load_json(os.path.join(CFG["root"], "config", "lineup_history.json"), None)
@@ -214,7 +238,10 @@ def dashboard(q: dict) -> str:
     else: bcls = "ok" if ds < 15 else ("warn" if ds < 25 else "bad"); btxt = f"{ds:.0f} day{'s' if ds >= 1.5 else ''} since last backup"
     out.append(f'<div class="card"><div class="row"><div><div class="k">Backup</div><div class="big {bcls}">{E(btxt)}</div><div class="k">{E(lb["name"]) if lb else "zip of the last 30 days: journals, queue, state, verdicts, calendar, MT5 presets"}</div></div>'
                f'<a class="btn" href="/backup.zip" style="margin-left:auto" onclick="setTimeout(function(){{location.reload()}},4000)">Download backup (30 d)</a>'
-               f'<form method="post" action="/telegram_test" class="inline"><button class="btn">Telegram test</button></form></div></div>')
+               f'<form method="post" action="/telegram_test" class="inline"><button class="btn">Telegram test</button></form></div>'
+               f'<div class="row" style="margin-top:8px"><span class="k">Monthly export for the coach (journals + expired-TAKE blind outcomes):</span>'
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{(C.now_utc().replace(day=1) - timedelta(days=1)).strftime("%Y%m")}.zip">last month</a>'
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{C.now_utc().strftime("%Y%m")}.zip">this month so far</a></div></div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
     out.append("<h2>Pending signals</h2>")
@@ -292,6 +319,9 @@ def signal_page(key: str, q: dict) -> str:
     # advisors: two independent consults, each panel fills in the moment its verdict lands
     html_adv, v = advisor_section(key)
     out.append(f'<div class="card"><h2>Advisors</h2><div id="advisor" data-key="{E(key)}" data-v="{v}">{html_adv}</div></div>')
+    # FTMO room (coach 2026-09-21): what the account can still take before an approve is auto-rejected (code 10)
+    if is_open:
+        out.append(ftmo_room_block(s))
     # actions
     if is_open:
         modes = s.get("entry_modes") or ["market"]
@@ -458,7 +488,7 @@ def journal_page(q: dict) -> str:
     out = [f'<h1>Journal</h1><form method="get" class="row"><select name="decision" style="width:auto">{opts}</select><input name="symbol" value="{E(sym or "")}" placeholder="symbol" style="width:160px"><button class="btn">Filter</button></form><div class="card"><table><tr><th>#</th><th>time</th><th>signal</th><th>decision</th><th>R</th><th>exit</th></tr>']
     for r in rows:
         key = f'{r.get("symbol")}-{r.get("signal_id")}'
-        rtxt = r.get("r_multiple") or ""; skip = f' ({r.get("skip_reason")}{" auto" if r.get("auto") == "1" else ""}{" superseded" if r.get("skip_reason") == "9" else ""})' if r.get("decision") == "skipped" else ""
+        rtxt = r.get("r_multiple") or ""; skip = f' ({r.get("skip_reason")}{" auto" if r.get("auto") == "1" else ""}{" superseded" if r.get("skip_reason") == "9" else (" FTMO auto-reject" if r.get("skip_reason") == "10" else "")})' if r.get("decision") == "skipped" else ""
         out.append(f'<tr><td><a href="/signal/{E(key)}">{E(r.get("signal_id", ""))}</a></td><td class="k">{E((r.get("signal_time") or "")[:16])}</td><td>{E(r.get("strategy", ""))} {E(r.get("direction", ""))} <span class="k">{E(r.get("decision_class", ""))}</span></td>'
                    f'<td>{E(r.get("decision", ""))}{E(skip)}</td><td class="v {"ok" if rtxt and float(rtxt) >= 0 else "bad" if rtxt else ""}">{E(rtxt)}</td><td class="k">{E((r.get("exit_time") or "")[:16])}</td></tr>')
     out.append("</table></div>")
@@ -616,6 +646,12 @@ class H(BaseHTTPRequestHandler):
             if parts[0] == "api" and len(parts) == 3 and parts[1] == "advisor":
                 if not C.safe_key(parts[2]): return self._send("bad request", "text/plain", 400)
                 h, v = advisor_section(parts[2]); return self._send(json.dumps({"html": h, "v": v}), "application/json")
+            if parts[0] == "export" and len(parts) == 2 and re.fullmatch(r"\d{6}\.zip", parts[1]):
+                from live import month_export
+                data, name = month_export.build_zip(CFG, parts[1][:6], LOG)
+                C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|export|{name}|{len(data)}B|by=web")
+                self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
             if parts[0] == "backup.zip":
                 from live import backup
                 data, name, man = backup.build(CFG, 30); backup.record(CFG, man, name)

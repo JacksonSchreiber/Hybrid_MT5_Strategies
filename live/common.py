@@ -15,7 +15,7 @@ VERBS_POSITION = ("close", "close50", "sl_be", "ratchet_tp1")
 VERBS_ADMIN = ("test_signal",)          # trader-issued synthetic signal (live only)
 VERBS_PENDING = ("cancel_pending",)     # trader cancels a resting pending order (target: signal_id)
 SKIP_REASONS = {1: "Counter-trend", 2: "News / event", 3: "Ugly structure", 4: "Target blocked", 5: "Correlated", 6: "Gut / other"}
-SKIP_REASON_CODES = {8: "no response (expired)", 7: "legacy", 9: "superseded (another signal approved)"}
+SKIP_REASON_CODES = {8: "no response (expired; a TAKE is not charged since 2026-09-21)", 7: "legacy", 9: "superseded (another signal approved)", 10: "EA auto-reject: FTMO headroom"}
 EVENT_LABEL = {"W": "NO-HOLD (election)", "V": "NO ENTRY <6h (big release)", "C": "caution", "H": "holiday/thin"}
 
 # ----------------------------------------------------------------------------- config
