@@ -443,6 +443,7 @@ long     g_account_login    = 0;
 bool     g_live_inited      = false;
 bool     g_live_parked      = false;   // a published signal is awaiting a task (Slice 2)
 bool     g_rm_warned        = false;
+int      g_bars_seen         = 0;       // new H4 bars this instance has processed (heartbeat: proves the detectors ran)
 int      g_live_auto         = 0;       // 1 while committing an automatic skip (G1) -> journal auto=1 (Slice 5)
 //--- a PUBLISHED signal awaiting a task (G2). Lives across ticks alongside g_delayed (the cand).
 struct LivePark
@@ -766,6 +767,7 @@ void WriteHeartbeat(string status="running")
    j.KBool("terminal_trade_allowed",(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED));
    j.KBool("mql_trade_allowed",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
    j.KBool("weekend_flat",LiveWeekendFlatOn());
+   j.KTime("last_bar_server",g_last_bar); j.KInt("bars_seen",g_bars_seen);   // the last bar the new-bar gate ran detectors on (broker clock)
    if(LiveWeekendFlatOn()){ int c=FridayCutoffTOD(); j.KStr("weekend_cutoff",StringFormat("Fri %02d:%02d broker",c/3600,(c%3600)/60)); j.KBool("weekend_window_now",LiveWeekendWindow(TimeCurrent())); }
    j.KNum("aggregate_risk_to_stop",agg,2);
    j.KNum("risk_mult_applied",g_risk_mult,3);
@@ -1193,6 +1195,7 @@ void OnTick()
 
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
+   LiveDetectExternalEdits();  // live only: SL/TP moved in the trader's own terminal -> EXTERNAL_* action + audit
    TrackAllMfePath();          // Item 2: per-tick MFE + path (journal-only)
    //--- age out unfilled pending orders (edited-entry setups) every tick
    ExpireStalePendings();
@@ -1206,7 +1209,7 @@ void OnTick()
    //--- new-bar gate: detection only when a fresh H4 bar has closed
    datetime bar0=iTime(_Symbol,g_tf,0);
    if(bar0==g_last_bar) return;
-   g_last_bar=bar0;
+   g_last_bar=bar0; g_bars_seen++;
 
    //--- INVERSE time exit: auto-close at 12 H4 bars unless the trader hit EXTEND.
    if(g_inv_open && !g_inv_extended)
@@ -1928,7 +1931,11 @@ void LiveWritePositions()
       j.KNum("risk_pct_effective",g_rows[i].risk_pct_gate*g_rows[i].risk_mult_applied,5);   // sized-at risk (fraction of equity)
       j.KNum("open_r",oR,3); j.KNum("banked_r",g_rows[i].r_multiple,3); j.KNum("closenow_r",oR+g_rows[i].r_multiple,3);
       j.KBool("banked",g_rows[i].banked); j.KBool("tp1_done",g_rows[i].tp1_done); j.KBool("ratcheted",g_rows[i].ratcheted);
-      j.KBool("be_placeable",BEPlaceable(i)); j.KBool("ratchet_placeable",RatchetPlaceable(i));
+      bool beok=BEPlaceable(i); PositionSelectByTicket((ulong)g_rows[i].posid);
+      double csl0=PositionGetDouble(POSITION_SL), bep0=BEPrice(i);
+      if(csl0>0.0 && (g_rows[i].direction>0 ? csl0>=bep0 : csl0<=bep0)) beok=false;   // BE would LOOSEN the live stop: not offered
+      j.KBool("be_placeable",beok); j.KBool("ratchet_placeable",RatchetPlaceable(i));
+      { int xk=ExIdx(g_rows[i].posid); j.KInt("external_edits",(xk>=0?g_ex_n[xk]:0)); j.KStr("last_external_edit",(xk>=0?g_ex_last[xk]:"")); }
       j.KInt("opened_at",(long)PositionGetInteger(POSITION_TIME)); j.KInt("bars_open",(int)((TimeCurrent()-(datetime)PositionGetInteger(POSITION_TIME))/PeriodSeconds(g_tf)));
       j.KTime("ts",LiveNow());
       j.EndObj();
@@ -2047,7 +2054,7 @@ void AdoptOrphans()
         }
       int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
       JournalRow r;
-      g_sig_seq++; r.id=g_sig_seq; r.time=(datetime)PositionGetInteger(POSITION_TIME); r.symbol=_Symbol; r.strategy="ADOPTED";
+      g_sig_seq++; LiveSaveSeq(); r.id=g_sig_seq; r.time=(datetime)PositionGetInteger(POSITION_TIME); r.symbol=_Symbol; r.strategy="ADOPTED";
       r.direction=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY ? 1 : -1);
       r.entry=PositionGetDouble(POSITION_PRICE_OPEN); r.sl=PositionGetDouble(POSITION_SL); r.tp=PositionGetDouble(POSITION_TP);
       r.orig_entry=r.entry; r.orig_sl=r.sl; r.orig_tp=r.tp; r.orig_tp1=0; r.orig_tp2=0; r.tp1=0; r.tp2=0; r.partial_frac=0.0;
@@ -2064,6 +2071,29 @@ void AdoptOrphans()
       LiveAlert(StringFormat("adopt_orphan:%I64d",pid));
       Print("LIVE: ADOPTED orphan position ",pid," as signal #",r.id," (un-banked, no BE, no ratchet) - coach alerted.");
      }
+  }
+//--- signal-id counter (2026-09-21 defect): seq.json was saved only with journal rows, so a signal that was PUBLISHED and
+//--- PARKED (no journal row yet) was forgotten by a restart; the next detection re-used its id and overwrote the parked
+//--- signal (EURUSD #3). The counter is now saved when an id is issued, and a restore never goes below any id on disk.
+void LiveSaveSeq()
+  { AtomicWriteText(LivePath("state\\"+_Symbol+"\\seq.json"),StringFormat("{\"schema_version\":%d,\"sig_seq\":%d}",LIVE_SCHEMA_VERSION,g_sig_seq)); }
+void LiveSeqFloor()
+  {
+   int mx=g_sig_seq, from_rows=0, from_parks=0, from_files=0;
+   for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].id>from_rows) from_rows=g_rows[i].id;
+   for(int si=0;si<MAX_PARKS;si++) if(g_slots[si].active && g_slots[si].park.sid>from_parks) from_parks=g_slots[si].park.sid;
+   string fname; long hf=FileFindFirst(LivePath("signals\\"+_Symbol+"-*.json"),fname,FILE_COMMON);
+   if(hf!=INVALID_HANDLE)
+     {
+      do { int d=StringFind(fname,"-",StringLen(_Symbol)); int e=StringFind(fname,".json");
+           if(d>0 && e>d){ int n=(int)StringToInteger(StringSubstr(fname,d+1,e-d-1)); if(n>from_files) from_files=n; } } while(FileFindNext(hf,fname));
+      FileFindClose(hf);
+     }
+   int hi=(int)MathMax(MathMax(from_rows,from_parks),from_files);
+   if(hi>mx)
+     { AuditLine("seq_floor","","","","raised","stale_seq",StringFormat("seq %d -> %d (rows %d, parks %d, signal files %d)",g_sig_seq,hi,from_rows,from_parks,from_files));
+       g_sig_seq=hi; }
+   LiveSaveSeq();
   }
 //--- OnInit restore: seq -> rows/actions -> parked -> reconcile -> adopt. Runs BEFORE the first journal write.
 void LiveRestoreState()
@@ -2111,6 +2141,7 @@ void LiveRestoreState()
    LiveRecomputeParked();
    LiveReconcile();
    AdoptOrphans();
+   LiveSeqFloor();
    AuditLine("restore","","","","ok","",StringFormat("rows=%d actions=%d parked=%d sig_seq=%d",nrows,ArraySize(g_actions),(int)parked,g_sig_seq));
    if(nrows>0 || parked) Print("LIVE: restored ",nrows," row(s), ",ArraySize(g_actions)," action(s), parked=",parked," sig_seq=",g_sig_seq);
   }
@@ -2651,7 +2682,7 @@ void HandleSignal(SignalCandidate &cand)
    int id;
    bool is_replay=g_delay_replaying;                                   // this call is a delay re-present
    if(g_delay_replaying){ id=g_delayed_id; g_delay_replaying=false; }  // re-present: keep id
-   else                 { g_sig_seq++; id=g_sig_seq; }
+   else                 { g_sig_seq++; id=g_sig_seq; if(InpLiveMode) LiveSaveSeq(); }   // persist NOW: a parked signal has no journal row yet (2026-09-21 id-collision fix)
 
    if(!is_replay) g_delay_count=0;   // fresh signal: reset the per-signal delay clock
    if(!is_replay) ComputeRegime(cand.direction,g_sig_regime,g_sig_with_trend);   // FREEZE at signal time
@@ -3096,6 +3127,8 @@ void ManageOpenPositions()
 
       double lots=PositionGetDouble(POSITION_VOLUME);       // live remaining volume
       double be  =NormPrice(BEPrice(i));                    // padded BE (same basis as manual)
+      double csl =PositionGetDouble(POSITION_SL);           // trader may have tightened it by hand in MT5 (2026-09-21):
+      if(csl>0.0 && (dir>0 ? csl>be : csl<be)) be=csl;      // the bank keeps the TIGHTER stop - never loosens
       double rtp =PositionGetDouble(POSITION_TP);           // preserve the runner's TP
       double px  =(dir>0 ? bid : ask);
       double orr =OpenR(i);                                 // R at trigger (full vol, ~+1.0R)
@@ -3453,9 +3486,52 @@ string InvPanelStateText()
   }
 
 //--- append one manual-intervention row + rewrite the actions CSV.
+//--- SL/TP edits made OUTSIDE the EA (the trader's own MT5 terminal, trader 2026-09-21). The EA's own moves arm a short
+//--- hold (the modify is async), during which the map silently follows the position; after it, any change is external:
+//--- journaled as EXTERNAL_SL / EXTERNAL_TP actions (the coach grades discretionary stop moves from the actions ledger),
+//--- audited, and published on the position file for the web app + Telegram.
+long     g_ex_pos[];  double g_ex_sl[], g_ex_tp[];  datetime g_ex_hold[];  int g_ex_n[];  string g_ex_last[];
+int ExIdx(long posid){ for(int k=0;k<ArraySize(g_ex_pos);k++) if(g_ex_pos[k]==posid) return k; return -1; }
+void ExHold(long posid){ int k=ExIdx(posid); if(k>=0) g_ex_hold[k]=TimeCurrent()+30; }
+void LiveDetectExternalEdits()
+  {
+   if(!InpLiveMode || (bool)MQLInfoInteger(MQL_TESTER)) return;
+   double tol=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE)*0.5; if(tol<=0.0) tol=_Point*0.5;
+   for(int i=0;i<ArraySize(g_rows);i++)
+     {
+      if(g_rows[i].posid<=0 || g_rows[i].closed || g_rows[i].symbol!=_Symbol) continue;
+      if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;
+      double sl=PositionGetDouble(POSITION_SL), tp=PositionGetDouble(POSITION_TP), vol=PositionGetDouble(POSITION_VOLUME);
+      int k=ExIdx(g_rows[i].posid);
+      if(k<0)
+        { k=ArraySize(g_ex_pos); ArrayResize(g_ex_pos,k+1); ArrayResize(g_ex_sl,k+1); ArrayResize(g_ex_tp,k+1); ArrayResize(g_ex_hold,k+1); ArrayResize(g_ex_n,k+1); ArrayResize(g_ex_last,k+1);
+          g_ex_pos[k]=g_rows[i].posid; g_ex_sl[k]=sl; g_ex_tp[k]=tp; g_ex_hold[k]=0; g_ex_n[k]=0; g_ex_last[k]=""; continue; }
+      if(TimeCurrent()<g_ex_hold[k]){ g_ex_sl[k]=sl; g_ex_tp[k]=tp; continue; }   // the EA's own modify is still landing
+      double px=(g_rows[i].direction>0 ? SymbolInfoDouble(_Symbol,SYMBOL_BID) : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+      if(MathAbs(sl-g_ex_sl[k])>tol)
+        {
+         string d=StringFormat("sl %s -> %s openR=%.2f",DoubleToString(g_ex_sl[k],_Digits),DoubleToString(sl,_Digits),OpenR(i));
+         g_ex_n[k]++; g_ex_last[k]=IsoTime(LiveNow())+" SL "+DoubleToString(g_ex_sl[k],_Digits)+" -> "+DoubleToString(sl,_Digits);
+         g_ex_sl[k]=sl; g_ex_tp[k]=tp;
+         LogManualAction(i,"EXTERNAL_SL",px,vol,vol,sl,OpenR(i));
+         AuditLine("external_edit","","sl",StringFormat("pos:%I64d",g_rows[i].posid),"changed","outside_the_ea",StringFormat("sig:%d %s",g_rows[i].id,d));
+         continue;
+        }
+      if(MathAbs(tp-g_ex_tp[k])>tol)
+        {
+         string d=StringFormat("tp %s -> %s",DoubleToString(g_ex_tp[k],_Digits),DoubleToString(tp,_Digits));
+         g_ex_n[k]++; g_ex_last[k]=IsoTime(LiveNow())+" TP "+DoubleToString(g_ex_tp[k],_Digits)+" -> "+DoubleToString(tp,_Digits);
+         g_ex_tp[k]=tp;
+         LogManualAction(i,"EXTERNAL_TP",tp,vol,vol,sl,OpenR(i));   // price column = the new TP
+         AuditLine("external_edit","","tp",StringFormat("pos:%I64d",g_rows[i].posid),"changed","outside_the_ea",StringFormat("sig:%d %s",g_rows[i].id,d));
+        }
+     }
+  }
+
 void LogManualAction(int idx,string what,double price,double lots_before,
                      double lots_after,double sl_after,double open_r_override=-999.0)
   {
+   if(StringFind(what,"EXTERNAL_")!=0) ExHold(g_rows[idx].posid);   // an EA move: let it land before comparing again
    int n=ArraySize(g_actions); ArrayResize(g_actions,n+1);
    g_actions[n].id=g_rows[idx].id; g_actions[n].posid=g_rows[idx].posid;
    g_actions[n].bar_time=iTime(_Symbol,g_tf,0); g_actions[n].action=what;
