@@ -465,6 +465,7 @@ LivePark g_park;
 struct ParkSlot { bool active; LivePark park; SignalCandidate cand; int delay_count; string regime; string with_trend; string cls; double to_entry; double to_sl; double to_tp1; double to_tp2; };
 ParkSlot g_slots[MAX_PARKS];
 int      g_cfg_max_parks=1;
+string   g_cfg_wf_symbols="";   // live.json weekend_flat_symbols: roots (comma list) held to §10.1 on the LIVE path
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
 void LiveRecomputeParked(){ g_live_parked=(ParkCount()>0); }
@@ -488,6 +489,32 @@ void ParkClear(int sid){ int i=ParkIndexBySid(sid); if(i>=0) g_slots[i].active=f
 
 string LivePath(string sub){ return InpLiveRoot+"\\"+sub; }
 string SymbolRoot(){ int p=StringFind(_Symbol,"."); return (p>0 ? StringSubstr(_Symbol,0,p) : _Symbol); }
+//--- §10.1 on the LIVE path (coach 2026-09-21). The tester rule (InpWeekendFlat) keys on weekend BARS, which a
+//--- Mon-Fri broker never prints, so live keys on the broker's own Friday close instead: from the open of the last
+//--- H4 bar before that close until the week reopens, no new entries and nothing held. Symbol-scoped by config
+//--- (live.json weekend_flat_symbols), so one template serves every chart and only the named roots are affected.
+bool LiveWeekendFlatOn()
+  {
+   if(!InpLiveMode || g_cfg_wf_symbols=="") return false;
+   string a[]; int n=StringSplit(g_cfg_wf_symbols,',',a);
+   for(int i=0;i<n;i++){ string x=a[i]; StringTrimLeft(x); StringTrimRight(x); if(x!="" && x==SymbolRoot()) return true; }
+   return false;
+  }
+//--- seconds-of-day (broker clock) of the last H4 bar that opens before the broker's Friday close
+int FridayCutoffTOD()
+  {
+   datetime f=0,t=0; int close=0;
+   for(uint i=0;i<8;i++){ if(!SymbolInfoSessionTrade(_Symbol,FRIDAY,i,f,t)) break; int c=(int)t; if(c>close) close=c; }
+   if(close<=0 || close>86400) close=86400;                  // no Friday row: treat the day as open to midnight
+   int ps=PeriodSeconds(PERIOD_H4);
+   return ((close-1)/ps)*ps;                                  // 23:59 close -> 20:00 bar
+  }
+bool LiveWeekendWindow(datetime t)
+  {
+   MqlDateTime d; TimeToStruct(t,d);
+   if(d.day_of_week==0 || d.day_of_week==6) return true;
+   return (d.day_of_week==5 && d.hour*3600+d.min*60+d.sec>=FridayCutoffTOD());
+  }
 //--- live wall clock. TimeCurrent() is the last TICK time: it freezes over weekends and on a dead feed, which would
 //--- silence the heartbeat and the task poll. The tester keeps sim time (self-test / parity unchanged).
 datetime LiveNow(){ return ((bool)MQLInfoInteger(MQL_TESTER) ? TimeCurrent() : TimeGMT()); }
@@ -697,6 +724,7 @@ void LiveLoadConfig()
       g_cfg_max_age_bars  =(int)StringToInteger(JGet(k,v,"max_age_bars",(string)InpLiveMaxAgeBars));
       g_cfg_task_max_age_h=(int)StringToInteger(JGet(k,v,"task_max_age_hours","24"));
       g_cfg_max_parks=(int)MathMax(1,MathMin(MAX_PARKS,StringToInteger(JGet(k,v,"max_parks","1"))));   // parking slots per symbol (trader ruling 2026-09-16)
+      g_cfg_wf_symbols=JGet(k,v,"weekend_flat_symbols","");   // §10.1 live (coach 2026-09-21): e.g. "BTCUSD"
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
@@ -737,6 +765,8 @@ void WriteHeartbeat(string status="running")
    j.KBool("trading_enabled",g_trading_enabled);
    j.KBool("terminal_trade_allowed",(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED));
    j.KBool("mql_trade_allowed",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
+   j.KBool("weekend_flat",LiveWeekendFlatOn());
+   if(LiveWeekendFlatOn()){ int c=FridayCutoffTOD(); j.KStr("weekend_cutoff",StringFormat("Fri %02d:%02d broker",c/3600,(c%3600)/60)); j.KBool("weekend_window_now",LiveWeekendWindow(TimeCurrent())); }
    j.KNum("aggregate_risk_to_stop",agg,2);
    j.KNum("risk_mult_applied",g_risk_mult,3);
    j.KInt("events_count",ArraySize(g_ev_t)); if(ArraySize(g_ev_t)>0) j.KTime("events_last_utc",g_ev_t[ArraySize(g_ev_t)-1]); else j.KNull("events_last_utc");
@@ -796,6 +826,27 @@ void LiveInit()
 
 //--- G5: the 1s timer drives polling and the heartbeat independent of ticks. Throttles use
 //--- TimeCurrent() deltas (simulated seconds in the tester, wall-clock live).
+//--- §10.1 live flatten: close every open graded position (journaled WEEKEND_FLAT) and cancel every resting
+//--- pending order. Idempotent - called at the cutoff bar AND at poll cadence, so a refused close retries.
+void LiveWeekendFlatten()
+  {
+   for(int i=ArraySize(g_rows)-1;i>=0;i--)
+      if(g_rows[i].posid>0 && !g_rows[i].closed && g_rows[i].symbol==_Symbol && PositionSelectByTicket((ulong)g_rows[i].posid))
+        {
+         ManualClose(i,"WEEKEND_FLAT");
+         AuditLine("weekend_flat","","close",StringFormat("pos:%I64d",g_rows[i].posid),(PositionSelectByTicket((ulong)g_rows[i].posid)?"pending":"closed"),
+                   StringFormat("rc=%d",(int)g_trade.ResultRetcode()),StringFormat("sig:%d cutoff_tod=%d",g_rows[i].id,FridayCutoffTOD()));
+        }
+   for(int i=ArraySize(g_rows)-1;i>=0;i--)
+      if(g_rows[i].is_pending && g_rows[i].posid==0 && !g_rows[i].closed && g_rows[i].order_ticket>0 && g_rows[i].symbol==_Symbol)
+        {
+         if(OrderSelect((ulong)g_rows[i].order_ticket) && !g_trade.OrderDelete((ulong)g_rows[i].order_ticket)) continue;   // retry next poll
+         g_rows[i].decision="expired"; g_rows[i].closed=true;
+         AuditLine("weekend_flat","","cancel_pending",StringFormat("sig:%d",g_rows[i].id),"cancelled","",StringFormat("ticket=%I64d",g_rows[i].order_ticket));
+         WriteJournal(g_journal_part);
+        }
+  }
+
 void OnTimer()
   {
    if(!g_active || !InpLiveMode) return;
@@ -810,6 +861,7 @@ void OnTimer()
       LiveLoadRiskMult();
       LiveFtmoDayReset();      // no file I/O unless the FTMO day key changed
       LiveProcessTasks();
+      if(LiveWeekendFlatOn() && LiveWeekendWindow(TimeCurrent())) LiveWeekendFlatten();   // §10.1 live: retries a refused close
      }
    //--- positions/ view: refreshed on every state change (journal hook) and at the heartbeat cadence
    if(now-g_live_last_beat>=InpHeartbeatSec)
@@ -1163,6 +1215,13 @@ void OnTick()
       if(ibars>=12) CloseInverse("AUTO12");
      }
 
+   //--- §10.1 LIVE (coach 2026-09-21): from the last H4 bar before the broker's Friday close until the week reopens -
+   //--- close, cancel, and take no new entries (no detectors, no parked replay; approve is refused `weekend_flat`).
+   if(LiveWeekendFlatOn() && LiveWeekendWindow(bar0))
+     {
+      LiveWeekendFlatten();
+      return;
+     }
    //--- §10.1 weekend-flat (broker quotes Mon-Fri; the .dk import is 24/7). At the first weekend bar: close any open
    //--- position (that bar's open == the Friday close in continuous crypto data), then take no signals until Monday.
    if(InpWeekendFlat)
@@ -1866,6 +1925,7 @@ void LiveWritePositions()
       j.KNum("sl_live",PositionGetDouble(POSITION_SL),_Digits); j.KNum("tp_live",PositionGetDouble(POSITION_TP),_Digits);
       j.KNum("tp1",g_rows[i].tp1,_Digits); j.KNum("tp2",g_rows[i].tp2,_Digits);
       j.KNum("lots_init",g_rows[i].lots,2); j.KNum("lots_live",PositionGetDouble(POSITION_VOLUME),2);
+      j.KNum("risk_pct_effective",g_rows[i].risk_pct_gate*g_rows[i].risk_mult_applied,5);   // sized-at risk (fraction of equity)
       j.KNum("open_r",oR,3); j.KNum("banked_r",g_rows[i].r_multiple,3); j.KNum("closenow_r",oR+g_rows[i].r_multiple,3);
       j.KBool("banked",g_rows[i].banked); j.KBool("tp1_done",g_rows[i].tp1_done); j.KBool("ratcheted",g_rows[i].ratcheted);
       j.KBool("be_placeable",BEPlaceable(i)); j.KBool("ratchet_placeable",RatchetPlaceable(i));
@@ -2214,6 +2274,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       if(!g_trading_enabled){ reason="trading_disabled"; return "rejected"; }
       if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)){ reason="trading_disabled"; return "rejected"; }
       if(!g_ev_loaded || ArraySize(g_ev_t)==0){ reason="events_not_loaded"; return "rejected"; }
+      if(LiveWeekendFlatOn() && LiveWeekendWindow(TimeCurrent())){ reason="weekend_flat"; return "rejected"; }   // §10.1 live: no entries after the Friday cutoff
       string evn=""; datetime evt=0;
       if(ElectionGateHit(now,evn,evt)){ reason="election_gate:"+evn; return "rejected"; }
       if(HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
@@ -3396,16 +3457,16 @@ void LogManualAction(int idx,string what,double price,double lots_before,
 
 //--- manual FULL close (news-eve flatten / kill-condition). R accounting is
 //--- handled by OnTradeTransaction's DEAL_ENTRY_OUT path (grades it correctly).
-void ManualClose(int idx)
+void ManualClose(int idx,string tag="CLOSE")
   {
    if(!PositionSelectByTicket((ulong)g_rows[idx].posid)) return;
    double vol=PositionGetDouble(POSITION_VOLUME);
    double sl =PositionGetDouble(POSITION_SL);
    double px =(g_rows[idx].direction>0? SymbolInfoDouble(_Symbol,SYMBOL_BID)
                                       : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
-   LogManualAction(idx,"CLOSE",px,vol,0.0,sl);
+   LogManualAction(idx,tag,px,vol,0.0,sl);
    if(g_trade.PositionClose((ulong)g_rows[idx].posid))
-      Print("Signal #",g_rows[idx].id," MANUAL CLOSE ",DoubleToString(vol,2)," lots @ ",DoubleToString(px,_Digits));
+      Print("Signal #",g_rows[idx].id," ",(tag=="CLOSE" ? "MANUAL CLOSE" : tag)," ",DoubleToString(vol,2)," lots @ ",DoubleToString(px,_Digits));
    else
       Print("Signal #",g_rows[idx].id," manual close FAILED: ",g_trade.ResultRetcode());
   }

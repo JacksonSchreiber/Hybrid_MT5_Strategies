@@ -22,9 +22,25 @@ long FindChart(string sym)
    return -1;
   }
 
+//--- the lineup is DATA (coach 2026-09-21 universe expansion): Common\Files\live\config\lineup.txt, comma- or
+//--- newline-separated, wins over the compiled default - adding a symbol never needs a rebuild of this script.
+string LineupList()
+  {
+   string f="live\\config\\lineup.txt";
+   if(!FileIsExist(f,FILE_COMMON)) return InpSymbols;
+   int h=FileOpen(f,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ);
+   if(h==INVALID_HANDLE) return InpSymbols;
+   string out="";
+   while(!FileIsEnding(h)){ string ln=FileReadString(h); StringReplace(ln,"\r",""); StringTrimLeft(ln); StringTrimRight(ln);
+                            if(ln=="" || StringGetCharacter(ln,0)=='#') continue; out+=(out==""?"":",")+ln; }
+   FileClose(h);
+   return (out=="" ? InpSymbols : out);
+  }
+
 void OnStart()
   {
-   string syms[]; int n=StringSplit(InpSymbols,',',syms);
+   string lineup=LineupList();
+   string syms[]; int n=StringSplit(lineup,',',syms);
    int opened=0, applied=0, kept=0;
    //--- the chart this script runs on is handled LAST: applying a template that carries an EA to the
    //--- script's own chart unloads the script, so every other symbol must be done before that.
@@ -62,5 +78,5 @@ void OnStart()
         }
       else kept++;
      }
-   Print("Launcher: lineup=",n," opened=",opened," template applied=",applied," already running=",kept);
+   Print("Launcher: lineup=",n," (",(lineup==InpSymbols?"compiled default":"live\\config\\lineup.txt"),")"," opened=",opened," template applied=",applied," already running=",kept);
   }
