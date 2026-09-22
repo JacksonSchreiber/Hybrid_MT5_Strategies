@@ -127,29 +127,47 @@ class Monitor:
             seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": False}
 
     def heartbeats(self):
-        stale_s = self.m["heartbeat_stale_s"]
-        for sym in C.symbols(self.cfg):
-            hb = C.heartbeat(self.cfg, sym); age = C.heartbeat_age_s(hb)
+        """instance health, trader ruling 2026-09-22: no per-symbol noise. A symbol is DOWN only after `down_after_s` (300 s =
+        five missed beats) of silence - a single missed read is the monitor opening the file while the EA atomically replaces
+        it. One aggregated message when instances go down (at most every 30 min while the set grows), one 'all back' message
+        only if a down alert went out. AutoTrading and drawdown are ACCOUNT-level: evaluated once, not per instance."""
+        stale_s = self.m["heartbeat_stale_s"]; down_after = float(self.m.get("down_after_s", 300)); now = C.now_utc()
+        first = self.st.setdefault("hb_first_stale", {}); alerted = set(self.st.setdefault("hb_down_alerted", []))
+        syms = C.symbols(self.cfg); down = []; hbs = {}
+        for sym in syms:
+            hb = C.heartbeat(self.cfg, sym); age = C.heartbeat_age_s(hb); hbs[sym] = hb
             stale = hb is None or age is None or age > stale_s or hb.get("status") != "running"
-            was = self.st["hb_stale"].get(sym, False)
-            if stale and not was:
-                self.send(f"HEARTBEAT LOST: {sym} — last beat {C.rel_time(C.parse_iso(hb.get('ts')) if hb else None)} (status {hb.get('status') if hb else 'no file'})")
-            elif was and not stale:
-                self.send(f"heartbeat recovered: {sym} (beat {C.rel_time(C.parse_iso(hb.get('ts')))})")
-            self.st["hb_stale"][sym] = stale
-            if hb:
-                off = not (hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed"))
-                if off and not self.st["flags_off"].get(sym): self.send(f"AUTOTRADING DISARMED on {sym}: terminal_trade_allowed={hb.get('terminal_trade_allowed')} mql_trade_allowed={hb.get('mql_trade_allowed')} — approvals will be refused")
-                elif not off and self.st["flags_off"].get(sym): self.send(f"AutoTrading armed again on {sym}")
-                self.st["flags_off"][sym] = off
-                f = hb.get("ftmo") or {}; ib = f.get("initial_balance") or 0
-                if ib:
-                    for name, hd in (("daily", f.get("headroom_daily")), ("max", f.get("headroom_max"))):
-                        if hd is None: continue
-                        lvl = next((t for t in sorted(self.m["headroom_warn_pct"]) if hd < t * ib), None)
-                        prev = self.st["headroom"].get(f"{sym}:{name}")
-                        if lvl is not None and lvl != prev: self.send(f"DRAWDOWN WARNING {sym}: {name}-loss headroom {hd:,.0f} < {lvl*100:.0f}% of initial ({ib:,.0f}) · equity {hb.get('equity')}")
-                        self.st["headroom"][f"{sym}:{name}"] = lvl
+            if not stale: first.pop(sym, None); continue
+            t0 = C.parse_iso(first.get(sym)) if first.get(sym) else None
+            if t0 is None: first[sym] = C.now_iso(); continue
+            if (now - t0).total_seconds() >= down_after: down.append(sym)
+        new_down = [x for x in down if x not in alerted]
+        last = C.parse_iso(self.st.get("hb_last_down_msg"))
+        if new_down and (not alerted or not last or (now - last).total_seconds() >= 1800):
+            self.send(f"EA INSTANCES DOWN ({len(down)}/{len(syms)}, silent 5+ min): {', '.join(sorted(down))}" + (" - the whole terminal looks down" if len(down) == len(syms) else ""))
+            self.st["hb_last_down_msg"] = C.now_iso(); alerted |= set(down)
+        if alerted and not down:
+            self.send(f"all {len(syms)} EA instances beating again")
+            alerted = set()
+        self.st["hb_down_alerted"] = sorted(alerted & set(down)) if down else sorted(alerted)
+        self.st["hb_stale"] = {x: (x in down) for x in syms}                       # kept for any reader of the old key
+        # AutoTrading: one message listing every instance that is disarmed (a terminal-wide disarm = one line, not 47)
+        off = sorted(x for x, h in hbs.items() if h and not (h.get("terminal_trade_allowed") and h.get("mql_trade_allowed")))
+        prev_off = set(k for k, v in self.st["flags_off"].items() if v)
+        if set(off) - prev_off: self.send(f"AUTOTRADING DISARMED on {len(off)}/{len(syms)}: {', '.join(off)} - approvals will be refused")
+        elif prev_off and not off: self.send("AutoTrading armed again on every instance")
+        self.st["flags_off"] = {x: (x in off) for x in syms}
+        # drawdown: the account, once (every instance reports the same equity/headroom)
+        hb = next((h for h in sorted((h for h in hbs.values() if h and (h.get("ftmo") or {}).get("initial_balance")),
+                                     key=lambda h: C.parse_iso(h.get("ts")) or now, reverse=True)), None)
+        if hb:
+            f = hb["ftmo"]; ib = f.get("initial_balance") or 0
+            for name, hd in (("daily", f.get("headroom_daily")), ("max", f.get("headroom_max"))):
+                if hd is None: continue
+                lvl = next((t for t in sorted(self.m["headroom_warn_pct"]) if hd < t * ib), None)
+                prev = self.st["headroom"].get(f"account:{name}")
+                if lvl is not None and lvl != prev: self.send(f"DRAWDOWN WARNING: {name}-loss headroom {hd:,.0f} < {lvl*100:.0f}% of initial ({ib:,.0f}) · equity {hb.get('equity')}")
+                self.st["headroom"][f"account:{name}"] = lvl
 
     def processes(self):
         if os.name != "nt": return
