@@ -2609,8 +2609,11 @@ void SelfTestTick()
                       else if(g_delay_count>0){ SelfTestWriteTask(StringFormat("st-%d-approve-pending",kk),"signal_id",kk,"approve","{\"entry_mode\":\"pending\"}"); st_sid_done=kk; } }
       else          { st_sid_done=kk; }   // m==0: no task -> must expire code 8
      }
+   //--- the ack checks below touch the disk; acks can only appear when tasks are polled, so check at poll cadence
+   //--- (every simulated second made the 6-month self-test 2.5x slower, 2026-09-21)
+   static datetime st_ack_chk=0; bool ack_poll=(TimeCurrent()-st_ack_chk>=InpTaskPollSec); if(ack_poll) st_ack_chk=TimeCurrent();
    //--- FTMO scenario cleanup: once the tightened approve is acked, restore the default rules and skip that signal
-   if(!st_ftmo_restored && FileIsExist(LivePath("acks\\st-9-approve-ftmo.json"),FILE_COMMON))
+   if(ack_poll && !st_ftmo_restored && FileIsExist(LivePath("acks\\st-9-approve-ftmo.json"),FILE_COMMON))
      { st_ftmo_restored=true; AtomicWriteText(LivePath("config\\account.json"),"{\"schema_version\":1,\"initial_balance\":0,\"daily_loss_pct\":0.05,\"max_loss_pct\":0.10,\"buffer_pct\":0.005,\"day_reset_mode\":\"server_midnight\",\"day_reset_hour\":0,\"day_ref\":\"balance\",\"daily_base\":\"initial\"}");
        LiveFtmoLoad(); }   // no skip task: the EA auto-rejected #9 itself (code 10, auto=1)
    //--- kill-switch cleanup: once the refused approve is acked, switch ON and approve for real (must be accepted)
@@ -2618,10 +2621,10 @@ void SelfTestTick()
      { st_kill_restored=true; AtomicWriteText(LivePath("config\\trading_enabled.json"),"{\"trading_enabled\":true}");
        SelfTestWriteTask("st-5-approve","signal_id",5,"approve","{\"entry_mode\":\"market\"}"); }
    //--- risk_mult cleanup: after the halved approve is acked, restore 1.0 (the multiplier is sizing-only, C2)
-   if(!st_mult_restored && FileIsExist(LivePath("acks\\st-13-approve-half.json"),FILE_COMMON))
+   if(ack_poll && !st_mult_restored && FileIsExist(LivePath("acks\\st-13-approve-half.json"),FILE_COMMON))
      { st_mult_restored=true; AtomicWriteText(LivePath("config\\risk_mult.json"),StringFormat("{\"%s\":1.0}",SymbolRoot())); }
    //--- duplicate task_id: re-issue the FIRST approve after it was acked (expect audit `duplicate`, no 2nd ack/exec)
-   if(!st_dup_done && st_sid_done>=1 && FileIsExist(LivePath("acks\\st-1-approve.json"),FILE_COMMON))
+   if(ack_poll && !st_dup_done && st_sid_done>=1 && FileIsExist(LivePath("acks\\st-1-approve.json"),FILE_COMMON))
      { st_dup_done=true; SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\"}"); }
    //--- position management on the first open graded position
    int idx=ActiveRowIdx();
