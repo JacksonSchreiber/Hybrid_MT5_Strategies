@@ -71,6 +71,7 @@ interface ISignalDetector
   {
    bool   Detect(const string symbol,ENUM_TIMEFRAMES tf,SignalCandidate &out);
    string Name(void);
+   string Funnel(void);   // one-line detector telemetry for the live per-bar audit (2026-09-22)
   };
 
 //+------------------------------------------------------------------+
@@ -99,6 +100,7 @@ public:
      }
 
    string            Name(void) { return "DummyMondayH4"; }
+   string Funnel(void) { return "DUMMY[]"; }
 
    bool              Detect(const string symbol,ENUM_TIMEFRAMES tf,SignalCandidate &out)
      {

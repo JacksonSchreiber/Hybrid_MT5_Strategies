@@ -59,6 +59,7 @@ public:
       if(m_ema!=NULL){ delete m_ema; m_ema=NULL; }
      }
    string Name(void) { return "EmaRevInv"; }
+   string Funnel(void) { return "INV[]"; }
 
 private:
    bool EnsureHandles(const string sym,ENUM_TIMEFRAMES tf)

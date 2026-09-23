@@ -43,6 +43,7 @@ public:
      { PrintFormat("SMC funnel: bars=%d sweep=%d mss=%d arm=%d EMIT=%d",
                    m_dbg_bars,m_dbg_sweep,m_dbg_mss,m_dbg_arm,m_dbg_emit); }
    string Name(void) { return "SweepMSS"; }
+   string Funnel(void) { return StringFormat("SMC[state=%d dir=%d bars=%d sweep=%d mss=%d arm=%d emit=%d]",m_state,m_dir,m_dbg_bars,m_dbg_sweep,m_dbg_mss,m_dbg_arm,m_dbg_emit); }
 
 private:
    void ResetCtx()

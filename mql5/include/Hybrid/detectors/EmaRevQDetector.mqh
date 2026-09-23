@@ -66,6 +66,7 @@ public:
    //--- Name() is virtual (ISignalDetector): the base Emit sets out.strategy=Name(),
    //--- so a base-EMArev emit reaching here is already labelled "EMArevQ".
    string Name(void) { return "EMArevQ"; }
+   string Funnel(void) { return StringFormat("EMAQ[%s armed=%d]",CEma20MeanRev::Funnel(),(int)m_armed); }
 
    bool Detect(const string symbol,ENUM_TIMEFRAMES tf,SignalCandidate &out)
      {

@@ -828,6 +828,18 @@ void LiveInit()
 
 //--- G5: the 1s timer drives polling and the heartbeat independent of ticks. Throttles use
 //--- TimeCurrent() deltas (simulated seconds in the tester, wall-clock live).
+//--- per-bar detector telemetry (live only, trader 2026-09-22): one audit line per H4 bar carrying every detector's funnel
+//--- counters + state and the lock that suppressed a candidate. Makes "should it have fired?" answerable from the box's own
+//--- logs - the funnels used to be printed only in OnDeinit, which a box restart (hard kill) never reaches.
+void LiveBarTelemetry(string lock_reason,string emitted)
+  {
+   if(!InpLiveMode || (bool)MQLInfoInteger(MQL_TESTER)) return;
+   string f="";
+   for(int i=0;i<g_ndet;i++) f+=(i>0?" ":"")+g_detectors[i].Funnel();
+   AuditLine("bar","","",IsoTime(iTime(_Symbol,g_tf,0)),(emitted!="" ? "emit" : (lock_reason!="" ? "suppressed" : "none")),
+             lock_reason,StringFormat("%s parks=%d %s",(emitted!="" ? "emitted="+emitted : ""),ParkCount(),f));
+  }
+
 //--- §10.1 live flatten: close every open graded position (journaled WEEKEND_FLAT) and cancel every resting
 //--- pending order. Idempotent - called at the cutoff bar AND at poll cadence, so a refused close retries.
 void LiveWeekendFlatten()
@@ -1262,7 +1274,7 @@ void OnTick()
          if(g_live_parked && g_park.sid==psid) ParkStoreCurrent(); else ParkClear(psid);
         }
       LiveRecomputeParked();
-      if(ParkCount()>=g_cfg_max_parks) return;        // all slots taken: detectors wait (max_parks=1 = the old rule)
+      if(ParkCount()>=g_cfg_max_parks) { LiveBarTelemetry("parks_full",""); return; }   // all slots taken: detectors wait
      }
    else if(g_delay_pending)
      {
@@ -1286,15 +1298,17 @@ void OnTick()
       bool v=g_detectors[i].Detect(_Symbol,g_tf,c);
       if(v && c.valid && !have) { best=c; have=true; }
      }
-   if(!have) return;
+   if(!have) { LiveBarTelemetry("",""); return; }
 
    //--- ONE active setup per symbol: suppress a new emit while a position is live
    //--- OR while a pending order (edited-entry setup) is still resting/unfilled.
    if(HasActiveOrderOrPosition())
      {
       Print("Signal from ",best.strategy," suppressed - a position or pending order is already active (one setup/symbol).");
+      LiveBarTelemetry("one_setup_lock",best.strategy);
       return;
      }
+   LiveBarTelemetry("",best.strategy+" "+DirStr(best.direction));
    HandleSignal(best);
    if(InpLiveMode && g_live_parked) ParkStoreCurrent();
   }

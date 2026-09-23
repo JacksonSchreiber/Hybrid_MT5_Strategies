@@ -40,6 +40,7 @@ public:
      { PrintFormat("FIB funnel: bars=%d trend=%d leg=%d forming=%d tag=%d trigger=%d skip=%d EMIT=%d",
                    m_dbg_bars,m_dbg_trend,m_dbg_leg,m_dbg_forming,m_dbg_tag,m_dbg_trig,m_dbg_skip,m_dbg_emit); }
    string Name(void) { return "DeepFib"; }
+   string Funnel(void) { return StringFormat("FIB[bars=%d trend=%d leg=%d forming=%d tag=%d trig=%d skip=%d emit=%d]",m_dbg_bars,m_dbg_trend,m_dbg_leg,m_dbg_forming,m_dbg_tag,m_dbg_trig,m_dbg_skip,m_dbg_emit); }
 
 private:
    void ResetCtx(){ m_state=0; m_dir=0; m_L0=0; m_L100=0; m_atr_frozen=0; m_t0=0; m_t100=0; m_bars_forming=0; }

@@ -89,6 +89,7 @@ public:
                   m_dbg_calblock,m_dbg_rrrej,m_dbg_sizerej,m_dbg_holdfail,m_dbg_expire);
      }
    string Name(void) { return "ShockCont"; }
+   string Funnel(void) { return "SHOCK[]"; }
 
 private:
    void ResetCtx()

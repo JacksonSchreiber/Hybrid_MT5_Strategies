@@ -67,6 +67,7 @@ public:
                   m_dbg_calls,m_dbg_trend,m_dbg_pull,m_dbg_resume,m_dbg_rej,m_dbg_emit);
      }
    string Name(void) { return "TrendCont"; }
+   string Funnel(void) { return StringFormat("TC[calls=%d trend=%d pull=%d resume=%d rej=%d emit=%d]",m_dbg_calls,m_dbg_trend,m_dbg_pull,m_dbg_resume,m_dbg_rej,m_dbg_emit); }
 
 private:
    bool EnsureHandles(const string sym,ENUM_TIMEFRAMES tf)

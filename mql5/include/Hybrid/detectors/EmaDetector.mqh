@@ -63,6 +63,7 @@ public:
                   m_dbg_bars,m_dbg_stretch,m_dbg_adxrej,m_dbg_d1rej,m_dbg_forming,m_dbg_trigger,m_dbg_geomrej,m_dbg_skip,m_dbg_emit);
      }
    string Name(void) { return "EMArev"; }
+   string Funnel(void) { return StringFormat("EMA[bars=%d stretch=%d adxrej=%d d1rej=%d trig=%d skip=%d emit=%d]",m_dbg_bars,m_dbg_stretch,m_dbg_adxrej,m_dbg_d1rej,m_dbg_trigger,m_dbg_skip,m_dbg_emit); }
 
 private:
    void ResetCtx()
