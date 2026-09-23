@@ -25,6 +25,10 @@ class H(BaseHTTPRequestHandler):
                 return self._j({"bars": mt5feed.bars(sym, tf, n), "tick": mt5feed.tick(sym)})
             if u.path == "/tick": return self._j({"tick": mt5feed.tick(q.get("symbol", ""))})
             if u.path == "/positions": return self._j({"positions": mt5feed.positions()})
+            if u.path == "/spreads":
+                sym = q.get("symbol", "")
+                if not C.safe_key(sym): return self._j({"error": "bad request"}, 400)
+                return self._j({"spreads": mt5feed.spreads(sym, max(1, min(20000, int(q.get("n", "10000") or 10000))))})
             if u.path == "/range":
                 sym = q.get("symbol", ""); tf = q.get("tf", "m15")
                 try: a_, b_ = int(q.get("from", "0")), int(q.get("to", "0"))

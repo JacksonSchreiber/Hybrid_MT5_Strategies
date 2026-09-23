@@ -178,6 +178,21 @@ def position_costs(posid: int) -> dict | None:
         return {"n": len(ds), "symbol": sym, **tot, "net": sum(tot.values()),
                 "tick_value": float(si.trade_tick_value) if si else None, "tick_size": float(si.trade_tick_size) if si else None}
 
+def spreads(symbol: str, n: int = 10000) -> dict | None:
+    """per-M1-bar spread history: {point, rows:[[t_epoch, spread_points]]}. MT5 records the spread on every bar, so the
+    spread profile by hour is measurable from history instead of sampled live (trader 2026-09-23)."""
+    if FEED_URL:
+        r = _remote(f"/spreads?symbol={symbol}&n={int(n)}", 30.0); return (r or {}).get("spreads")
+    with _lock:
+        if not _ensure(): return None
+        try:
+            _mt5.symbol_select(symbol, True)
+            r = _mt5.copy_rates_from_pos(symbol, _mt5.TIMEFRAME_M1, 0, int(n)); si = _mt5.symbol_info(symbol)
+        except Exception:
+            _reset(); return None
+        if r is None or si is None: return None
+        return {"point": float(si.point), "rows": [[int(x["time"]), int(x["spread"])] for x in r]}
+
 def status() -> dict:
     if FEED_URL:
         return _remote("/status", 3.0) or {"available": True, "connected": False, "daemon": "unreachable"}

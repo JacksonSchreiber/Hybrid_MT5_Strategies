@@ -220,12 +220,43 @@ costs more than that is never shown - journaled as a `rejected` row with the rea
 that arrives after the spread has blown out is refused `spread_too_wide` instead of the old, misleading
 `stop_too_tight` (which now also prints the distance, the minimum and the spread in R).
 
-Why: a EURNOK approve was refused `stop_too_tight` at 21:16 UTC with a 2.87-ATR stop - the real cause was the rollover
-spread at 0.0418 (24x its midday 0.0017), and `MinStopDist` requires the stop to be >= 2x spread. Measured 21:18 UTC,
-spread cost per trade: USDZAR 1.20R, EURPLN 1.16R, EURNOK 1.04R, USDNOK 0.93R, EURSEK 0.85R, USDCZK 0.84R, EURHUF 0.83R,
-USDPLN 0.72R, USDHUF 0.69R, USDMXN 0.66R, USDSEK 0.58R - against EURUSD 0.079R, US100 0.008R, XAUUSD 0.006R. The cost
-filter that attached those eleven sampled 16:07 UTC (the tightest hour), so they passed the coach's 0.10R cap on a
-best-case reading. OPEN for the coach: detach the eleven, and re-run the filter sampling at each H4 bar open over 24 h.
+Why: EURNOK #1 published 2026-09-23 **21:05:16 UTC** - five minutes after the 21:00 UTC H4 close, inside the daily
+rollover - and both approves (21:15:57, 21:16:37) were refused `stop_too_tight` on a 2.87-ATR stop. The real cause was
+the spread: 0.0418 against a 0.07502 stop = **0.56R**, 24x its midday 0.0017, and `MinStopDist` requires the stop to be
+>= 2x spread. (That signal's `published_at 00:05:16Z` is broker clock mislabelled Z - read it through `tz_fix_signal`;
+the audit log is true UTC.)
+
+### Measured spread profile (2026-09-23, 20 days of M1, per H4 bar close)
+
+`mt5feed.spreads(sym, n)` / feed `/spreads` returns M1 spread history. Median spread over the first 5 min of each bar
+close, divided by that symbol's `est_stop` from `data/study/universe_cost_filter.csv` - one stop per symbol, so the R
+figures are indicative: the live EURNOK stop above was 1.9x its est_stop, which halves the cost in R.
+
+| UTC bar close | 01:00 | 05:00 | 09:00 | 13:00 | 17:00 | 21:00 |
+|---|---|---|---|---|---|---|
+| EURPLN | 0.124 | 0.119 | 0.054 | 0.050 | 0.060 | no quotes |
+| EURHUF / USDHUF | 0.109 / 0.092 | 0.095 / 0.088 | 0.038 / 0.032 | 0.032 / 0.028 | 0.054 / 0.052 | no quotes |
+| USDPLN / USDCZK | 0.079 / 0.078 | 0.071 / 0.074 | 0.035 / 0.030 | 0.031 / 0.023 | 0.042 / 0.040 | no quotes |
+| EURNOK / USDNOK | 0.063 / 0.061 | 0.050 / 0.051 | 0.023 / 0.023 | 0.020 / 0.019 | 0.030 / 0.036 | no quotes |
+| EURSEK / USDSEK | 0.045 / 0.028 | 0.041 / 0.028 | 0.016 / 0.013 | 0.014 / 0.008 | 0.027 / 0.018 | no quotes |
+| USDZAR / USDMXN | 0.035 / 0.020 | 0.017 / 0.021 | 0.015 / 0.015 | 0.014 / 0.011 | 0.014 / 0.008 | no quotes |
+| EURUSD / GBPUSD / US100 / XAUUSD | <= 0.007 | <= 0.007 | <= 0.007 | <= 0.007 | <= 0.005 | no quotes |
+
+Five of the six H4 closes sit inside the 0.15R gate for all eleven exotics, 09:00 and 13:00 cheapest. The **21:00 UTC
+close has no M1 bar in its first five minutes at all** (0 of 70 samples, every symbol): quoting resumes a few minutes
+later, and that is when the EA sees the new bar and publishes - which is exactly what EURNOK #1 did. Across the whole
+21:00 hour EURNOK's median cost is **0.88R** (EURUSD 0.07R; US100 has no quotes 21:00-22:00), decaying to 0.15R at
+22:00 and 0.10R at 23:00, back to 0.04-0.07R by 00:00. The expensive window is 21:00-23:00 UTC; hour 20 is normal.
+
+Consequences - OPEN for the coach:
+- The previous OPEN item (detach the eleven, re-sample at each bar) is **answered: do not detach.** The 09/13/17 closes
+  cost 0.01-0.06R for every exotic; the 16:07 sample that attached them was optimistic, not wrong.
+- An exotic signal on the **21:00 close is rejected, not deferred** - the gate runs after `Detect()` and nothing
+  re-presents a rejected candidate, so the setup is lost rather than delayed. Exotics effectively trade 5 of 6 bars.
+  Options: accept it, make 21:00 a formal no-present window for the exotics, or defer that bar's detection to 01:00.
+- The gate (0.15R) is **looser than the coach's own 0.10R attach cap**: EURPLN 0.124/0.119R and EURHUF 0.109R at the
+  01:00/05:00 closes pass the gate but exceed the cap. Options: align the gate to 0.10R, accept the mismatch, or detach
+  those two.
 
 ## Standing items (checked when the named condition occurs)
 
