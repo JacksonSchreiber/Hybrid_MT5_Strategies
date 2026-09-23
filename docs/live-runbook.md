@@ -198,6 +198,17 @@ prices each closed position once from the broker's deals into `web\costed_r.json
 - Swing table: live since 2026-09-17; tester card from the 2026-09-21 build (EA sidecar = Python mirror on 16/16 signals).
   No swept column - the EA tracks no per-swing pool status.
 
+## D1 warm-up / blank regime (coach 2026-09-23)
+
+A newly attached symbol has no D1 history until something asks for it. `ComputeRegime` (EMA200 + ADX on D1, 11 buffer
+values ≈ 211 bars) and TrendCont's `TrendDir` both fail SILENTLY without it: blank regime tag, `TC[trend=0]` on every call,
+and every SweepMSS/DeepFib signal downgraded from TAKE to DISCRETION. Seen on the 41 symbols attached 2026-09-21 (NZDJPY #1
+carried a blank tag; its EA logged `Regime: D1 EMA200 not ready`). Fixed: `LiveWarmD1()` forces `CopyRates(PERIOD_D1, 400)`
+at init and at heartbeat cadence until `Bars(PERIOD_D1) >= 211`, audited `d1_warmup` / `d1_ready`; the heartbeat carries
+`d1_bars`, `regime`, `regime_ready`; the dashboard's Instances block shows the tag per symbol and opens itself when any is
+blank; the monitor sends one aggregated Telegram line. After the 2026-09-23 deploy: 47/47 `d1_ready` (FX 350 bars,
+indices/metals/BTC 403-523), 0 blank, tags 25 TREND_UP / 19 TREND_DOWN / 3 CHOP.
+
 ## Standing items (checked when the named condition occurs)
 
 - **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and

@@ -316,14 +316,19 @@ def dashboard(q: dict) -> str:
         alive = hb and hb.get("status") == "running" and age is not None and age < CFG["monitor"]["heartbeat_stale_s"]; live_n += bool(alive)
         flags = "" if not hb else ("" if hb.get("terminal_trade_allowed") and hb.get("mql_trade_allowed") else ' <span class="pill bad">AutoTrading OFF</span>')
         wf = ' <span class="pill">weekend-flat</span>' if hb and hb.get("weekend_flat") else ""
+        # coach 2026-09-23: a blank regime is a QUIET outage - it drops TrendCont and the whole TAKE class
+        rg = (hb or {}).get("regime"); d1 = (hb or {}).get("d1_bars")
+        rgc = (f'<span class="pill {"ok" if rg else "bad"}">{E(rg) if rg else "REGIME BLANK"}</span>'
+               + (f' <span class="k">D1 {d1}</span>' if d1 is not None and (not rg or d1 < 211) else "")) if hb else ""
         tvs = C.tv_symbol(CFG, sym); tvl = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
-        rows_i.append(f'<tr><td>{E(sym)}{wf}</td><td><span class="pill {"ok" if alive else "bad"}">{"alive" if alive else "STALE"}</span>{flags}</td>'
+        rows_i.append(f'<tr><td>{E(sym)}{wf}</td><td><span class="pill {"ok" if alive else "bad"}">{"alive" if alive else "STALE"}</span>{flags} {rgc}</td>'
                       f'<td class="k">{C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</td><td><a href="{tvl}" target="_blank">TV ↗</a></td></tr>'
                       + (f'<tr><td colspan="4" class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</td></tr>' if hb and hb.get("alerts") else ""))
-    tbl = f'<table><tr><th>symbol</th><th>EA</th><th>beat</th><th></th></tr>{"".join(rows_i)}</table>'
-    all_ok = live_n == len(syms) and len(syms) > 0
+    tbl = f'<table><tr><th>symbol</th><th>EA · regime</th><th>beat</th><th></th></tr>{"".join(rows_i)}</table>'
+    blank = [x for x in syms if (C.heartbeat(CFG, x) or {}).get("regime_ready") is False]
+    all_ok = live_n == len(syms) and len(syms) > 0 and not blank
     out.append(f'<h2>Instances · <span class="{"ok" if all_ok else "bad"}">{live_n}/{len(syms)} alive</span></h2><div class="card"><details{"" if all_ok else " open"}><summary class="k">'
-               f'{"all EA instances alive - tap for the list and TradingView links" if all_ok else "SOME INSTANCES STALE - list"}</summary>{tbl}</details></div>')
+               f'{"all EA instances alive, every regime tagged - tap for the list and TradingView links" if all_ok else ("REGIME BLANK on " + str(len(blank)) + " instance(s): " + E(", ".join(blank)) + " - TrendCont and the TAKE class are OFF there until D1 history fills" if blank and live_n == len(syms) else "SOME INSTANCES STALE - list")}</summary>{tbl}</details></div>')
     out.append('<h2>Advisors</h2>' + advisor_load_card())
     out.append('<h2>Live eligibility</h2>' + eligibility_card())
     # recent decided signals

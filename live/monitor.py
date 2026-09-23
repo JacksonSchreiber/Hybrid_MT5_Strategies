@@ -157,6 +157,14 @@ class Monitor:
         if set(off) - prev_off: self.send(f"AUTOTRADING DISARMED on {len(off)}/{len(syms)}: {', '.join(off)} - approvals will be refused")
         elif prev_off and not off: self.send("AutoTrading armed again on every instance")
         self.st["flags_off"] = {x: (x in off) for x in syms}
+        # coach 2026-09-23: a blank regime tag is a quiet outage (no TrendCont, no TAKE class) - surface it once, aggregated
+        blank = sorted(x for x, h in hbs.items() if h and h.get("regime_ready") is False)
+        prev_blank = set(self.st.get("regime_blank") or [])
+        if set(blank) - prev_blank:
+            self.send(f"REGIME BLANK on {len(blank)}/{len(syms)}: {', '.join(blank)} - D1 history short (need 211 bars), so TrendCont sees no trend and every signal there drops out of the TAKE class. The EA is pulling D1 history; this should clear by itself.")
+        elif prev_blank and not blank:
+            self.send("regime tagged again on every instance (D1 history complete)")
+        self.st["regime_blank"] = blank
         # drawdown: the account, once (every instance reports the same equity/headroom)
         hb = next((h for h in sorted((h for h in hbs.values() if h and (h.get("ftmo") or {}).get("initial_balance")),
                                      key=lambda h: C.parse_iso(h.get("ts")) or now, reverse=True)), None)

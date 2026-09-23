@@ -115,7 +115,11 @@ Kill switch OFF: `approve` is refused (`trading_disabled`); skip/delay and every
   ftmo{initial_balance, day_key, day_start_balance, day_start_equity, daily_floor, max_floor, buffer, headroom_daily, headroom_max} (G3: the numbers the EA enforces),
   open_positions[{posid, signal_id, strategy, direction, open_r, banked_r, lots, banked, ratcheted}],
   parked_signal_id, last_signal_id, in_tester, alerts[ unprotected_position:<n> | terminal_trade_not_allowed | mql_trade_not_allowed | … ],
-  weekend_flat (bool: this symbol is held to §10.1 on the live path), weekend_cutoff "Fri HH:MM broker" and weekend_window_now (only when weekend_flat) }
+  weekend_flat (bool: this symbol is held to §10.1 on the live path), weekend_cutoff "Fri HH:MM broker" and weekend_window_now (only when weekend_flat),
+  last_bar_server + bars_seen (the last H4 bar the detectors ran on), d1_bars + regime + regime_ready (coach 2026-09-23: a BLANK
+  regime is a quiet outage - ComputeRegime and TrendCont's TrendDir both need ~211 D1 bars, and without them TrendCont never
+  sees a trend and every SweepMSS/DeepFib signal drops from TAKE to DISCRETION; the EA pulls D1 history at init and at each
+  heartbeat until ready, audited d1_warmup/d1_ready) }
 ```
 `positions/<SYM>-<posid>.json` also carries `risk_pct_effective` (= risk_pct_gate × risk_mult_applied, fraction of equity - the
 risk the position was SIZED at; the advisor's open-exposure block weights currency legs with it).

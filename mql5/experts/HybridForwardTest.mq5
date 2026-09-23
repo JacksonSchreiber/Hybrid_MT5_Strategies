@@ -443,6 +443,8 @@ long     g_account_login    = 0;
 bool     g_live_inited      = false;
 bool     g_live_parked      = false;   // a published signal is awaiting a task (Slice 2)
 bool     g_rm_warned        = false;
+bool     g_d1_ready         = false;    // D1 history sufficient for the regime + TrendCont (coach 2026-09-23)
+int      g_d1_warn_beats     = 0;
 int      g_bars_seen         = 0;       // new H4 bars this instance has processed (heartbeat: proves the detectors ran)
 int      g_live_auto         = 0;       // 1 while committing an automatic skip (G1) -> journal auto=1 (Slice 5)
 //--- a PUBLISHED signal awaiting a task (G2). Lives across ticks alongside g_delayed (the cand).
@@ -767,7 +769,9 @@ void WriteHeartbeat(string status="running")
    j.KBool("terminal_trade_allowed",(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED));
    j.KBool("mql_trade_allowed",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
    j.KBool("weekend_flat",LiveWeekendFlatOn());
-   j.KTime("last_bar_server",g_last_bar); j.KInt("bars_seen",g_bars_seen);   // the last bar the new-bar gate ran detectors on (broker clock)
+   j.KTime("last_bar_server",g_last_bar); j.KInt("bars_seen",g_bars_seen);
+   { int d1n=Bars(_Symbol,PERIOD_D1); string rg="",rw=""; ComputeRegime(0,rg,rw,false);
+     j.KInt("d1_bars",d1n); j.KStr("regime",rg); j.KBool("regime_ready",rg!=""); }   // blank regime = TrendCont off + no TAKE class (coach 2026-09-23)   // the last bar the new-bar gate ran detectors on (broker clock)
    if(LiveWeekendFlatOn()){ int c=FridayCutoffTOD(); j.KStr("weekend_cutoff",StringFormat("Fri %02d:%02d broker",c/3600,(c%3600)/60)); j.KBool("weekend_window_now",LiveWeekendWindow(TimeCurrent())); }
    j.KNum("aggregate_risk_to_stop",agg,2);
    j.KNum("risk_mult_applied",g_risk_mult,3);
@@ -806,6 +810,7 @@ void LiveInit()
    if(g_live_inited) return;
    g_account_login=AccountInfoInteger(ACCOUNT_LOGIN);
    LiveEnsureDirs();
+   if(InpLiveMode && !(bool)MQLInfoInteger(MQL_TESTER)) LiveWarmD1();   // pull D1 history before the first bar is judged
    g_started=true;
    g_start_time=TimeCurrent(); g_last_time=g_start_time;
    g_journal_part    =LivePath(StringFormat("journal\\%s_%s.part.csv",_Symbol,StampCompact(g_start_time)));
@@ -828,6 +833,23 @@ void LiveInit()
 
 //--- G5: the 1s timer drives polling and the heartbeat independent of ticks. Throttles use
 //--- TimeCurrent() deltas (simulated seconds in the tester, wall-clock live).
+//--- D1 warm-up (coach 2026-09-23): ComputeRegime needs 11 EMA200 buffer values (~211 D1 bars) and TrendCont's TrendDir
+//--- the same; a symbol attached today has no D1 history until something asks for it, and BOTH fail silently - blank regime
+//--- (which also drops every SweepMSS/DeepFib signal from TAKE to DISCRETION) and TrendCont that never sees a trend.
+//--- CopyRates on D1 forces the download; retried at heartbeat cadence until ready, then audited once.
+#define REGIME_D1_MIN 211
+int LiveWarmD1()
+  {
+   int n=Bars(_Symbol,PERIOD_D1);
+   if(n<REGIME_D1_MIN)
+     { MqlRates d[]; ArraySetAsSeries(d,false); CopyRates(_Symbol,PERIOD_D1,0,400,d); n=Bars(_Symbol,PERIOD_D1); }
+   if(n>=REGIME_D1_MIN && !g_d1_ready)
+     { g_d1_ready=true; AuditLine("d1_ready","","","","ok","",StringFormat("bars=%d (regime + TrendCont live)",n)); }
+   else if(n<REGIME_D1_MIN && g_d1_warn_beats++%10==0)
+      AuditLine("d1_warmup","","","","waiting","insufficient_d1",StringFormat("bars=%d of %d - regime blank, TrendCont cannot see a trend",n,REGIME_D1_MIN));
+   return n;
+  }
+
 //--- per-bar detector telemetry (live only, trader 2026-09-22): one audit line per H4 bar carrying every detector's funnel
 //--- counters + state and the lock that suppressed a candidate. Makes "should it have fired?" answerable from the box's own
 //--- logs - the funnels used to be printed only in OnDeinit, which a box restart (hard kill) never reaches.
@@ -880,7 +902,7 @@ void OnTimer()
    //--- positions/ view: refreshed on every state change (journal hook) and at the heartbeat cadence
    if(now-g_live_last_beat>=InpHeartbeatSec)
      {
-      g_live_last_beat=now; LiveFtmoLoad();
+      g_live_last_beat=now; LiveFtmoLoad(); LiveWarmD1();
       //--- calendar: econ_events.csv is refreshed daily by the monitor (ForexFactory feed). Reload once a day
       //--- after 03:00 UTC (the refresh runs 02:30) so every instance sees the new coverage without a restart.
       if(!(bool)MQLInfoInteger(MQL_TESTER))
@@ -1504,17 +1526,17 @@ void JournalReject(int id,SignalCandidate &cand,string why)
 //| in CHOP). Warm-up / unready buffers -> BLANK (never a fake CHOP).  |
 //| Same formula everywhere; frozen once shipped.                      |
 //+------------------------------------------------------------------+
-void ComputeRegime(int dir,string &regime,string &wt)
+void ComputeRegime(int dir,string &regime,string &wt,bool verbose=true)
   {
    regime=""; wt="";
-   if(g_h_ema200_d1==INVALID_HANDLE || g_h_adx_d1==INVALID_HANDLE){ Print("Regime: no D1 handle - blank"); return; }
+   if(g_h_ema200_d1==INVALID_HANDLE || g_h_adx_d1==INVALID_HANDLE){ if(verbose) Print("Regime: no D1 handle - blank"); return; }
    double ema[],adx[]; ArraySetAsSeries(ema,true); ArraySetAsSeries(adx,true);
-   if(CopyBuffer(g_h_ema200_d1,0,1,11,ema)<11){ Print("Regime: D1 EMA200 not ready (need ~210 D1 bars) - blank"); return; }
-   if(CopyBuffer(g_h_adx_d1,0,1,1,adx)<1){ Print("Regime: D1 ADX not ready - blank"); return; }
+   if(CopyBuffer(g_h_ema200_d1,0,1,11,ema)<11){ if(verbose) Print("Regime: D1 EMA200 not ready (need ~210 D1 bars) - blank"); return; }
+   if(CopyBuffer(g_h_adx_d1,0,1,1,adx)<1){ if(verbose) Print("Regime: D1 ADX not ready - blank"); return; }
    double ema1=ema[0], ema11=ema[10];          // shift 1 (last closed) and shift 11 (10 bars earlier)
    double c1=iClose(_Symbol,PERIOD_D1,1);
    double a1=adx[0];
-   if(ema1==EMPTY_VALUE || ema11==EMPTY_VALUE || a1==EMPTY_VALUE || c1<=0.0){ Print("Regime: D1 buffers empty - blank"); return; }
+   if(ema1==EMPTY_VALUE || ema11==EMPTY_VALUE || a1==EMPTY_VALUE || c1<=0.0){ if(verbose) Print("Regime: D1 buffers empty - blank"); return; }
    if(c1>ema1 && ema1>ema11 && a1>=20.0)      regime="TREND_UP";
    else if(c1<ema1 && ema1<ema11 && a1>=20.0) regime="TREND_DOWN";
    else                                        regime="CHOP";
