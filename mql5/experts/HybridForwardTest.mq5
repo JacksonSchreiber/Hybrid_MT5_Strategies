@@ -315,6 +315,8 @@ struct JournalRow
    double   stop_post_floor;    // |entry-SL| after the floor
    int      floor_applied;      // 1 = the floor widened this stop
    int      weekend_candle;     // §10.7: 1 = the signal candle is a Sat/Sun bar (decided on the Monday bar)
+   string   reject_why;         // live only: why a 'rejected' row was refused (spread gate, degenerate stop, SL-through).
+                                //   The coach computes the held-setup counterfactual from these rows, so they carry full levels + lots.
   };
 JournalRow g_rows[];
 
@@ -713,12 +715,16 @@ void LiveLoadRiskMult()
    g_risk_mult=nm;
   }
 //--- config: live.json (G1/G2 knobs); written with defaults from the inputs when missing
-void LiveLoadConfig()
+//--- bootstrap=true (OnInit) writes the default file when none parses; a periodic reload (heartbeat cadence, so a
+//--- --config deploy lands within a minute without restarting MT5) must NEVER write: the read can land mid-replace
+//--- while deploy_live.sh is copying, and rewriting defaults there would silently clobber the deployed config.
+void LiveLoadConfig(bool bootstrap=true)
   {
    string p=LivePath("config\\live.json");
    string t=ReadTextFile(p); string k[],v[],err;
    if(t=="" || !JsonFlatParse(t,k,v,err))
      {
+      if(!bootstrap){ AuditLine("config_reload","","","","skipped","unreadable","live.json unreadable this beat - keeping the loaded values"); return; }
       g_cfg_election_days=InpElectionHorizonDays; g_cfg_max_age_bars=InpLiveMaxAgeBars; g_cfg_task_max_age_h=24;
       AtomicWriteText(p,StringFormat("{\"schema_version\":%d,\"election_horizon_days\":%d,\"max_age_bars\":%d,\"task_max_age_hours\":%d}",
                                      LIVE_SCHEMA_VERSION,g_cfg_election_days,g_cfg_max_age_bars,g_cfg_task_max_age_h));
@@ -772,6 +778,7 @@ void WriteHeartbeat(string status="running")
    j.KBool("terminal_trade_allowed",(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED));
    j.KBool("mql_trade_allowed",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
    j.KBool("weekend_flat",LiveWeekendFlatOn());
+   j.KNum("max_spread_r",g_cfg_max_spread_r,3);   // the ACTIVE gate, so the dashboard shows what this instance is enforcing, not what the file on disk says
    j.KTime("last_bar_server",g_last_bar); j.KInt("bars_seen",g_bars_seen);
    { int d1n=Bars(_Symbol,PERIOD_D1); string rg="",rw=""; ComputeRegime(0,rg,rw,false);
      j.KInt("d1_bars",d1n); j.KStr("regime",rg); j.KBool("regime_ready",rg!=""); }   // blank regime = TrendCont off + no TAKE class (coach 2026-09-23)   // the last bar the new-bar gate ran detectors on (broker clock)
@@ -905,7 +912,7 @@ void OnTimer()
    //--- positions/ view: refreshed on every state change (journal hook) and at the heartbeat cadence
    if(now-g_live_last_beat>=InpHeartbeatSec)
      {
-      g_live_last_beat=now; LiveFtmoLoad(); LiveWarmD1();
+      g_live_last_beat=now; LiveLoadConfig(false); LiveFtmoLoad(); LiveWarmD1();
       //--- calendar: econ_events.csv is refreshed daily by the monitor (ForexFactory feed). Reload once a day
       //--- after 03:00 UTC (the refresh runs 02:30) so every instance sees the new coverage without a restart.
       if(!(bool)MQLInfoInteger(MQL_TESTER))
@@ -1504,7 +1511,10 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend;
    g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=cand.tp;
    g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=0.0;
-   g_rows[n].lots=0.0; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
+   //--- lots on a LIVE reject (coach 2026-09-23, condition on "accept the 21:00 rejects"): the counterfactual for a
+   //--- refused setup is only computable from bars if the row carries the size it would have traded. Tester rows keep
+   //--- 0.0 - sizing runs after this gate there, and the parity baseline must not move.
+   g_rows[n].lots=(InpLiveMode? SizeByRisk(cand.entry,cand.sl) : 0.0); g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
    g_rows[n].decision="rejected"; g_rows[n].skip_reason=0; g_rows[n].edited=false;
    g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0;
    g_rows[n].tp1_done=true; g_rows[n].decision_ms=0; g_rows[n].posid=0;
@@ -1523,6 +1533,7 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct; g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=0; g_rows[n].entry_mode="rejected";
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
    g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time);
+   g_rows[n].reject_why=why;
    Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," REJECTED: ",why);
    WriteJournal(g_journal_part);
   }
@@ -1928,7 +1939,7 @@ void LiveSaveRowState(int i)
    j.KNum("rt_tp1R",r.rt_tp1R,4); j.KNum("rt_tp2R",r.rt_tp2R,4); j.KInt("rt_touched1",r.rt_touched1); j.KInt("rt_reached2",r.rt_reached2);
    j.KInt("rt_redip1",r.rt_redip1); j.KNum("rt_bankr",r.rt_bankr,4);
    j.KBool("live",r.live); j.KInt("account_id",r.account_id); j.KNum("risk_pct_gate",r.risk_pct_gate,4); j.KNum("risk_mult_applied",r.risk_mult_applied,3);
-   j.KInt("auto_skip",r.auto_skip); j.KStr("entry_mode",r.entry_mode);
+   j.KInt("auto_skip",r.auto_skip); j.KStr("entry_mode",r.entry_mode); j.KStr("reject_why",r.reject_why);
    j.Key("actions"); j.BeginObj();
    int na=0;
    for(int a=0;a<ArraySize(g_actions);a++)
@@ -2027,7 +2038,7 @@ bool LiveLoadRowState(string rel)
    r.rt_tp1R=StringToDouble(JGet(k,v,"rt_tp1R")); r.rt_tp2R=StringToDouble(JGet(k,v,"rt_tp2R")); r.rt_touched1=(int)StringToInteger(JGet(k,v,"rt_touched1","0"));
    r.rt_reached2=(int)StringToInteger(JGet(k,v,"rt_reached2","0")); r.rt_redip1=(int)StringToInteger(JGet(k,v,"rt_redip1","0")); r.rt_bankr=StringToDouble(JGet(k,v,"rt_bankr","-99"));
    r.live=(JGet(k,v,"live")=="true"); r.account_id=StringToInteger(JGet(k,v,"account_id","0")); r.risk_pct_gate=StringToDouble(JGet(k,v,"risk_pct_gate","0.01"));
-   r.risk_mult_applied=StringToDouble(JGet(k,v,"risk_mult_applied","1")); r.auto_skip=(int)StringToInteger(JGet(k,v,"auto_skip","0")); r.entry_mode=JGet(k,v,"entry_mode","");
+   r.risk_mult_applied=StringToDouble(JGet(k,v,"risk_mult_applied","1")); r.auto_skip=(int)StringToInteger(JGet(k,v,"auto_skip","0")); r.entry_mode=JGet(k,v,"entry_mode",""); r.reject_why=JGet(k,v,"reject_why","");
    g_rows[n]=r;
    int na=(int)StringToInteger(JGet(k,v,"actions.n","0"));
    for(int a=0;a<na;a++)
@@ -2119,7 +2130,7 @@ void AdoptOrphans()
       r.to_entry=r.entry; r.to_sl=r.sl; r.to_tp1=0; r.to_tp2=0; r.mfe_r=0; r.pre_dip_r=0; r.post_dip_r=0; r.dipped=0; r.terminal="";
       r.imp_atr=0; r.imp_nbig=0; r.cal_lab=0; r.v2_r=0; r.v2_bank=0; r.v2_runner=-1; r.rt_tp1R=0; r.rt_tp2R=0; r.rt_touched1=0; r.rt_reached2=0; r.rt_redip1=0; r.rt_bankr=-99.0;
       r.live=true; r.account_id=g_account_login; r.risk_pct_gate=InpRiskPct; r.risk_mult_applied=g_risk_mult; r.auto_skip=0; r.entry_mode="adopted";
-      r.stop_pre_floor=0; r.stop_post_floor=0; r.floor_applied=0; r.weekend_candle=0;
+      r.stop_pre_floor=0; r.stop_post_floor=0; r.floor_applied=0; r.weekend_candle=0; r.reject_why="";
       g_rows[n]=r;
       AuditLine("adopt_orphan","","",StringFormat("pos:%I64d",pid),"adopted","",StringFormat("sig=%d %s lots=%.2f sl=%s",r.id,DirStr(r.direction),r.lots,DoubleToString(r.sl,_Digits)));
       LiveAlert(StringFormat("adopt_orphan:%I64d",pid));
@@ -2979,7 +2990,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct;
    g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=(g_live_auto?1:0); g_rows[n].entry_mode=entry_mode;
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
-   g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time);
+   g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time); g_rows[n].reject_why="";
 
    if(want_inv)
      {
@@ -5293,6 +5304,16 @@ void ApplyExitDeal(int idx,ulong deal)
 string StampMonth(datetime t)
   { MqlDateTime dt; TimeToStruct(t,dt); return StringFormat("%04d%02d",dt.year,dt.mon); }
 //--- one journal row as CSV (shared by the tester file and the live monthly files)
+//--- a free-text column has to survive a CSV reader: commas -> semicolons, newlines/quotes dropped.
+string CsvSafe(string t)
+  {
+   StringReplace(t,",",";"); StringReplace(t,"\n"," "); StringReplace(t,"\r"," "); StringReplace(t,"\"","'");
+   //--- and printable ASCII only: the journals are written ANSI and read as ASCII, so a stray non-ASCII char
+   //--- (e.g. the section sign in "(live, \u00a711-3)") decodes as 0xa7 and blows up csv readers.
+   for(int i=StringLen(t)-1;i>=0;i--)
+     { ushort c=StringGetCharacter(t,i); if(c<32 || c>126) StringSetCharacter(t,i,' '); }
+   return(t);
+  }
 string JournalRowLine(JournalRow &r)
   {
    return StringFormat(
@@ -5333,11 +5354,11 @@ void WriteLiveJournals()
        if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
    for(int q=0;q<nm;q++)
      {
-      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+"\n";
+      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason\n";
       for(int i=0;i<ArraySize(g_rows);i++)
         {
          if(StampMonth(g_rows[i].time)!=months[q]) continue;
-         body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+"\n";
+         body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+","+CsvSafe(g_rows[i].reject_why)+"\n";
         }
       AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }

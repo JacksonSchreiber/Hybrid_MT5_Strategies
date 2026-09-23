@@ -126,9 +126,10 @@ def main():
         # E3: monthly rotation - every live journal is <SYM>_YYYYMM.csv, and the header carries the 5 live columns
         for p in jn:
             if not re.fullmatch(rf"{re.escape(S)}_\d{{6}}\.csv", os.path.basename(p)): fail(f"journal not monthly-named: {os.path.basename(p)}")
-            with open(p,newline="") as f: hdr=f.readline().rstrip("\r\n").split(",")
-            if hdr[-5:]!=["live","account_id","risk_pct_gate","risk_mult_applied","auto"]: fail(f"journal {os.path.basename(p)} header lacks live columns: {hdr[-5:]}")
-            if len(hdr)!=51: fail(f"journal {os.path.basename(p)} has {len(hdr)} columns, expected 51 (46 tester + 5 live)")
+            with open(p,newline="",encoding="ascii",errors="replace") as f: hdr=f.readline().rstrip("\r\n").split(",")
+            if hdr[-6:-1]!=["live","account_id","risk_pct_gate","risk_mult_applied","auto"]: fail(f"journal {os.path.basename(p)} header lacks live columns: {hdr[-6:-1]}")
+            if hdr[-1]!="reject_reason": fail(f"journal {os.path.basename(p)} last column is {hdr[-1]!r}, expected reject_reason")
+            if len(hdr)!=52: fail(f"journal {os.path.basename(p)} has {len(hdr)} columns, expected 52 (46 tester + 5 live + reject_reason)")
         if not jn: fail("no monthly live journal found")
         for p in glob.glob(os.path.join(R,"journal","*.part.csv")): fail(f"live journal dir has a .part file (tester path leaked): {os.path.basename(p)}")
     skip8=skip2auto=0; all_rows=[]
@@ -140,6 +141,13 @@ def main():
             if a.expect_live_cols:
                 if r.get("live")!="1": fail(f"journal row sig {r.get('signal_id')} live!=1")
                 if not r.get("account_id"): fail(f"journal row sig {r.get('signal_id')} account_id empty")
+                # coach 2026-09-23: a rejected row is the input to the held-setup counterfactual, so it must carry
+                # the full plan (levels + the size it would have traded) and say why it was refused.
+                if r.get("decision")=="rejected":
+                    miss=[c for c in ("entry","sl","tp1","lots") if not (r.get(c) or "").strip()]
+                    if miss: fail(f"journal row sig {r.get('signal_id')} rejected but {'/'.join(miss)} empty")
+                    if (r.get("lots") or "0")=="0.00": fail(f"journal row sig {r.get('signal_id')} rejected with lots 0.00")
+                    if not (r.get("reject_reason") or "").strip(): fail(f"journal row sig {r.get('signal_id')} rejected with no reject_reason")
         info.append(f"journal {os.path.basename(p)}: {len(rows)} rows, skip8={f8}, skip2(auto)={f2}")
     info.append(f"journal totals: {len(all_rows)} rows, skip8={skip8}, skip2(auto)={skip2auto}")
     if st.get("expired",0) and skip8==0: fail("signals expired but no skip_reason=8 journal row")

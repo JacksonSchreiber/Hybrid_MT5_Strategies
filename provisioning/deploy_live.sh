@@ -18,7 +18,8 @@ MODE="${1:-full}"; PRUNE=false
 log(){ printf '%s\n' "$*" >&2; }
 QCFG='C:/Users/hybridops/AppData/Roaming/MetaQuotes/Terminal/Common/Files/live/config'
 if [[ "$MODE" == "--config" || "$MODE" == "--ea" ]]; then
-  # queue config (single source: provisioning/). risk_mult + live.json are re-read by every EA at its poll/heartbeat cadence.
+  # queue config (single source: provisioning/). risk_mult.json is re-read at the poll cadence and live.json at the
+  # heartbeat cadence, so a --config deploy lands within a minute without restarting MT5.
   $SCP "$REPO"/provisioning/lineup.txt "$REPO"/provisioning/risk_mult.json "$REPO"/provisioning/live.json "$REPO"/provisioning/lineup_history.json "$HOST:$QCFG/"
   log "queue config copied (lineup.txt, risk_mult.json, live.json, lineup_history.json)"
 fi

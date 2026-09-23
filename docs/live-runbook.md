@@ -214,9 +214,10 @@ indices/metals/BTC 403-523), 0 blank, tags 25 TREND_UP / 19 TREND_DOWN / 3 CHOP.
 ## Spread gate + spread in R on every signal (trader 2026-09-23)
 
 The spread is paid the instant a trade opens, so every signal now states it in R (`sizing.spread_r` = spread / stop):
-the signal page shows "spread now 0.031R" beside the lots (amber > 0.05R, red > 0.10R) and the advisor card carries an
-"Entry cost (spread) right now" line. `live.json max_spread_r` (0.15, 0 = off) is a hard gate: a signal whose spread
-costs more than that is never shown - journaled as a `rejected` row with the reason, audit `spread_gate`; and an approve
+the signal page shows "spread now 0.031R" beside the lots (amber over half the gate, red over it) and the advisor card carries an
+"Entry cost (spread) right now" line. `live.json max_spread_r` (**0.10**, 0 = off - coach ruling below) is a hard gate: a signal whose spread
+costs more than that is never shown - journaled as a `rejected` row carrying the full plan (levels, lots it would
+have traded, and a `reject_reason` column) plus an audit `spread_gate` line; and an approve
 that arrives after the spread has blown out is refused `spread_too_wide` instead of the old, misleading
 `stop_too_tight` (which now also prints the distance, the minimum and the spread in R).
 
@@ -242,21 +243,34 @@ figures are indicative: the live EURNOK stop above was 1.9x its est_stop, which 
 | USDZAR / USDMXN | 0.035 / 0.020 | 0.017 / 0.021 | 0.015 / 0.015 | 0.014 / 0.011 | 0.014 / 0.008 | no quotes |
 | EURUSD / GBPUSD / US100 / XAUUSD | <= 0.007 | <= 0.007 | <= 0.007 | <= 0.007 | <= 0.005 | no quotes |
 
-Five of the six H4 closes sit inside the 0.15R gate for all eleven exotics, 09:00 and 13:00 cheapest. The **21:00 UTC
-close has no M1 bar in its first five minutes at all** (0 of 70 samples, every symbol): quoting resumes a few minutes
-later, and that is when the EA sees the new bar and publishes - which is exactly what EURNOK #1 did. Across the whole
-21:00 hour EURNOK's median cost is **0.88R** (EURUSD 0.07R; US100 has no quotes 21:00-22:00), decaying to 0.15R at
-22:00 and 0.10R at 23:00, back to 0.04-0.07R by 00:00. The expensive window is 21:00-23:00 UTC; hour 20 is normal.
+Five of the six H4 closes sit inside the gate for every attached symbol bar two (below), 09:00 and 13:00 cheapest. The
+**21:00 UTC close has no M1 bar in its first five minutes for any symbol** (0 of 70 samples): quoting resumes minutes
+later, and that is when the EA sees the new bar and publishes - which is exactly what EURNOK #1 did.
 
-Consequences - OPEN for the coach:
-- The previous OPEN item (detach the eleven, re-sample at each bar) is **answered: do not detach.** The 09/13/17 closes
-  cost 0.01-0.06R for every exotic; the 16:07 sample that attached them was optimistic, not wrong.
-- An exotic signal on the **21:00 close is rejected, not deferred** - the gate runs after `Detect()` and nothing
-  re-presents a rejected candidate, so the setup is lost rather than delayed. Exotics effectively trade 5 of 6 bars.
-  Options: accept it, make 21:00 a formal no-present window for the exotics, or defer that bar's detection to 01:00.
-- The gate (0.15R) is **looser than the coach's own 0.10R attach cap**: EURPLN 0.124/0.119R and EURHUF 0.109R at the
-  01:00/05:00 closes pass the gate but exceed the cap. Options: align the gate to 0.10R, accept the mismatch, or detach
-  those two.
+The rollover is not an exotics problem. Median cost over the whole 21:00 hour, attached symbols: EURNOK 0.89R,
+GBPCHF 0.78R, EURPLN 0.74R, NZDCHF 0.72R, USDZAR 0.61R, EURCHF 0.59R, GBPUSD 0.23R, USDJPY 0.13R, EURUSD 0.07R (best
+case). It does not decay inside the hour either - by 5-minute bucket EURNOK is 0.95 / 1.03 / 1.02 / 0.99 / 0.85 ... /
+0.74R, so no short defer would rescue it; EURNOK is back to 0.15R only at 22:00 and 0.10R at 23:00. US100 / US500 /
+USOIL / XAUUSD / XAGUSD do not quote at all 21:00-22:00, so they lose nothing; BTCUSD is 0.00R around the clock.
+
+Full 24-hour profile per symbol: `data/study/spread_profile.csv` (`pipeline/spread_profile.py`, rerun it on the box).
+The study-template spread discount is one daily median per symbol and the rollover hour is ~10x that even for the
+majors, so any study leaning on the discount takes the per-bar column instead (coach ruling).
+
+### Coach rulings, 2026-09-23
+
+1. **The 21:00 bar: accept the rejects.** No no-present window, no defer - the gate is already the mechanism and a
+   second rule is one more thing the trader carries; a defer to 01:00 lands on the most expensive quoting bar with a
+   four-hour-stale setup. Condition, now enforced by `live_queue_check.py`: every rejected row carries entry / SL /
+   TP1 / TP2 / lots and a `reject_reason`, so the held-setup counterfactual is computable from bars. Revisit at
+   **n = 10 rejected rows**; if the lost setups out-earn a deferred entry, the build is a machine-initiated FREEZE
+   with recompute-at-reopen (the existing delay mechanism). Engineer's note to the coach: the population is not the
+   0.5 % exotic slice it was ruled on - ~40 FX symbols lose that bar - so n=10 arrives quickly and mostly from majors.
+2. **Gate aligned to the cap: `max_spread_r` 0.10R, all symbols.** The cap was derived (2x USOIL's drag); 0.15 was
+   not, and two numbers for "too expensive" is one too many. A TAKE-class signal refused on spread is a mechanical
+   reject like the election gate, not a graded skip. Consequence at the 01:00/05:00 closes: EURPLN loses both
+   (0.124 / 0.119R) and EURHUF loses 01:00 (0.109R). Neither is detached - their 09:00-17:00 bars are inside the cap.
+   The dashboard's amber/red thresholds now read `max_spread_r` itself (red = an approve would be refused right now).
 
 ## Standing items (checked when the named condition occurs)
 

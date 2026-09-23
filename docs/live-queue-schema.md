@@ -140,7 +140,7 @@ with ack reason **`weekend_flat`**. The flatten repeats at poll cadence, so a re
 ## Config files
 
 - `live.json` `{schema_version, election_horizon_days (14), max_age_bars (3), task_max_age_hours (24), max_parks (4),
-  weekend_flat_symbols ("BTCUSD" - comma list of roots), max_spread_r (0.15; 0 = off)}` — written with the input defaults if missing. Source of truth:
+  weekend_flat_symbols ("BTCUSD" - comma list of roots), max_spread_r (0.10; 0 = off - coach 2026-09-23, aligned to the universe cost cap)}` — written with the input defaults if missing. Source of truth:
   `provisioning/live.json` (`deploy_live.sh --config`).
 - `lineup.txt` — the charts `HybridLiveLauncher` opens at terminal start (one symbol per line, `#` comments); falls back to
   the script's compiled default when absent. Source: `provisioning/lineup.txt` (= `lineup_full.txt`, 47 symbols since
@@ -179,9 +179,10 @@ Columns are the tester's 46 plus, **appended in this order, live mode only** (§
 | `risk_pct_gate` | the detectors' viability-gate risk (`InpRiskPct`, 0.0100) |
 | `risk_mult_applied` | `risk_mult.json` multiplier at sizing time (C2; sizing only, detectors untouched) |
 | `auto` | `1` only on `skipped` rows with `skip_reason=2` written by the election gate (G1) |
+| `reject_reason` | free text on `rejected` rows only (spread gate, degenerate stop, SL-through while parked); commas become `;`. Last column, after the optional floor columns. Coach 2026-09-23: a rejected row also carries full levels **and the lots it would have traded**, so the held-setup counterfactual is computable from bars - `live_queue_check.py` fails a rejected row missing any of entry / SL / TP1 / lots / reason |
 
 `.delays.csv` appends `implicit` (`1` = bar-close FREEZE re-present, `0` = explicit `delay` task). Every grading reader
-uses `csv.DictReader` by header name, so the tester's 46-column files and the live 51-column files read identically;
+uses `csv.DictReader` by header name, so the tester's 46-column files and the live 52-column files read identically;
 tooling gets a `--live` root option in M2.
 
 ## State files (G4, Slice 4)

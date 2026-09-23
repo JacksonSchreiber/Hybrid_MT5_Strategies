@@ -353,6 +353,14 @@ def dashboard(q: dict) -> str:
     out.append("</table></div>")
     return page("Hybrid live", "".join(out), "home", refresh=30)
 
+def spread_cls(sz: dict) -> str:
+    """Colour the live spread against the gate itself (live.json max_spread_r), so one number drives both: red = an
+    approve would be refused `spread_too_wide` right now, amber = over half the gate."""
+    r = float(sz.get("spread_r") or 0)
+    mx = float(sz.get("max_spread_r") or 0) or 0.10
+    return "bad" if r > mx else ("warn" if r > mx / 2 else "ok")
+
+
 def signal_page(key: str, q: dict) -> str:
     s = C.signal(CFG, key)
     if not s: return page("Signal", '<div class="card bad">no such signal</div>')
@@ -370,7 +378,7 @@ def signal_page(key: str, q: dict) -> str:
     out.append(f'<div class="card"><div class="grid2"><div><span class="k">entry</span> <b class="v">{lv.get("entry")}</b>{" (STOP)" if lv.get("stop_entry") else ""}</div><div><span class="k">SL</span> <b class="v bad">{lv.get("sl")}</b></div>'
                f'<div><span class="k">TP1</span> <b class="v">{lv.get("tp1")}</b> <span class="k">{rr.get("tp1")}R</span></div><div><span class="k">TP2</span> <b class="v">{lv.get("tp2") or "-"}</b> <span class="k">{rr.get("runner")}R</span></div>'
                f'<div><span class="k">lots</span> <b class="v">{sz.get("lots")}</b> <span class="k">{E(sz.get("lots_line", ""))}</span></div><div><span class="k">risk mult</span> <b class="v">{sz.get("risk_mult_applied")}</b> <span class="k">→ {float(sz.get("risk_pct_effective", 0) or 0) * 100:.2f}%</span></div>'
-               f'<div><span class="k">spread now</span> <b class="v {"bad" if float(sz.get("spread_r") or 0) > 0.10 else ("warn" if float(sz.get("spread_r") or 0) > 0.05 else "ok")}">{float(sz.get("spread_r") or 0):.3f}R</b> <span class="k">({sz.get("spread")} — paid the moment it opens)</span></div></div>'
+               f'<div><span class="k">spread now</span> <b class="v {spread_cls(sz)}">{float(sz.get("spread_r") or 0):.3f}R</b> <span class="k">({sz.get("spread")} — paid the moment it opens)</span></div></div>'
                f'<div class="k">delays {d} · implicit streak {s.get("implicit_streak", 0)} · presented {E(s.get("published_at", ""))} · kill switch {"on" if s.get("trading_enabled") else "OFF"}</div></div>')
     # events
     evs = s.get("events") or []
