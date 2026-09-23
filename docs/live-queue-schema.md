@@ -34,7 +34,8 @@ strategy, strategy_text, direction (BUY|SELL), direction_sign (+1|-1),
 levels{entry, sl, tp, tp1, tp2, partial_fraction, stop_entry, two_target},
 true_orig{entry, sl, tp1, tp2}                      -- frozen at first presentation (to_* columns)
 rr{detector, runner, tp1, floor},
-sizing{lots, risk_pct_gate, risk_mult_applied, risk_pct_effective, lots_line, sl_atr, atr14},
+sizing{lots, risk_pct_gate, risk_mult_applied, risk_pct_effective, lots_line, sl_atr, atr14,
+       spread, spread_r, max_spread_r}   -- trader 2026-09-23: what the CURRENT spread costs on this setup, in R,
 regime{tag (TREND_UP|TREND_DOWN|CHOP|""), with_trend ("1"|"0"|""), pretty},
 decision_class (TAKE|DISCRETION), protocol_text (rule-citing wording, identical to the popup),
 events[{t_utc, anchor_utc, hours_until, ccy, name, cls (V|W|C|H), sig ([HIGH]|[MED]|[LOW]),
@@ -73,7 +74,7 @@ unknown_verb, symbol_mismatch, unknown_signal, signal_not_open, unknown_position
 restart_during_execution, trading_disabled, events_not_loaded, election_gate, setup_lock, geom_invalid, rr_below_floor,
 stop_too_tight, lots_zero, ftmo_daily_headroom, ftmo_max_headroom, be_floor, be_stops_level, be_would_loosen,
 ratchet_not_banked, ratchet_already_used, ratchet_no_tp1, ratchet_not_past_tp1, ratchet_would_loosen, min_lot_split, order_failed,
-weekend_flat` (§10.1 live, 2026-09-21).
+weekend_flat` (§10.1 live, 2026-09-21), `spread_too_wide` (the spread gate, 2026-09-23).
 
 `order_failed:<retcode>` carries the raw MT5 trade-server code, because that is all the EA is handed. The stored
 reason is never rewritten (the queue stays machine-readable); every place that SHOWS one — the web flash message and
@@ -128,7 +129,7 @@ risk the position was SIZED at; the advisor's open-exposure block weights curren
 
 `<ts>|<symbol>|<event>|<task_id>|<verb>|<target>|<result>|<reason>|<detail>` — events: `restart, stop, kill_switch, config,
 published, republished, auto_skip, invalidated, expired_code8, claimed, duplicate, gate, executed, rejected, acked,
-adopt_orphan, month_rollover, ftmo_reject, weekend_flat`. A torn last line is possible; readers tolerate it.
+adopt_orphan, month_rollover, ftmo_reject, weekend_flat, spread_gate, d1_warmup, d1_ready, seq_floor, external_edit, bar`. A torn last line is possible; readers tolerate it.
 
 **§10.1 live weekend-flat (coach 2026-09-21).** For every root listed in `live.json weekend_flat_symbols`: from the open of
 the last H4 bar before the broker's Friday close (`SymbolInfoSessionTrade`, BTCUSD.sim 23:59 → Fri 20:00 broker bar) until
@@ -139,7 +140,7 @@ with ack reason **`weekend_flat`**. The flatten repeats at poll cadence, so a re
 ## Config files
 
 - `live.json` `{schema_version, election_horizon_days (14), max_age_bars (3), task_max_age_hours (24), max_parks (4),
-  weekend_flat_symbols ("BTCUSD" - comma list of roots)}` — written with the input defaults if missing. Source of truth:
+  weekend_flat_symbols ("BTCUSD" - comma list of roots), max_spread_r (0.15; 0 = off)}` — written with the input defaults if missing. Source of truth:
   `provisioning/live.json` (`deploy_live.sh --config`).
 - `lineup.txt` — the charts `HybridLiveLauncher` opens at terminal start (one symbol per line, `#` comments); falls back to
   the script's compiled default when absent. Source: `provisioning/lineup.txt` (= `lineup_full.txt`, 47 symbols since

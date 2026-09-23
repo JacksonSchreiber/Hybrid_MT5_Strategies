@@ -369,7 +369,8 @@ def signal_page(key: str, q: dict) -> str:
     out.append(f'<details><summary class="k">static EA charts (what the advisor saw)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')
     out.append(f'<div class="card"><div class="grid2"><div><span class="k">entry</span> <b class="v">{lv.get("entry")}</b>{" (STOP)" if lv.get("stop_entry") else ""}</div><div><span class="k">SL</span> <b class="v bad">{lv.get("sl")}</b></div>'
                f'<div><span class="k">TP1</span> <b class="v">{lv.get("tp1")}</b> <span class="k">{rr.get("tp1")}R</span></div><div><span class="k">TP2</span> <b class="v">{lv.get("tp2") or "-"}</b> <span class="k">{rr.get("runner")}R</span></div>'
-               f'<div><span class="k">lots</span> <b class="v">{sz.get("lots")}</b> <span class="k">{E(sz.get("lots_line", ""))}</span></div><div><span class="k">risk mult</span> <b class="v">{sz.get("risk_mult_applied")}</b> <span class="k">→ {float(sz.get("risk_pct_effective", 0) or 0) * 100:.2f}%</span></div></div>'
+               f'<div><span class="k">lots</span> <b class="v">{sz.get("lots")}</b> <span class="k">{E(sz.get("lots_line", ""))}</span></div><div><span class="k">risk mult</span> <b class="v">{sz.get("risk_mult_applied")}</b> <span class="k">→ {float(sz.get("risk_pct_effective", 0) or 0) * 100:.2f}%</span></div>'
+               f'<div><span class="k">spread now</span> <b class="v {"bad" if float(sz.get("spread_r") or 0) > 0.10 else ("warn" if float(sz.get("spread_r") or 0) > 0.05 else "ok")}">{float(sz.get("spread_r") or 0):.3f}R</b> <span class="k">({sz.get("spread")} — paid the moment it opens)</span></div></div>'
                f'<div class="k">delays {d} · implicit streak {s.get("implicit_streak", 0)} · presented {E(s.get("published_at", ""))} · kill switch {"on" if s.get("trading_enabled") else "OFF"}</div></div>')
     # events
     evs = s.get("events") or []

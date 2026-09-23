@@ -211,6 +211,22 @@ at init and at heartbeat cadence until `Bars(PERIOD_D1) >= 211`, audited `d1_war
 blank; the monitor sends one aggregated Telegram line. After the 2026-09-23 deploy: 47/47 `d1_ready` (FX 350 bars,
 indices/metals/BTC 403-523), 0 blank, tags 25 TREND_UP / 19 TREND_DOWN / 3 CHOP.
 
+## Spread gate + spread in R on every signal (trader 2026-09-23)
+
+The spread is paid the instant a trade opens, so every signal now states it in R (`sizing.spread_r` = spread / stop):
+the signal page shows "spread now 0.031R" beside the lots (amber > 0.05R, red > 0.10R) and the advisor card carries an
+"Entry cost (spread) right now" line. `live.json max_spread_r` (0.15, 0 = off) is a hard gate: a signal whose spread
+costs more than that is never shown - journaled as a `rejected` row with the reason, audit `spread_gate`; and an approve
+that arrives after the spread has blown out is refused `spread_too_wide` instead of the old, misleading
+`stop_too_tight` (which now also prints the distance, the minimum and the spread in R).
+
+Why: a EURNOK approve was refused `stop_too_tight` at 21:16 UTC with a 2.87-ATR stop - the real cause was the rollover
+spread at 0.0418 (24x its midday 0.0017), and `MinStopDist` requires the stop to be >= 2x spread. Measured 21:18 UTC,
+spread cost per trade: USDZAR 1.20R, EURPLN 1.16R, EURNOK 1.04R, USDNOK 0.93R, EURSEK 0.85R, USDCZK 0.84R, EURHUF 0.83R,
+USDPLN 0.72R, USDHUF 0.69R, USDMXN 0.66R, USDSEK 0.58R - against EURUSD 0.079R, US100 0.008R, XAUUSD 0.006R. The cost
+filter that attached those eleven sampled 16:07 UTC (the tightest hour), so they passed the coach's 0.10R cap on a
+best-case reading. OPEN for the coach: detach the eleven, and re-run the filter sampling at each H4 bar open over 24 h.
+
 ## Standing items (checked when the named condition occurs)
 
 - **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and

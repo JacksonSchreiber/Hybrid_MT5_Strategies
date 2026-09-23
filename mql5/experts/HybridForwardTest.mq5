@@ -102,6 +102,7 @@ input double InpRiskPct     = 0.01;     // risk per trade (fraction of equity)
 //--- account-safety guards (reject degenerate signals; cap monster positions)
 input double InpMinStopATR  = 0.5;      // reject signal if SL distance < this * ATR(14)
 input double InpMinStopSpreads = 2.0;   // ...also require SL distance >= this * current spread
+input double InpMaxSpreadR  = 0.0;      // live: refuse a signal whose CURRENT spread costs more than this in R (0 = off; live.json max_spread_r)
 input double InpMaxMarginPct = 0.50;    // hard cap: one position may use <= this fraction of free margin
 input long   InpMagic       = 990217;   // magic number (graded stream)
 //--- EMArev INVERSE live option (interactive tester only; ungraded, isolated cohort).
@@ -469,6 +470,7 @@ struct ParkSlot { bool active; LivePark park; SignalCandidate cand; int delay_co
 ParkSlot g_slots[MAX_PARKS];
 int      g_cfg_max_parks=1;
 string   g_cfg_wf_symbols="";   // live.json weekend_flat_symbols: roots (comma list) held to §10.1 on the LIVE path
+double   g_cfg_max_spread_r=0.0;  // live.json max_spread_r: refuse a signal whose spread costs more than this in R (0 = off)
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
 void LiveRecomputeParked(){ g_live_parked=(ParkCount()>0); }
@@ -728,6 +730,7 @@ void LiveLoadConfig()
       g_cfg_task_max_age_h=(int)StringToInteger(JGet(k,v,"task_max_age_hours","24"));
       g_cfg_max_parks=(int)MathMax(1,MathMin(MAX_PARKS,StringToInteger(JGet(k,v,"max_parks","1"))));   // parking slots per symbol (trader ruling 2026-09-16)
       g_cfg_wf_symbols=JGet(k,v,"weekend_flat_symbols","");   // §10.1 live (coach 2026-09-21): e.g. "BTCUSD"
+      g_cfg_max_spread_r=StringToDouble(JGet(k,v,"max_spread_r",DoubleToString(InpMaxSpreadR,3)));   // trader 2026-09-23: spread gate, in R
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
@@ -1478,6 +1481,17 @@ double MinStopDist(double atr)
    return m;
   }
 
+//--- what the CURRENT spread costs on this setup, in R (spread / stop distance). The trader pays it the moment the
+//--- trade opens, so it is the honest per-trade entry cost: 0.01R is noise, 0.5R eats half the risk budget. Exotic pairs
+//--- widen 15-70x at the rollover hour (measured 2026-09-23 21:18 UTC), which is when two of the six H4 bars close.
+double SpreadR(double entry,double sl)
+  {
+   double stop=MathAbs(entry-sl); if(stop<=0.0) return 0.0;
+   double sp=SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   if(sp<0.0) sp=0.0;
+   return sp/stop;
+  }
+
 //--- log a rejected (never-shown) signal to the journal so the coach can see it
 //--- and the underlying bug is never silently hidden.
 void JournalReject(int id,SignalCandidate &cand,string why)
@@ -1576,9 +1590,11 @@ bool ValidateMarketEntry(SignalCandidate &cand,double &en,double &rrn,string &wh
    why="";
    if(!geom_ok || rrn<StratMinRR(cand.strategy) || MathAbs(en-cand.sl)<minstopn)
      {
+      double sprn=SpreadR(en,cand.sl);
       why=(!geom_ok ? "price past a level" :
-           (MathAbs(en-cand.sl)<minstopn ? "stop too tight" :
-            StringFormat("R:R %.1f < min %.1f",rrn,StratMinRR(cand.strategy))));
+           (g_cfg_max_spread_r>0.0 && sprn>g_cfg_max_spread_r ? StringFormat("spread too wide: %.3fR of the stop (max %.3fR)",sprn,g_cfg_max_spread_r) :
+           (MathAbs(en-cand.sl)<minstopn ? StringFormat("stop too tight: %s to SL, min %s (spread %.3fR)",DoubleToString(MathAbs(en-cand.sl),_Digits),DoubleToString(minstopn,_Digits),sprn) :
+            StringFormat("R:R %.1f < min %.1f",rrn,StratMinRR(cand.strategy)))));
       return false;
      }
    return true;
@@ -1717,6 +1733,8 @@ void WriteSignalJson(string status,string auto_reason)
    j.Key("sizing"); j.BeginObj();
      j.KNum("lots",g_park.lots,2); j.KNum("risk_pct_gate",InpRiskPct,4); j.KNum("risk_mult_applied",g_risk_mult,3);
      j.KNum("risk_pct_effective",InpRiskPct*g_risk_mult,4); j.KStr("lots_line",LotsLine(g_park.lots,c.entry,c.sl,atr));
+     j.KNum("spread",SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID),_Digits);
+     j.KNum("spread_r",SpreadR(c.entry,c.sl),4); j.KNum("max_spread_r",g_cfg_max_spread_r,3);   // entry cost in R (trader 2026-09-23)
      j.KNum("sl_atr",(atr>0.0? risk/atr : 0.0),2); j.KNum("atr14",atr,_Digits);
    j.EndObj();
    j.Key("regime"); j.BeginObj();
@@ -2767,6 +2785,17 @@ void HandleSignal(SignalCandidate &cand)
          double atrx=(atr_now>0.0? stopdist/atr_now : 0.0);
          JournalReject(id,cand,StringFormat("SL distance %s (%.2f ATR) < min %s - degenerate stop",
                        DoubleToString(stopdist,_Digits),atrx,DoubleToString(minstop,_Digits)));
+         return;
+        }
+      //--- SPREAD GATE (trader 2026-09-23): the entry cost is paid the instant the trade opens, so a signal whose current
+      //--- spread costs more than max_spread_r of the stop is never shown - the trader cannot judge that cost away.
+      double spr=SpreadR(cand.entry,cand.sl);
+      if(g_cfg_max_spread_r>0.0 && spr>g_cfg_max_spread_r)
+        {
+         AuditLine("spread_gate","","",StringFormat("sig:%d",id),"rejected","spread_too_wide",
+                   StringFormat("%s spread=%.5f = %.3fR of the %.5f stop (max %.3fR)",cand.strategy,
+                                SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID),spr,stopdist,g_cfg_max_spread_r));
+         JournalReject(id,cand,StringFormat("spread %.3fR of the stop > max %.3fR - entry cost too high",spr,g_cfg_max_spread_r));
          return;
         }
      }

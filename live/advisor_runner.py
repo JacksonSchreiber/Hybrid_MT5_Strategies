@@ -104,6 +104,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 - **Risk geometry:** SL 1.0R · TP1 {r_tp1}R · TP2 {r_run}R (floor {rr.get('floor')}R; detector already sized to the gate risk and cleared the R:R floor)
 {swing_block(sig)}
 - **Sizing:** {sz.get('lots_line', '')} · risk multiplier in effect {sz.get('risk_mult_applied', 1.0)} → effective {float(sz.get('risk_pct_effective', 0.01))*100:.2f}%
+- **Entry cost (spread) right now:** {sz.get('spread')} = **{float(sz.get('spread_r') or 0):.3f}R** of the stop{f" (gate: refused above {float(sz.get('max_spread_r') or 0):.2f}R)" if sz.get('max_spread_r') else ""} — you pay this the moment the trade opens
 {EXP.build(sig, cfg)}
 - **Kill switch:** trading {'ENABLED' if sig.get('trading_enabled') else 'DISABLED (approve would be refused)'}
 - **Events (next 14 d, {'/'.join(sorted(C.symbol_ccys(sig.get('symbol', '')) - {'All'}))}):**
