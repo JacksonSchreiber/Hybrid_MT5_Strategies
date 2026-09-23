@@ -234,6 +234,20 @@ def eligibility_card() -> str:
 
 
 
+
+def sysres_line() -> str:
+    """box CPU / RAM / disk (trader 2026-09-23): one line, amber then red as each approaches its limit."""
+    from live import sysres
+    r = sysres.read(CFG)
+    def cls(v, warn, bad): return "bad" if (v is not None and v >= bad) else ("warn" if (v is not None and v >= warn) else "ok")
+    cpu = r["cpu_pct"]; mu, mt = r["mem_used_gb"], r["mem_total_gb"]; du, dt = r["disk_used_gb"], r["disk_total_gb"]
+    mp = (mu / mt * 100) if (mu is not None and mt) else None
+    dp = (du / dt * 100) if (du is not None and dt) else None
+    parts = [f'CPU <b class="{cls(cpu, 70, 85)}">{cpu:.0f}%</b>' if cpu is not None else "CPU -",
+             f'RAM <b class="{cls(mp, 80, 92)}">{mu:.1f}</b> / {mt:.1f} GB' if mp is not None else "RAM -",
+             f'disk <b class="{cls(dp, 80, 90)}">{du:.0f}</b> / {dt:.0f} GB ({dt - du:.0f} free)' if dp is not None else "disk -"]
+    return f'<div class="k">box: {" · ".join(parts)}</div>'
+
 def be_ok(p: dict) -> bool:
     """SL->BE offered only if it would TIGHTEN: a stop already past entry (ratchet, or moved by hand in MT5) makes BE a loosen."""
     try:
@@ -272,6 +286,7 @@ def dashboard(q: dict) -> str:
     fs = mt5feed.status()
     if fs.get("available"):
         out.append(f'<div class="k">terminal feed: {"connected" if fs.get("connected") else "<span class=bad>NOT CONNECTED</span>"} · {E(str(fs.get("server") or ""))} · build {fs.get("build")}</div>')
+    out.append(sysres_line())
     out.append(f'<div class="card"><div class="row"><div><div class="k">Kill switch</div><div class="big {"ok" if ks else "bad"}">{"TRADING ENABLED" if ks else ("DISABLED" if ks is False else "DISABLED (no config file)")}</div></div>'
                f'<form method="post" action="/kill" class="inline" style="margin-left:auto"><input type="hidden" name="enable" value="{0 if ks else 1}"><button class="btn {"no" if ks else "go"}" onclick="return confirm(\'{"Disable" if ks else "Enable"} trading?\')">{"Disable" if ks else "Enable"}</button></form></div></div>')
     acct = next((hb for hb in (C.heartbeat(CFG, x) for x in syms) if hb and (hb.get("ftmo") or {}).get("initial_balance")), None)
