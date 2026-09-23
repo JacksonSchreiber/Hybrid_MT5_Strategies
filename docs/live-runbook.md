@@ -177,8 +177,10 @@ cancelled, no new entries, approve refused `weekend_flat`. Verified on the box b
 weekend_cutoff:"Fri 20:00 broker"`); the first real trigger is Friday. ATR floor off. Live card: class + symbol-rules line
 from `config/symbol_rules.json` (shipped 2026-09-18).
 
-**Dual advisor.** `advisor.models` in the live config: `sonnet-low` (sonnet, low, 150 s, 3 parallel) and `opus-high` (opus,
-high, 600 s, 2 parallel). One bundle per presentation, two independent sessions launched in parallel; per-model records,
+**Dual advisor.** `advisor.models` in the live config: `sonnet-low` (sonnet, low, 150 s, 3 parallel) and `opus-high`
+(`claude-opus-5-5` since 2026-09-23 - trader ruling; needs Claude Code CLI >= 2.1.281 on the box, 2.1.273 rejects the id
+with `[claude-code:unrecognized_model]`; its effort default is `medium`, we pass `--effort high` explicitly), high, 600 s,
+2 parallel). One bundle per presentation, two independent sessions launched in parallel; per-model records,
 notes files and replies; runner-owned verdict log with a model field. Rate limits are never auto-retried - the panel says so,
 Telegram alerts, and "Run <model> again" re-runs one model. Dashboard: consults today per model. To drop Opus (subscription
 load), delete its entry from `advisor.models` and redeploy - nothing else depends on the pair.
