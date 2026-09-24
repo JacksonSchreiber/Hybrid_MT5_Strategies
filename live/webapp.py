@@ -250,6 +250,15 @@ def eligibility_card() -> str:
 
 
 
+def tc_watch_line() -> str:
+    """The coach's watch item counts down in the open, so it cannot quietly expire (monitor flags at 100)."""
+    st = C.load_json(os.path.join(CFG["root"], "advisor", "trendcont_watch.json")) or {}
+    n = int(st.get("count") or 0)
+    if not n: return ""
+    done = " — due for re-check" if st.get("flagged") else ""
+    return f'<div class="k">coach watch item: {n}/100 TrendCont decisions since the 2026-09-24 ruling{done}</div>'
+
+
 def sysres_line() -> str:
     """box CPU / RAM / disk (trader 2026-09-23): one line, amber then red as each approaches its limit."""
     from live import sysres
@@ -307,6 +316,7 @@ def dashboard(q: dict) -> str:
     acct = next((hb for hb in (C.heartbeat(CFG, x) for x in syms) if hb and (hb.get("ftmo") or {}).get("initial_balance")), None)
     if acct: out.append(f'<div class="card"><div class="k">Account · from {E(acct.get("symbol", ""))} beat {C.rel_time(C.parse_iso(acct.get("ts")))}</div>' + ftmo_block(acct) + '</div>')
     out.append(shadow_line())
+    out.append(tc_watch_line())
     # backup + telegram test (trader rulings 2026-09-16: manual 30-day zip instead of a nightly pull)
     from live import backup
     ds = backup.days_since(CFG); lb = backup.last(CFG)

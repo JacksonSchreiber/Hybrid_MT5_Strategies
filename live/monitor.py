@@ -304,8 +304,28 @@ class Monitor:
         from live import eligibility as ELIG
         ELIG.refresh(self.cfg, 25, self.log)          # prices newly closed positions from the broker deals (cached)
 
+    # Coach 2026-09-24 lessons entry: two calibration asymmetries go back under review after 100 more TrendCont
+    # decisions. Counting them by hand is how a watch item quietly expires, so the monitor counts and flags once.
+    TC_WATCH_N = 100
+    TC_WATCH_FROM = "2026-09-24"
+
+    def trendcont_watch(self):
+        p = os.path.join(self.cfg["root"], "advisor", "trendcont_watch.json")
+        st = C.load_json(p) or {"count": 0, "flagged": False}
+        n = sum(1 for r in C.journal_rows(self.cfg)
+                if r.get("strategy") == "TrendCont" and (r.get("signal_time") or "")[:10].replace(".", "-") >= self.TC_WATCH_FROM
+                and (r.get("decision", "").startswith("approved")
+                     or (r.get("decision") == "skipped" and r.get("skip_reason") in ("1", "2", "3", "4", "5", "6"))))
+        if n != st.get("count"): st["count"] = n; C.atomic_write_json(p, st)
+        if n >= self.TC_WATCH_N and not st.get("flagged"):
+            st["flagged"] = True; C.atomic_write_json(p, st)
+            self.send(f"COACH WATCH ITEM DUE: {n} TrendCont decisions since {self.TC_WATCH_FROM}. The two calibration "
+                      "asymmetries are up for re-check - over-taking in TREND_DOWN (57% vs 25% in TREND_UP, and the only "
+                      "negative selection gap at -0.19R) and under-taking on US100 (20%, where the picks returned +0.84R "
+                      "against -0.18R for the passes). Re-run pipeline/trader_selection_study.py with the live rows added.")
+
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()
