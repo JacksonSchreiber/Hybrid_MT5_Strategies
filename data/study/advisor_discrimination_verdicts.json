@@ -1,0 +1,422 @@
+[
+ {
+  "key": "arc-01",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 18.3,
+  "step": "2 (drift vs slam)"
+ },
+ {
+  "key": "arc-01",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 11.7,
+  "step": "2"
+ },
+ {
+  "key": "arc-01",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 81.5,
+  "step": "2 (slam) + 5 (wall)"
+ },
+ {
+  "key": "arc-02",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 38.0,
+  "step": "5 (room to TP1)"
+ },
+ {
+  "key": "arc-02",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 13.0,
+  "step": "3"
+ },
+ {
+  "key": "arc-02",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 54.3,
+  "step": "1. **\u2717** The tag says TREND_UP, but the D1 chart isn't a sta"
+ },
+ {
+  "key": "arc-03",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 26.3,
+  "step": "2 (drift vs slam)"
+ },
+ {
+  "key": "arc-03",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 10.6,
+  "step": "2"
+ },
+ {
+  "key": "arc-03",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 71.3,
+  "step": "2"
+ },
+ {
+  "key": "arc-04",
+  "cell": "sonnet-low",
+  "v": "TAKE",
+  "s": 26.8,
+  "step": "5 (room to bank)"
+ },
+ {
+  "key": "arc-04",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 15.6,
+  "step": "5"
+ },
+ {
+  "key": "arc-04",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 44.3,
+  "step": "5 room to bank"
+ },
+ {
+  "key": "arc-05",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 24.8,
+  "step": "2"
+ },
+ {
+  "key": "arc-05",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 12.5,
+  "step": "2"
+ },
+ {
+  "key": "arc-05",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 46.0,
+  "step": "2"
+ },
+ {
+  "key": "arc-06",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 28.1,
+  "step": "2 (slam) & 5 (double-bottom wall in first 1R)"
+ },
+ {
+  "key": "arc-06",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 12.4,
+  "step": "2"
+ },
+ {
+  "key": "arc-06",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 40.7,
+  "step": "2"
+ },
+ {
+  "key": "arc-07",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 30.6,
+  "step": "5 (room to bank)"
+ },
+ {
+  "key": "arc-07",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 15.5,
+  "step": "5"
+ },
+ {
+  "key": "arc-07",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 46.3,
+  "step": "5 room to the bank"
+ },
+ {
+  "key": "arc-08",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 15.1,
+  "step": "2 (slam) & 5 (repeated wall)"
+ },
+ {
+  "key": "arc-08",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 11.3,
+  "step": "2"
+ },
+ {
+  "key": "arc-08",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 27.5,
+  "step": "2"
+ },
+ {
+  "key": "arc-09",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 19.5,
+  "step": "2 (drift vs slam)"
+ },
+ {
+  "key": "arc-09",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 11.5,
+  "step": "2"
+ },
+ {
+  "key": "arc-09",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 41.9,
+  "step": "2"
+ },
+ {
+  "key": "arc-10",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 27.5,
+  "step": "2"
+ },
+ {
+  "key": "arc-10",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 12.1,
+  "step": "2"
+ },
+ {
+  "key": "arc-10",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 46.8,
+  "step": "2"
+ },
+ {
+  "key": "arc-11",
+  "cell": "sonnet-low",
+  "v": "TAKE",
+  "s": 34.9,
+  "step": "the swing table shows two lows inside the first 1R (1.05423"
+ },
+ {
+  "key": "arc-11",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 16.5,
+  "step": "3"
+ },
+ {
+  "key": "arc-11",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 51.0,
+  "step": "3"
+ },
+ {
+  "key": "arc-12",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 21.8,
+  "step": "5 (room to bank)"
+ },
+ {
+  "key": "arc-12",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 16.3,
+  "step": "5"
+ },
+ {
+  "key": "arc-12",
+  "cell": "claude-high",
+  "v": "TAKE",
+  "s": 73.1,
+  "step": "5"
+ },
+ {
+  "key": "arc-13",
+  "cell": "sonnet-low",
+  "v": "TAKE",
+  "s": 25.9,
+  "step": "the only high between entry and TP1 is 4694.20 (17 bars ago,"
+ },
+ {
+  "key": "arc-13",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 14.1,
+  "step": "5"
+ },
+ {
+  "key": "arc-13",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 55.4,
+  "step": "5"
+ },
+ {
+  "key": "arc-14",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 34.9,
+  "step": "2"
+ },
+ {
+  "key": "arc-14",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 12.9,
+  "step": "2"
+ },
+ {
+  "key": "arc-14",
+  "cell": "claude-high",
+  "v": "TAKE",
+  "s": 151.0,
+  "step": "2"
+ },
+ {
+  "key": "arc-15",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 39.5,
+  "step": "5 (room to bank)"
+ },
+ {
+  "key": "arc-15",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 13.1,
+  "step": "5"
+ },
+ {
+  "key": "arc-15",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 55.0,
+  "step": "5"
+ },
+ {
+  "key": "arc-16",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 26.3,
+  "step": "2"
+ },
+ {
+  "key": "arc-16",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 11.1,
+  "step": "2"
+ },
+ {
+  "key": "arc-16",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 36.1,
+  "step": "2"
+ },
+ {
+  "key": "arc-17",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 23.6,
+  "step": "2"
+ },
+ {
+  "key": "arc-17",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 11.8,
+  "step": "2"
+ },
+ {
+  "key": "arc-17",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 62.8,
+  "step": "2"
+ },
+ {
+  "key": "arc-18",
+  "cell": "sonnet-low",
+  "v": "TAKE",
+  "s": 34.4,
+  "step": "5 (room to bank)"
+ },
+ {
+  "key": "arc-18",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 15.5,
+  "step": "1"
+ },
+ {
+  "key": "arc-18",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 54.7,
+  "step": "3"
+ },
+ {
+  "key": "arc-19",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 17.7,
+  "step": "2 (drift vs slam)"
+ },
+ {
+  "key": "arc-19",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 12.7,
+  "step": "2"
+ },
+ {
+  "key": "arc-19",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 104.1,
+  "step": "2"
+ },
+ {
+  "key": "arc-20",
+  "cell": "sonnet-low",
+  "v": "SKIP",
+  "s": 28.0,
+  "step": "5"
+ },
+ {
+  "key": "arc-20",
+  "cell": "claude-low",
+  "v": "SKIP",
+  "s": 14.8,
+  "step": "5"
+ },
+ {
+  "key": "arc-20",
+  "cell": "claude-high",
+  "v": "SKIP",
+  "s": 86.8,
+  "step": "5"
+ }
+]

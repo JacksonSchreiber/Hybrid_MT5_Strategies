@@ -1,0 +1,640 @@
+
+
+===== arc-01 | claude-opus-5-5 | low | SKIP | 11.7s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5✗ 6?
+Why: This fails at step 2. The pullback is a slam, not a drift. Two single bars hit the slam threshold on their own (2.08× and 2.20× ATR), the 2.20× being the newest, and one pair of consecutive bars is 2.08× then 1.54×. Step 5 fails as well. The table shows a floor that has held three times inside the first 1R: swing lows at 12478.2, 12454.8 and 12441.3, against a 1R target of about 12171. That is a range edge sitting just 70–105 points under entry. The H4 rally has also pushed price back up to the EMA200, so this is not a clean continuation.
+Changes my mind: An orderly H4 close below 12441, which clears the triple bottom, followed by a drifting retest from below.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3? 4? 5✗ 6? | Q:- | step: 2 | slam pullback (2.08×/2.20× ATR bars) plus triple-bottom wall 12441–12478 inside first 1R
+
+===== arc-01 | sonnet | low | SKIP | 18.3s
+VERDICT: SKIP (quick) (confidence: high)
+Checks — Start Here: regime ✓ news ? correlation ?
+Checks — TrendCont steps: 1✓ 2✗ 3? 4✓ 5✗ 6?
+Why: Step 2 is decisive and explicit on the card — largest pullback bar 2.20x ATR and two consecutive bars both ≥1.54x, which meets the guide's slam threshold (≥2x single or two consecutive ≥1.5x) rather than an orderly drift. Separately, step 5 also fails: the swing-low table shows three lows clustered 12441.30/12454.80/12478.20, all inside the first 1R above the 12171 mark, a held-multiple-times level between entry and TP1 — a wall, not clear road.
+Changes my mind: If the card's ATR multiples were mis-stated and the true largest pullback bar were under 2x with no consecutive pair ≥1.5x, step 2 would pass and this would be a scorecard worth re-running on step 5 alone.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓?? steps:1✓2✗3?4✓5✗6? | Q:- | step: 2 (drift vs slam) | slam bar 2.20x ATR with consecutive pair ≥1.54x, not an orderly drift
+
+===== arc-02 | sonnet | low | SKIP | 38.0s
+**VERDICT: SKIP (quick)** (confidence: medium)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✗ 6 n/a
+Quality: C — capped by the resistance shelf ahead
+Why: Regime and pullback geometry both pass cleanly — step 2's numbers confirm an orderly drift (largest bar 1.98x ATR, no slam), and the H4 chart shows a genuine sweep-and-reclaim off the 2580s lows into a clean green trigger bar. But step 5 fails: the swing table lists three separate swing highs (2651.789 / 2658.704 / 2664.475) all inside the first 1R above entry (entry+1R ≈ 2666), matching the visible consolidation/resistance box on the H4 chart — a repeated-test shelf, not a single untouched swing, so it's a wall per the guide's rule, not a `?`.
+Changes my mind: A clean H4 close above ~2665 (through the whole shelf) before entry would flip step 5 to a pass.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓nan steps:1✓2✓3✓4✓5✗6? | Q:C | step: 5 (room to TP1) | three stacked swing highs (2651.789/2658.704/2664.475) form a resistance shelf inside the first 1R to TP1
+
+===== arc-02 | claude-opus-5-5 | low | SKIP | 13.0s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ?   news n/a   correlation n/a
+Checks — TrendCont steps:  1✗ 2✓ 3✗ 4? 5? 6?
+Why: This is not a pullback inside an uptrend. The H4 structure has turned down, so step 3 (structure intact) fails. The swing table shows lower highs one after another (2692.9 → 2664.5 → 2658.7 → 2651.8 → 2626.5) and the lows have broken down (2633.1 → 2582.9). The entry at 2630 also sits below a bearish H4 EMA20/50/200 stack. Step 1 fails too: the D1 TREND_UP tag is stale, because D1 has been ranging for roughly 45 bars with EMA20 flat and tangled with EMA50. Step 2 passes on the card's numbers (largest bar 1.98× ATR, no slam), but that does not rescue a broken trend. Step 5 is only `?`: the 2651.8–2664.5 highs sit inside the first 1R (about 2666), but no single level has held twice.
+Changes my mind: An H4 close back above EMA50 and the 2651.8 swing high would restore the uptrend structure and make this a real continuation.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:??? steps:1✗2✓3✗4?5?6? | Q:- | step: 3 | H4 shows lower highs 2692→2651→2626 and a broken low at 2582.9 under a bearish EMA stack, so this is a downtrend, not a pullback
+
+===== arc-01 | claude-opus-5-5 | high | SKIP | 81.5s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation are withheld on this archive card, so they don't apply; the tag reads TREND_DOWN, with-trend)
+Checks — TrendCont steps:  1✗ 2✗ 3✗ 4✓ 5✗ 6?
+Why: The decisive step is **step 2: the pullback is a slam.** On the card's own ATR (138.96), the rally off the 12441.30 low came in two bars, 2.08× then 1.54× ATR. That fails both slam tests: one bar at 2× or more, and two bars in a row at 1.5× or more. The 2.20× bar at the end of the list is the red signal candle itself, and the pullback is a slam even without it. **Step 5 fails on its own too:** the swing table has three lows at 12441.30, 12454.80 and 12478.20 (6, 11 and 18 bars ago). That's a triple bottom sitting 0.18–0.28R below entry, with the 12500 round number at 0.12R, and the 1R bank is at 12171. Steps 1 and 3 also fail: the H4 has held above a rising EMA20 for about 30 bars, and by my read of the image the D1 bounce has already cleared its last lower high (around 12.6k).
+Changes my mind: Nothing on this card. It would need the 12441–12478 floor already broken and the rally leg to be a slow multi-bar drift instead of two bars each 1.5× ATR or more. As drawn, steps 2 and 5 each fail on their own.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓?? steps:1✗ 2✗ 3✗ 4✓ 5✗ 6? | Q:- | step: 2 (slam) + 5 (wall) | two-bar slam (2.08×, 1.54× ATR) into a triple-bottom floor 12441/12455/12478 plus 12500 round number inside 0.3R
+
+===== arc-03 | sonnet | low | SKIP | 26.3s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here: regime ✓   news n/a   correlation n/a
+Checks — TrendCont steps: 1✓ 2✗ 3? 4? 5? 6?
+Why: Step 2 is decisive — the card's own ATR math shows the deepest pullback bar at 2.58× H4 ATR(14), clearing the guide's single-bar slam threshold (≥2×) outright, so this is one huge candle slamming into the EMA20 rather than an orderly drift. Secondary concern at step 5: swing highs at 1.34190 (11 bars ago) and 1.34385 (14 bars ago) sit inside the road to TP1, though each is a single untouched print rather than a held-twice level, so that alone would only cap quality, not veto — the slam is what kills it.
+Changes my mind: If the "2.58x" bar were instead shown as two ordinary-sized bars (each under 1.5x ATR) on a corrected read, step 2 would pass and this becomes a normal TrendCont continuation entry.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓nana steps:1✓2✗3?4?5?6? | Q:- | step: 2 (drift vs slam) | pullback bar measured at 2.58x H4 ATR(14), clears the single-bar slam threshold
+
+===== arc-02 | claude-opus-5-5 | high | SKIP | 54.3s
+Bundle, both charts and the TrendCont tab are read; my notes file is empty. Here is the scorecard.
+
+```
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ? (n/a, withheld)   correlation ? (n/a, withheld)
+Checks — TrendCont steps:  1✗ 2✓ 3✗ 4✓ 5✗ 6? (n/a)
+Why: Step 3 decides it. This isn't a drift back to the EMA20. Price has sat about 10 H4 bars below it, and also below the EMA50 and EMA200, which are now stacked bearish. The move reached 2582.9 and 2587.0, well through the old 2633–2649 lows, so the average has been broken, not touched. Step 5 also fails: the +1R bank is at 2666.1, and five swings in the table sit inside that first 1R (lows 2643.6 and 2648.7, highs 2651.8, 2658.7 and 2664.5). That cluster is the H4 range that just broke down, and it's now overhead supply with 2650 on top of it.
+Changes my mind: An H4 close holding above 2665, clearing that cluster, with the H4 EMA20 turning up. That would be a new setup, not this card.
+```
+
+Step by step:
+1. **✗** The tag says TREND_UP, but the D1 chart isn't a staircase. After the peak it's been sideways with lower highs, the D1 EMA20 and EMA50 are flat and tangled, and price is under both. The H4 table shows a steady run of lower highs: 2692.9 → 2664.5 → 2658.7 → 2651.8 → 2626.5.
+2. **✓** By the numbers there's no slam. The biggest bar is 1.98× ATR (just under 2×), and no two bars in a row are both ≥1.5×. It passes strictly, but the 1.98× bar is the last pullback bar, so it's borderline.
+3. **✗** The pullback went well past the EMA20 and camped there. It fell about 9 ATR from the top and broke all three averages.
+4. **✓** The signal bar is a decisive full-bodied green drive that closes near its high, above the EMA20.
+5. **✗** A level has held repeatedly inside the first 1R, and the table shows the repeats. They are three lower highs plus two lows that now act as resistance, so it's a cluster rather than one flat double top. The round number 2650 is at about 0.55R, just outside the 
+
+===== arc-03 | claude-opus-5-5 | low | SKIP | 10.6s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ?   news ?   correlation ?
+Checks — TrendCont steps:  1? 2✗ 3✗ 4? 5? 6?
+Why: Step 2 decides it. The pullback includes one bar of 2.58× H4 ATR (0.00397), which is over the 2× limit, so this is a slam and not an orderly drift. The rest of the chart agrees: price on H4 is below EMA20, EMA50 and EMA200, all three slope down, and D1 has broken below its own EMA20 and EMA50. So this is not a shallow pullback into a working uptrend. Step 5 is not decisive, but the road isn't clean: the table shows swing highs at 1.34190 and 1.34385 inside the first 1R.
+Changes my mind: Only a card where no pullback bar reached 2× ATR and no two bars in a row reached 1.5×, with H4 price back above a rising EMA20 — this card can't pass step 2.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:??? steps:1?2✗3✗4?5?6? | Q:- | step: 2 | slam pullback bar 2.58× ATR, H4 below all EMAs sloping down
+
+===== arc-04 | sonnet | low | TAKE | 26.8s
+VERDICT: TAKE (quick) (confidence: high)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✓ 6✓
+Quality: A — no slam anywhere in the drift (max 1.70x ATR, no consecutive pair ≥1.5x per the card's own numbers), and the swing-high cluster (7882–7890, 14–30 bars ago) sits below entry, already broken, leaving no repeated wall between entry and TP1.
+Why: Step 2 is clean by the card's numbers — a genuine multi-bar orderly drift, not a slam. Step 5 is decisive: the swing table shows the last resistance cluster already behind/below the entry price, so the 8092 (1R) to 8236 (TP1) road has no double-touched level in it — this is continuation past the old highs, not into them. D1 confirms uptrend structure with EMA20/50 rising and price back above them after the pullback.
+Changes my mind: if the H4 trigger candle turns out to be a single outsized print rather than the resumption leg shown, that would flip step 2/4 to a slam read.
+
+LOG: TrendCont BUY | TAKE (quick, high) | SH:✓n/an/a steps:1✓2✓3✓4✓5✓6✓ | Q:A | step: 5 (room to bank) | swing-high cluster 7882–7890 already broken and sits below entry, clear road to TP1
+
+===== arc-04 | claude-opus-5-5 | low | SKIP | 15.6s
+I'd skip this one. It's a clean, orderly pullback in an uptrend, but it fails step 5: the 8000 round number sits only 0.36R above entry, and the daily chart's prior high sits in about the same place. Under the coach's step 5 ruling, a round number inside 0.5R fails the step outright.
+
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation not applicable: withheld on archive card)
+Checks — TrendCont steps:  1✓ 2✓ 3✓ 4✓ 5✗ 6?
+Why: Step 5 is the deciding step. 1R is 144.3 points, so 8000 is 52.3 points (0.36R) above the 7947.70 entry, inside the 0.5R limit. The daily chart's prior high sits in about the same place, around 8000–8020, which makes that level stronger. Step 2 passes: the biggest bar is 1.70× ATR and no pair is ≥1.5× back to back, so it's a drift, not a slam. The 7881–7890 swing highs (tested three times per the table) are already below entry, so they aren't in the way.
+Changes my mind: A clean H4 close above 8000 would clear the step 5 problem. That's too far away to resolve by the next bar close, so it isn't a WAIT, but a fresh signal after that close would be a TAKE.
+
+LOG: TrendCont buy | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✓ 3✓ 4✓ 5✗ 6? | Q:- | step: 5 | 8000 round number and D1 prior high sit 0.36R above entry, inside 0.5R
+
+===== arc-03 | claude-opus-5-5 | high | SKIP | 71.3s
+**VERDICT: SKIP** (quick) (confidence: high)
+**Checks — Start Here:** regime ✓ news ? correlation ? (news and correlation are withheld on this card, so they don't apply)
+**Checks — TrendCont steps:** 1✗ 2✗ 3✗ 4? 5✗ 6?
+
+**Why:** The decisive step is step 2. The pullback held a single bar of 2.58× the H4 ATR, and the guide calls one bar at 2× or more a slam, which is a skip. Other steps fail too:
+- **Step 3:** price didn't just touch the H4 20-EMA. It closed well below it and stayed there for about 8 bars.
+- **Step 1:** the H4 swing table shows only lower highs (1.34901 → 1.34385 → 1.34190 → 1.33709) and lower lows (down to 1.32614), with the H4 averages stacked bearish. On the D1 chart (read from the image) there's a lower high, and the last swing low was undercut.
+- **Step 5:** the bounce's high at 1.33709 sits on the broken floor at 1.33711 (a swing low 13 bars ago). That level has held twice, from both sides, only about 0.23R above entry. Above it are the 1.338–1.339 lows, 1.3400, and the 1.34190 swing, all before the +1R bank at about 1.3438.
+
+**Changes my mind:** Nothing on this bar. A new signal would need price to take back and hold the 1.337–1.339 shelf, with the H4 20-EMA turning up, and an orderly drift back to it rather than a spike.
+
+(Side note: the stop at 1.32643 sits 3 pips *inside* the 1.32614 low instead of beyond it. That's moot since the verdict is a skip.)
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓?? steps:1✗ 2✗ 3✗ 4? 5✗ 6? | Q:- | step: 2 | 2.58× ATR slam bar in the pullback, closed and stayed below EMA20, H4 swing table all lower highs and lower lows
+
+===== arc-04 | claude-opus-5-5 | high | SKIP | 44.3s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ? (withheld, not applicable)   correlation ? (withheld, not applicable)
+Checks — TrendCont steps:  1✓ 2✓ 3✓ 4✓ 5✗ 6?
+Why: Step 5 fails. Risk is 144.3 points, so the +1R bank is at about 8092. The 8000 round number sits 52 points above entry, which is 0.36R and inside the 0.5R round-number limit. The D1 chart also shows the earlier rally topping out in a band I read at roughly 8000–8040, so that is a real wall inside the first 1R. Steps 1–4 pass:
+- The largest pullback bar was 1.70× ATR, with no two consecutive bars at 1.5×, so there is no slam.
+- The pullback drifted down to a 7741 low with only a brief wick below the H4 EMA20. It did not camp there.
+- The signal bar is a decisive full-bodied close that clears the 7881–7890 cluster. Swing highs held there four times, but those are behind price now, not in the road.
+
+Changes my mind: an H4 close above about 8040 (through 8000 and the D1 top) would clear the road, though that would be a new signal at a new entry.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✓ 3✓ 4✓ 5✗ 6? | Q:- | step: 5 room to bank | 8000 round number at 0.36R and the D1 top near 8000–8040 sit inside the first 1R (bank ~8092)
+
+===== arc-05 | sonnet | low | SKIP | 24.8s
+VERDICT: SKIP (quick) (confidence: high)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✗ 3? 4? 5? 6?
+Why: Step 2 is decisive and the card's own ATR math calls it — the pullback's largest bar is 2.09× H4 ATR(14), clearing the single-bar slam threshold (≥2×) outright, so this is a slam into the EMA20, not an orderly drift. That's a geometry read straight from the guide's numeric threshold, not a discretionary judgment call.
+Changes my mind: If the 2.09x bar were instead the oldest of a decaying pullback rather than the largest range bar closest to the base, I'd revisit — but the card states it plainly as the largest, so the slam read stands.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓nana steps:1✓2✗3?4?5?6? | Q:- | step: 2 | pullback's biggest bar is 2.09x H4 ATR14, over the 2x single-bar slam threshold
+
+===== arc-05 | claude-opus-5-5 | low | SKIP | 12.5s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5✓ 6?
+Why: Step 2 decides it. The card measures one pullback bar at 2.09× H4 ATR (17.746), which is over the 2× slam limit, so by the rule this pullback is a slam, not a drift. Step 5 would have passed. The only thing between entry and TP1 at 2954.65 is the trend's own last high at 2942.90 (3 bars ago), and that high is not a wall. News and correlation are not applicable because the card withholds the calendar and open exposure.
+Changes my mind: If the 2.09× bar turns out to be the spike that made the 2942.90 high, it is not a pullback bar. The remaining bars (1.26 · 0.75 · 1.40) are all ordinary, so step 2 would pass and this becomes a B-grade TAKE.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✗ 3? 4? 5✓ 6? | Q:- | step: 2 | one pullback bar at 2.09× ATR is a slam by the 2× rule; road to TP1 is clear past the trend's own 2942.90 high
+
+===== arc-06 | sonnet | low | SKIP | 28.1s
+**VERDICT: SKIP (quick)** (confidence: high)
+
+Checks — Start Here: regime ✓ news N/A (withheld by design) correlation N/A (withheld by design)
+
+Checks — TrendCont steps: 1✓ 2✗ 3✓ 4✓ 5✗ 6 N/A
+
+Why: Step 2 fails outright — the pullback's largest bar is 2.23× H4 ATR(14), clearing the single-bar ≥2× slam threshold on its own, so this is a slam into the EMA20/200 zone, not an orderly drift. Step 5 also fails: the road to TP1 crosses 149.142 (27 bars ago) and 149.098 (30 bars ago), a double-bottom pair only 0.044 apart, both sitting inside the first 1R below entry (149.766 → 148.723) — the table shows that level held twice, which is a wall by the guide's rule, not the harmless "own last extreme" case. Two separate structural fails on the decisive steps is a clean skip rather than a marginal one.
+
+Changes my mind: if the swing table were read as only a single untouched swing near 149.1 rather than a repeated double-bottom, step 5 would drop to `?`/quality-capped-B instead of an outright fail — but the two prints are too close together to call that.
+
+LOG: TrendCont sell | SKIP (quick, high) | SH:✓NN steps:1✓2✗3✓4✓5✗6N | Q:- | step: 2 (slam) & 5 (double-bottom wall in first 1R) | ATR 2.23x pullback bar plus repeated 149.10/149.14 swing lows inside the road to TP1
+
+===== arc-05 | claude-opus-5-5 | high | SKIP | 46.0s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation are withheld on this archive card, so they don't apply)
+Checks — TrendCont steps:  1✓ 2✗ 3? 4✗ 5✓ 6?
+Why: Step 2 decides it. The first bar of the pullback measures 2.09× the H4 ATR of 17.75, which is over the 2× slam line, so the pullback fails the drift-vs-slam test. The trigger is a small near-doji green bar sitting above the EMA20. Price never reached the average, so this is a shallow pause, not a finished drift. The road is clear: nothing in the swing table sits between entry 2904.8 and +1R at 2929.7. The only level above is 2942.9, the trend's own last high and the one this pullback came down from, so it is not a wall.
+Changes my mind: If that 2.09× bar is really the up-wick rejection bar at the 2942.9 high rather than a push down, the other three bars (1.26, 0.75, 1.40×) are ordinary and step 2 passes. Even then I'd want a decisive green close near the EMA20 before taking it.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✗ 3? 4✗ 5✓ 6? | Q:- | step: 2 | first pullback bar 2.09× ATR is a slam by the 2× rule, and the resume candle is a weak near-doji above the EMA20
+
+===== arc-06 | claude-opus-5-5 | low | SKIP | 12.4s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation don't apply to this archive card)
+Checks — TrendCont steps:  1✓ 2✗ 3✗ 4? 5✓ 6?
+Why: Step 2 fails. The pullback is a slam, not a drift: one bar is 2.23× ATR, over the 2× limit, and it's followed by 1.50× and 1.33× bars. That bar also broke the H4 downtrend. Price pushed through the 149.953 swing high to a new high at 150.944 (3 bars ago) and now sits above the H4 EMA20 and EMA50. On D1, price is pressing into the EMA50. This looks like the start of a reversal, not a pause in the downtrend.
+Changes my mind: If price closes back below the H4 EMA20/50 and under 149.95, and the pullback forms an orderly drift of overlapping bars under 1.8× ATR, the setup would be a TrendCont again.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3✗ 4? 5✓ 6? | Q:- | step: 2 | 2.23× ATR slam broke the H4 structure above 149.953
+
+===== arc-07 | sonnet | low | SKIP | 30.6s
+**VERDICT: SKIP (quick)** (confidence: medium)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✗ 6?
+Why: Steps 1–4 are clean — D1 is tagged TREND_UP, the card's own ATR math confirms an orderly drift (largest bar 1.79x, best consecutive pair 1.49x — no slam), the H4 pullback lands into the EMA20, and the last two bars show a resumption trigger off that zone. But the swing table shows two closely-spaced highs (2737.60 at 14 bars ago, 2739.60 at 18 bars ago) sitting inside the first 1R from entry (2713 → 2745.4) — a double-top wall the guide says to treat as a real ceiling, not the trend's own last extreme. That congestion sits directly under TP1 (2777.70), which is the decisive problem.
+Changes my mind: if the table only showed one of those two highs (a single untouched swing rather than a repeated level), step 5 would be a `?` capped at B, not a fail, and this becomes a clean TAKE.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓n/an/a steps:1✓2✓3✓4✓5✗6? | Q:- | step: 5 (room to bank) | double top at 2737.60/2739.60 (14/18 bars ago) forms a wall inside the first 1R, congesting under TP1
+
+===== arc-06 | claude-opus-5-5 | high | SKIP | 40.7s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation are not applicable: the archive card withholds the calendar and exposure)
+Checks — TrendCont steps:  1?  2✗  3✗  4✓  5?  6?
+Why: Step 2 decides it. The pullback is a slam, not a drift. One bar is 2.23× the H4 ATR (0.471): the big green bar that jumped price from about 150.0 to the 150.944 swing high three bars ago. The guide sets the slam line at one bar of 2× ATR or more, so this fails by the number. Step 3 also fails: price stayed about 2 ATR above the H4 EMA20 for several bars and pushed above the H4 EMA200. On H4 the swings now go higher (lows 148.181 → 148.606, highs 149.663 → 149.953 → 150.944). That is a counter-move breaking the down trend, not a pause in it. On D1 the bounce has taken back nearly all of the last down leg and is testing the lower high near 151. That makes the staircase a `?`, not an intact trend.
+Changes my mind: Nothing on this bar. If the pair drifts back to the EMA20 on bars under 1.8× ATR and still holds below the ~151 D1 lower high, that would be a new card worth taking.
+
+(Step 5 detail: the 149.142 and 149.098 lows are inside the first 1R (148.723), but price has already broken below them to 148.181, so they are not a wall that held twice. The 149.00 big figure at 0.73R and the 149.50 half-figure are the only obstacles. That makes step 5 `?`, not `✗`, and it is not the deciding step.)
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓?? steps:1? 2✗ 3✗ 4✓ 5? 6? | Q:- | step: 2 | slam: one pullback bar is 2.23× H4 ATR (limit is 2×), and price stayed ~2 ATR above the EMA20 while H4 made higher highs to 150.944
+
+===== arc-07 | claude-opus-5-5 | low | SKIP | 15.5s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✓ 3? 4✓ 5✗ 6?
+Why: Step 5 decides it. The swing table shows two highs in the same place, 2737.60 (14 bars ago) and 2739.60 (18 bars ago). Both sit inside the first 1R (entry 2713.00 + 32.4 = 2745.4), so this is a double top: a range edge the price has already been turned back from twice. It is not just the trend's last high. Step 2 is clean, with no slam (largest bar 1.79× ATR, no two bars in a row at 1.5× or more). But the pullback went down to 2686.9, below the two earlier lows at 2697.9 and 2696.4. That plus the double top makes this look more like a range than an orderly trend continuation. On D1, price is only just back above a flat EMA200 after a long downtrend.
+Changes my mind: An H4 close above 2740 would break the double top and clear the road to TP1. Then it becomes a continuation from a broken range edge.
+
+News and correlation are marked `?` because the archive card withholds the date, the calendar and the open exposure. I scored this straight from the card and charts and did not open `notes.live.opus-high.md` or the quick reference this session.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✓ 3? 4✓ 5✗ 6? | Q:- | step: 5 | double top 2737.6/2739.6 held twice inside first 1R (2745.4)
+
+===== arc-08 | sonnet | low | SKIP | 15.1s
+Confirms a sharp, near-vertical drop into EMA20 with a range of repeated highs (~3378–3400 zone) sitting right inside the road to TP1 — consistent with both the numeric SLAM read and the repeated-wall read.
+
+VERDICT: SKIP (quick) (confidence: high)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✗ 3? 4? 5✗ 6?
+Why: Step 2 is a SLAM by the card's own ATR numbers (largest pullback bar 3.04x ATR, prior pair 3.04x/1.74x both above the 1.5x-consecutive threshold) — this is a fast, disorderly plunge into EMA20, not an orderly drift. Step 5 also fails: the swing-high table shows a repeated ceiling at 3390.90/3400.90/3393.70/3394.80/3400.40, all sitting inside the first 1R above entry (entry 3355.90, 1R≈3399) — a level held four times is a wall, not clean road to TP1.
+Changes my mind: If the pullback were reclassified as an orderly multi-bar drift (it isn't, per the card's own ATR math) and the repeated 3390–3400 zone were swept rather than untouched, this would flip to TAKE.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓n/an/a steps:1✓2✗3?4?5✗6? | Q:- | step: 2 (slam) & 5 (repeated wall) | pullback is a SLAM (3.04x ATR) into a wall held 4x inside 1R, not a clean drift with open road
+
+===== arc-08 | claude-opus-5-5 | low | SKIP | 11.3s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5✗ 6?
+Why: This fails on two steps, and either one is enough to skip.
+- **Step 2 (drift vs slam) fails.** The pullback has a 3.04× ATR bar and a 2.53× bar. Either one is a slam on its own.
+- **Step 5 (room to the bank) fails.** The swing table shows the 3390.90–3400.90 range top held five times: 3390.90, 3393.70, 3394.80, 3400.40 and 3400.90. That whole band is inside the first 1R, which runs from 3355.90 to 3399.00. This is a range edge, not the trend's last extreme, and the pullback came off it rather than out of a breakout.
+Changes my mind: An H4 close above 3401 turns the range top into support. A re-signal that drifts into the EMA20 after that would pass both steps.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3? 4? 5✗ 6? | Q:- | step: 2 | slam bars of 3.04x and 2.53x ATR, plus a range top at 3390.9–3400.9 held 5x inside 1R
+
+===== arc-07 | claude-opus-5-5 | high | SKIP | 46.3s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation don't apply: this archive card withholds the calendar and exposure by design)
+Checks — TrendCont steps:  1✓ 2✓ 3? 4✓ 5✗ 6?
+Why: Step 5 decides it. Entry is 2713.00 and the +1R bank is 2745.40. Inside that road the table shows two swing highs at 2739.60 (18 bars ago) and 2737.60 (14 bars ago), 2 points apart (0.18 ATR). That is a double top, a level that held twice, so it counts as a wall. It is also the trend's own last extreme, but under the 2026-09-24 ruling a repeated level inside the first 1R is still a wall. There is also a single older swing at 2726.10 inside the road. Step 2 passes cleanly: the largest bar is 1.79× ATR and no two bars in a row are both ≥1.5×, so there is no slam. Step 3 is only a `?`: the pullback camped under the EMA20 for about 8 bars and stabbed through the EMA50 to 2686.90.
+Changes my mind: An H4 close through 2739.60 would turn the double top into a broken extreme with open road to the bank. That would be a fresh signal at a worse entry, though, not this one.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✓ 3? 4✓ 5✗ 6? | Q:- | step: 5 room to the bank | double top 2739.60/2737.60 sits inside the first 1R (bank 2745.40), a wall per the table
+
+===== arc-08 | claude-opus-5-5 | high | SKIP | 27.5s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (both not applicable: this archive card leaves out the calendar and the open positions on purpose)
+Checks — TrendCont steps:  1✓ 2✗ 3✗ 4✓ 5✗ 6?
+Why: Step 2 is the decisive failure. The pullback was a slam, not a drift: one bar was 3.04× the H4 ATR(14) of 15.80 and a later one was 2.53×, and the guide calls any single bar of 2× or more a slam. The pullback also broke through both the EMA20 and the EMA50 and stayed below them for about five bars, down to 3318.40, so it destroyed the average rather than touching it (step 3). The road to the +1R bank at about 3399 is blocked too. The swing table shows a ceiling at 3390.90, 3393.70 and 3394.80, three swing highs inside the first 1R, plus 3400.40 and 3400.90 just past it. That is the top of a range, not the trend's single last high, so step 5 fails.
+Changes my mind: Only a corrected ATR that puts both big bars under 2× would change this, and even then the stay below the EMAs and the repeated ceiling inside 1R would keep it a SKIP.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3✗ 4✓ 5✗ 6? | Q:- | step: 2 | two slam bars (3.04x, 2.53x ATR) into and through the EMAs; ceiling at 3391–3395 held three times inside the first 1R
+
+===== arc-09 | sonnet | low | SKIP | 19.5s
+VERDICT: SKIP (quick) (confidence: high)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✗ 3✓ 4✓ 5? 6n/a
+Why: Step 2 is decisive — the card's own ATR math shows the newest pullback bar at 2.44× H4 ATR(14), which clears the guide's slam threshold (single bar ≥2×) outright. That's a single-candle slam into the zone, not an orderly drift, so this reads as forced/news-shaped structure rather than the disciplined multi-bar pullback TrendCont wants, regardless of the otherwise-clean D1 uptrend and decent reversal candle off 58.76.
+Changes my mind: If the 2.44× bar were instead shown as two or more smaller consecutive bars (each under 1.5× ATR) building the same pullback, step 2 would pass and this would likely flip to TAKE.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓nn steps:1✓2✗3✓4✓5?6n | Q:- | step: 2 (drift vs slam) | newest pullback bar = 2.44x H4 ATR, clears slam threshold (≥2x single bar)
+
+===== arc-09 | claude-opus-5-5 | low | SKIP | 11.5s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5✗ 6?
+Why: Step 2 is the deciding step, and the pullback is a slam, not a drift. One pullback bar is 2.44× ATR (0.93), which is over the 2× line. Step 5 also fails: the swing table shows highs at 61.16, 61.33 and 61.35 bunched inside the first 1R (60.54 → 61.91). That price area has turned the market back three times, so it acts as a wall. On H4, price is stuck under a flat EMA50 and EMA200 in a range, even though D1 is tagged TREND_UP.
+Changes my mind: A pullback made only of bars under 2× ATR, followed by an H4 close above about 61.4 that clears the 61.16–61.35 area.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3? 4? 5✗ 6? | Q:- | step: 2 | 2.44× ATR slam bar, plus a triple-tested 61.16–61.35 wall inside the first 1R
+
+===== arc-10 | sonnet | low | SKIP | 27.5s
+**VERDICT: SKIP (quick) (confidence: high)**
+
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✗ 3✓ 4? 5✓ 6 n/a
+Quality: – (DISCRETION signal, no quality gate)
+
+Why: Step 2 is decisive and it's a slam, not a drift. The card's own ATR math shows the last three pullback bars at 1.49× / 2.09× / 0.57× H4 ATR(14) — the middle bar alone clears the guide's ≥2× single-bar slam threshold (2.09×), so this pullback was one violent leg, not an orderly multi-bar drift into the EMA20. Guide is explicit: a slam into the EMA20 is the skip, regardless of how clean the rest of the setup looks. Step 5 would actually be clear (no repeated swing-high wall inside the first 1R — nearest highs at 1.28251/1.28456 both sit above TP1), so this isn't a room problem, it's purely the geometry of the pullback itself.
+
+Changes my mind: If the 2.09× bar were instead shown as two smaller consecutive bars each under 1.5×, this reclassifies as an ordinary drift and step 2 passes.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓n/an/a steps:1✓2✗3✓4?5✓6n/a | Q:- | step: 2 | slam pullback bar (2.09x ATR) into EMA20, not a drift
+
+===== arc-09 | claude-opus-5-5 | high | SKIP | 41.9s
+I've read the card, both charts, the TrendCont tab and my notes file, which is empty. Here is the scorecard.
+
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1?  2✗  3✓  4✓  5✗  6?
+Why: Step 2 decides it. One pullback bar is 2.44× the H4 ATR of 0.93. It's the big red candle a few bars before the right edge, and the guide calls one bar at 2× or more a slam, so this fails step 2 on the numbers. The road is also blocked: the first 1R (61.91) has the round number 61.00 at about 0.34R and four swing highs between 61.16 and 61.76 (61.33/61.35 printed twice, though 62.26 has since traded above them). And D1 is going sideways in a 57.3–62.3 range rather than stepping up (step 1 `?`). The resume candle and the depth are fine, but they can't save a slam.
+Changes my mind: The same setup with pullback bars all under 2× ATR (a drift back to the EMA20), or a fresh pullback that drifts into the EMA20 without the 2.44× bar, would be worth a real look.
+
+News and correlation are `?` because the card withholds the calendar and open exposure on purpose, as instructed. Step 6 is `?` for the same reason. There is no Quality line because this is a DISCRETION-class card. One more point: the stop at 59.17 sits above the 58.85 swing low from 3 bars ago, so it is inside that structure rather than beyond it.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓?? steps:1? 2✗ 3✓ 4✓ 5✗ 6? | Q:- | step: 2 | one pullback bar at 2.44× H4 ATR is a slam by the guide's threshold, and 61.00 plus a 61.16–61.76 swing cluster crowd the first 1R
+
+===== arc-10 | claude-opus-5-5 | low | SKIP | 12.1s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5✓ 6?
+Why: Step 2 decides this. The pullback is a slam, not a drift. The middle pullback bar measures 2.09× the H4 ATR of 0.00210, which is past the 2× single-bar threshold. On the chart you can see about three big red bars dropping from the 1.28456 swing high straight into the EMA20, with no orderly multi-bar drift. Step 5 passes: 1R is 1.28041, and the table shows nothing holding twice below that. The nearest swings, 1.28172 and 1.28251, are both past 1R.
+Changes my mind: the bar that closes the signal would need to show that the 2.09× bar was really an isolated wick, with the pullback holding as a tight drift above the 1.27957 swing low. Even then it would stay a low-confidence read.
+
+News and correlation are marked `?` because the card withholds the calendar and open exposure by design.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3? 4? 5✓ 6? | Q:- | step: 2 | pullback bar 2.09× ATR is a slam, not a drift into EMA20
+
+===== arc-11 | sonnet | low | TAKE | 34.9s
+**VERDICT: TAKE** (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5? 6✓
+Quality: B — clean no-slam drift, but two single-touch swing lows sit inside the first 1R road to TP1
+Why: Step 2's own numbers rule out a slam (largest pullback bar 1.36x ATR, no bar ≥2x, no consecutive pair ≥1.5x), and the D1/H4 context shows an intact downtrend with an orderly resumption candle forming at the signal bar. Step 5 is the decisive step: the swing table shows two lows inside the first 1R (1.05423 at 7 bars ago, 1.05320 at 3 bars ago) — but they're different prices, not the same level held twice, so neither is a wall by the guide's rule; that caps quality at B rather than vetoing the trade. TP1 at 1.04712 sits right on the older 1.04723 swing, which is the target itself, not an obstacle.
+Changes my mind: If either 1.05423 or 1.05320 turns out to be the same level as another swing not shown (a genuine double-touch), that becomes a wall inside 1R and I'd move this to WAIT/ADJUST instead.
+
+LOG: TrendCont SELL | TAKE (quick, medium) | SH:✓nn steps:1✓2✓3✓4✓5?6✓ | Q:B | step: 5 | two single-touch (non-repeated) swing lows inside first 1R, no confirmed wall
+
+===== arc-10 | claude-opus-5-5 | high | SKIP | 46.8s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ? (n/a: withheld on archive card)   correlation ? (n/a: withheld on archive card)
+Checks — TrendCont steps:  1? 2✗ 3✓ 4? 5✓ 6?
+Why: This is decided at step 2. Using the card's ATR of 0.00210, the pullback bars measure 1.49×, 2.09× and 0.57×. That 2.09× bar (about 44 pips) is over the 2× line, so this is a slam under the coach's ruling, not a drift. The daily chart doesn't help: price is pressing into the 1.284–1.287 daily range top it has already failed at several times. The H4 turned down at 1.28456, then made a lower high at 1.28251. Room to the bank is fine (no swing high between entry and the 1R level at 1.28041, and 1.2800 sits at 0.71R, outside the 0.5R round-number rule), but that can't rescue a failed step 2.
+Changes my mind: Nothing on this signal: 2.09× is still a slam under the ruling even though it only just crosses the line. A later, orderly pullback into the EMA20 with no bar at 2× ATR or more, followed by a decisive resume candle, would be worth taking.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1? 2✗ 3✓ 4? 5✓ 6? | Q:- | step: 2 | pullback bar 2.09x ATR = slam by the 2x threshold, into a lower high under the D1 range top
+
+===== arc-11 | claude-opus-5-5 | low | SKIP | 16.5s
+VERDICT: SKIP   (quick)   (confidence: low)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation not applicable on this archive card)
+Checks — TrendCont steps:  1? 2✓ 3✗ 4? 5? 6?
+Why: The daily trend is down, but the H4 chart is not a pullback inside a downtrend. For about 70 bars it has been a range between roughly 1.047 and 1.059, with higher lows since the 1.033 spike, and price is sitting above the H4 EMA20 and EMA50. So step 3 fails: this is a range-top rejection, not a trend resuming. Step 2 passes on the card's numbers (largest bar 1.36× ATR, no slam). Step 5 is `?`: the swing table shows two recent lows, 1.05320 (3 bars ago) and 1.05423 (7 bars ago), inside the first 1R (down to 1.0513), and the range floor at 1.04607–1.04807 holds right at TP1 (1.04712). On balance this is a mixed read, so it's a low-confidence skip.
+Changes my mind: An H4 close below 1.05320 that also closes back under the H4 EMA50 would turn this into real downtrend continuation, and I would take it.
+
+LOG: TrendCont SELL | SKIP (quick, low) | SH:✓?? steps:1? 2✓ 3✗ 4? 5? 6? | Q:- | step: 3 | H4 is a 70-bar range with higher lows and price above EMA20/50, not a downtrend pullback; lows 1.0532/1.0542 sit inside the first 1R
+
+===== arc-12 | sonnet | low | SKIP | 21.8s
+**VERDICT: SKIP** (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news N/A correlation N/A
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✗ 6 N/A
+Quality: — (DISCRETION signal, no quality grade required)
+Why: Step 2 is clean — six-bar drift into the EMA20, no bar ≥2x ATR and no consecutive pair ≥1.5x (largest single 1.91x, isolated), so this is drift not slam. But step 5 fails: the swing table shows four separate lows — 1.17195 (16 bars), 1.17126 (13 bars), 1.17112 (23 bars), 1.17041 (19 bars) — all sitting inside the first 1R between entry 1.17429 and TP1 1.16812. That's a level held four times, a floor/range-edge by the guide's definition, not a clean road to TP1.
+Changes my mind: A clean H4 close below ~1.17040 (breaking that clustered floor) before entry would open the road and flip this back to a take.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓NN steps:1✓2✓3✓4✓5✗6N/A | Q:- | step: 5 (room to bank) | four swing lows (1.17195/1.17126/1.17112/1.17041) cluster inside the first 1R, a held-multiple wall blocking TP1
+
+===== arc-12 | claude-opus-5-5 | low | SKIP | 16.3s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation not applicable: archive card)
+Checks — TrendCont steps:  1✓ 2✓ 3✓ 4✓ 5✗ 6?
+Why: Step 5 decides it. The entry is 1.17429 and 1R is 0.00309, so the first 1R runs down to about 1.17120. The swing table shows lows at 1.17195 (16 bars ago) and 1.17126 (13 bars ago) inside that first 1R, plus 1.17112 and 1.17041 just below it. That is a double/triple-bottom floor that has held repeatedly, sitting between the entry and TP1 at 1.16812. The trend's own last extreme is 1.17041, and the ruling says that alone is not a wall. But the repeated 1.171–1.172 lows are a range edge, so the room-to-the-bank check fails. The rest is a clean trade: D1 is in a downtrend and H4 is below EMA50/200. The pullback was an orderly drift back to EMA20/50, and the card's numbers show no slam (largest bar 1.91×, no pair ≥1.5×). The signal bar also broke the 1.17492 swing low.
+Changes my mind: A clean H4 close below 1.17041 would turn that floor into broken structure and clear the road to TP1.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓?? steps:1✓2✓3✓4✓5✗6? | Q:- | step: 5 | swing table shows 1.17195/1.17126 lows held repeatedly inside the first 1R (double/triple-bottom floor) before TP1
+
+===== arc-11 | claude-opus-5-5 | high | SKIP | 51.0s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ? (n/a, archive card)   correlation ? (n/a, archive card)
+Checks — TrendCont steps:  1? 2✓ 3✗ 4✓ 5? 6?
+Why: The deciding step is 3. The "pullback" didn't just touch the H4 EMA20. Price has sat above a rising EMA20 and EMA50 for about 17 bars, and the swing table shows the H4 climbing in steps: five rising highs, 1.05382 → 1.05440 → 1.05896 → 1.06298, and rising lows from 1.04607 up to 1.05423 and 1.05320. That's a failing downtrend resting above its average, and D1 is basing on a flat EMA20 with a wick above its last bounce high (hence step 1 ?). The slam test passes (largest bar 1.36× ATR) and the trigger bar is a solid bearish body. But step 5 is soft too: the 1R bank is at 1.0513, and swing lows at 1.05423 and 1.05320 plus the H4 EMA50 sit inside it. Neither swing is a repeat of the same level, so that's `?`, not a veto.
+Changes my mind: An H4 close below 1.05320, breaking the rising lows, would make this a real resumption of the downtrend rather than a sell into a rising H4.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓?? steps:1? 2✓ 3✗ 4✓ 5? 6? | Q:- | step: 3 | price camped ~17 bars above rising H4 EMA20/50 and the table shows H4 rising highs 1.05382→1.06298 and lows 1.04607→1.05423, so this is a failing trend resting, not a pullback
+
+===== arc-13 | sonnet | low | TAKE | 25.9s
+VERDICT: TAKE (quick) (confidence: high)
+Checks — Start Here: regime ✓ news N/A correlation N/A
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✓ 6✓
+Quality: A — clean orderly drift, no slam, clear road to TP1
+Why: Step 2 is a clear pass — best consecutive pair (1.37×+1.56×) never both clear the 1.5× slam threshold, so this is drift not a slam. Step 5 is the decisive step: the only high between entry and TP1 is 4694.20 (17 bars ago, single occurrence, sits just outside the first-1R zone at ~4685), and the two closer highs (4641.90/4644.00) are the trend's own last extreme, not a wall — road to TP1 is clean. SL sits just below the most recent swing low (4591.40), giving a structurally sound 1R/2R/4R geometry in a confirmed D1 uptrend.
+Changes my mind: if the swing table were read as showing 4694.20 repeated or inside 0.5R, step 5 would flip to ✗/? and cap quality at B.
+
+LOG: TrendCont BUY | TAKE (quick, high) | SH:✓NANA steps:1✓2✓3✓4✓5✓6✓ | Q:A | step: 5 (room to TP1) | clean drift, no repeated wall inside first 1R, SL structure-based
+
+===== arc-13 | claude-opus-5-5 | low | SKIP | 14.1s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✓ 3✓ 4? 5✗ 6?
+Why: Step 5 is the deciding step. The swing table shows two recent highs at 4641.90 (5 bars ago) and 4644.00 (8 bars ago), both just above the 4637.10 entry and well inside the first 1R, which runs to about 4685. That is a double top on the pullback, a range edge right in the road, and it is separate from the trend's own extreme at 4694.20 (17 bars ago), which I don't count as a wall. Step 2 passes on the card's numbers: the largest pullback bar is 1.56× ATR and no two bars in a row are both ≥1.5×, so it drifted rather than slammed. The daily uptrend is intact.
+Changes my mind: An H4 close above 4644, clearing the double top, would turn step 5 into a pass and this into a TAKE with the same stop.
+
+News and correlation are marked `?` because the card withholds the calendar and open exposure, so they don't apply here.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✓ 3✓ 4? 5✗ 6? | Q:- | step: 5 | double top 4641.9/4644.0 held twice inside first 1R (≈4685), just above the 4637.1 entry
+
+===== arc-12 | claude-opus-5-5 | high | TAKE | 73.1s
+VERDICT: TAKE   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (both not applicable: withheld on this archive card)
+Checks — TrendCont steps:  1✓ 2✓ 3✓ 4✓ 5? 6?
+Why: This is a real drift, not a slam. The biggest pullback bar is 1.91× ATR and no two bars in a row reach 1.5×. Price stayed just above the EMA20, was stopped by the EMA50 at the 1.17867 swing high, and the resume bar closes firmly below the 1.17492 swing low. Step 5 is the only soft spot: the +1R bank at 1.17120 lands on 1.17126, the low the pullback started from, and that doesn't count as a wall. The one older low inside 1R, 1.17195, is a `?` and caps this at B (1.17112 and 1.17041 are beyond 1R, and there's no round number inside 0.5R).
+Changes my mind: I'd switch to SKIP if the bar closes back above 1.17492, or if the base at 1.1711–1.1720 counts as a double bottom that is separate from the pullback's starting low. That would make it a wall held twice or more, which fails step 5.
+
+Card note: the last D1 candle looks like it prints above the H4 high of 1.17867. I read that as a rendering mismatch and ignored it. The coach may want to check it's not data from after the signal.
+
+LOG: TrendCont sell | TAKE (quick, medium) | SH:✓?? steps:1✓ 2✓ 3✓ 4✓ 5? 6? | Q:- | step: 5 | drift into EMA20 with decisive resume, bank 1.17120 sits on the pullback-origin low 1.17126 with only single older swing 1.17195 inside 1R
+
+===== arc-13 | claude-opus-5-5 | high | SKIP | 55.4s
+I've read the setup card, both charts, the TrendCont tab and the Lessons. My notes file is empty, so no patterns carry over. Scorecard:
+
+```
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✓ 3? 4? 5✗ 6?
+Why: Step 5 decides it. The swing table shows 4644.00 (8 bars ago) and 4641.90 (5 bars ago), two highs at nearly the same price. That is a double top 5–7 pts above the 4637.10 entry, inside the first 1R (bank at 4685.0), and the guide calls that a range edge and a skip. Everything else is fine. D1 broke out of the long 4450–4610 range and is retesting it, so the staircase is intact. No slam: largest bar 1.56× ATR, only one bar ≥1.5×. The trend's own high at 4694.20 is past the bank, so it's not the problem. The pullback has spent ~8 bars in a 4591–4644 box, and this entry buys the top of that box before it has broken.
+Changes my mind: an H4 close above 4644 clears the double top. From there the road to the bank is open, because the table shows nothing else before 4685 and the stop still sits under the 4596/4591 double bottom.
+```
+
+Notes on the steps:
+- **Step 3 (?):** the pullback went ~1.7–2 ATR through the EMA20, down to the EMA50, and has sat around or below the EMA20 for several bars. It's past "just through" but it hasn't broken the trend.
+- **Step 4 (?):** the trigger candle looks small-bodied on the image, so I can't call it decisive.
+- **News, correlation and step 6 (?):** not applicable, since this card leaves out the date, calendar and open exposure.
+- **Stop:** the stop at 4589.20 is just beyond the 4591.40/4596.40 double bottom. That's the right place for it, so no edit.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✓ 3? 4? 5✗ 6? | Q:- | step: 5 | table double top 4644.00/4641.90 sits 5–7 pts above entry inside the first 1R (bank 4685.0) — a range edge the pullback hasn't broken
+
+===== arc-14 | sonnet | low | SKIP | 34.9s
+VERDICT: SKIP (quick) (confidence: high)
+Checks — Start Here: regime ✓ news N/A correlation N/A
+Checks — TrendCont steps: 1✓ 2✗ 3✓ 4✓ 5? 6 N/A
+Why: Step 2 is decisive — the card's own ATR math shows the pullback contains a single bar at 3.59× H4 ATR(14), well past the 2× slam threshold, so this is a slam into the EMA20, not an orderly drift. That alone kills the setup regardless of the clean D1 downtrend and reasonable trigger candle. Step 5 is a soft `?` (only single-touch swing lows sit inside the first 1R, no repeated wall) but it doesn't need to be decisive here.
+Changes my mind: If the 3.59× bar were re-classified as a pre-pullback impulse leg rather than part of the pullback itself, leaving only the 1.20×-and-under bars as the actual drift, step 2 would pass and this becomes a normal DISCRETION TAKE.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓NN steps:1✓2✗3✓4✓5?6N/A | Q:- | step: 2 | single pullback bar at 3.59x ATR = slam, not drift
+
+===== arc-14 | claude-opus-5-5 | low | SKIP | 12.9s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5? 6?
+Why: Step 2 fails. The largest pullback bar is 3.59× H4 ATR (0.69), which clears the 2× slam line on its own, so this is a slam, not a drift. The last 12 bars do drift into the EMAs in an orderly way, but the pullback started with that one big bar, and the guide says that is the skip. Step 5 is also doubtful: swing lows at 71.71, 71.18 and 71.00 cluster just inside the first 1R, and 1R is 71.26.
+Changes my mind: If the 3.59× bar turns out to be the move the pullback started from rather than a pullback bar, step 2 passes. Then only the cluster of lows near 1R would stand in the way, and this would become a B-grade TAKE.
+
+News and correlation are marked `?` because this archive card withholds the date, the calendar and open exposure by design.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✗ 3? 4? 5? 6? | Q:- | step: 2 | 3.59× ATR pullback bar is a slam by the guide's threshold
+
+===== arc-15 | sonnet | low | SKIP | 39.5s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✗ 6?
+Why: Steps 1–4 are clean — D1 is TREND_DOWN with-trend, the pullback (-29 to -14 bars) is an orderly multi-bar drift (card gives ATR multiples 1.02/0.91/1.39/1.74×, no bar ≥2× and no consecutive pair ≥1.5×, so no slam), and the signal bar breaks the small top consolidation cleanly near the EMA20. But step 5 fails: the swing table shows 1.54152 printing twice (3 bars ago and 26 bars ago) — a double bottom — and it sits inside the first 1R below entry (entry 1.54186, 1R = 0.00615, so the 1R floor is 1.53571). A level held twice inside the first 1R is a wall by the guide's rule, not the trend's own last extreme, so this isn't a case of "don't fail step 5 on the old high/low" — it's a genuine range edge right in the immediate path to TP1.
+Changes my mind: A clean H4 close below 1.54152 before entry clears the wall and step 5 flips to ✓.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓nn steps:1✓2✓3✓4✓5✗6? | Q:- | step: 5 (room to bank) | double bottom at 1.54152 (3 & 26 bars ago) sits inside first 1R, blocking the road to TP1
+
+===== arc-15 | claude-opus-5-5 | low | SKIP | 13.1s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✗   news ?   correlation ?
+Checks — TrendCont steps:  1✗ 2✓ 3? 4? 5✗ 6?
+Why: Step 5 decides it. The swing table shows 1.54152 holding twice (3 and 26 bars ago), and that is a double bottom about 3 pips below the 1.54186 entry, well inside the first 1R (down to about 1.5357). That makes it a range edge, not a clear road to the bank. The regime also fails: the D1 tag says TREND_DOWN, but the D1 chart has just rallied back above EMA20/50 into EMA200. The H4 is a clean uptrend, with price above EMA20, EMA50 and EMA200, all stacked bullish. So this sell is sitting in a range on a rising H4, not a pullback in a downtrend. Step 2 passes (largest bar 1.74× ATR, no slam), but that doesn't rescue it.
+Changes my mind: An H4 close decisively below 1.54152 and below the H4 EMA50 would break the double bottom, and a re-offer from there would be a real continuation sell.
+
+LOG: TrendCont sell | SKIP (quick, high) | SH:✗?? steps:1✗ 2✓ 3? 4? 5✗ 6? | Q:- | step: 5 | table double bottom 1.54152 (3 & 26 bars ago) sits ~3 pips under entry, inside 1R, on an H4 uptrend
+
+===== arc-15 | claude-opus-5-5 | high | SKIP | 55.0s
+Everything's read (card, both charts, the TrendCont and Rules tabs, Lessons). My notes file is empty. Here's the scorecard.
+
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1?  2✓  3✗  4✓  5✗  6?
+Why: **Step 5 decides it.** The swing table has the same low, 1.54152, printed twice (3 bars ago and 26 bars ago). That's a double bottom, the floor of the 26-bar range, sitting just 3.4 pips (0.06R) below the 1.54186 entry. The 1.5400 round number is also at 0.30R. The +1R bank is at 1.53571, so both walls sit well inside the first 1R. On top of that, step 3 fails: price stayed above a rising H4 EMA20 for about 30 bars with all three EMAs stacked bullish. This is the first close back under the EMA after a long stay above it, not a touch that bounced off it. Step 2 passes on the card's numbers: the largest bar is 1.74× ATR and the best consecutive pair is only 1.39× each, so no slam.
+Changes my mind: An H4 close below 1.5400 would clear the double bottom and the round number. That would be a new signal with its own stop, not this entry, and one bar can't settle it, so this is a SKIP rather than a WAIT.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓?? steps:1? 2✓ 3✗ 4✓ 5✗ 6? | Q:- | step: 5 | double bottom 1.54152 (3 & 26 bars ago) 0.06R below entry plus 1.5400 at 0.3R, inside the 1R bank
+
+===== arc-16 | sonnet | low | SKIP | 26.3s
+**VERDICT: SKIP** (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✗ 3✓ 4✓ 5? 6 n/a
+Why: Step 2 is decisive and fails by the card's own math — pullback bar ranges 0.69/0.32/0.28/0.65/0.89/2.29/1.15× ATR, with a single bar at 2.29× ATR(14)=4.94. The guide's threshold is slam = one bar ≥2× ATR, and 2.29× clears that; this reads as a slam into the EMA20, not an orderly drift, so the resumption entry sits on top of a sloppy pullback rather than a clean one. Step 5 is secondary/uncertain: the only swing inside the first 1R above entry (1679.40, 13 bars ago) is a single untouched print, not a repeated wall, so that step is `?` and would cap quality at B even if step 2 passed — it isn't the reason for the skip.
+Changes my mind: if the 2.29x bar turns out to be an isolated outlier (e.g. a single wick spike immediately reabsorbed by the very next bar with no follow-through), rather than genuine slam-and-hold, this would look more like drift with one noisy print and I'd move toward TAKE.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓-- steps:1✓2✗3✓4✓5?6- | Q:- | step: 2 | pullback bar 2.29x ATR(14) clears the ≥2x slam threshold, not a drift
+
+===== arc-16 | claude-opus-5-5 | low | SKIP | 11.1s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5? 6?
+Why: Step 2 decides this. The pullback is not a steady drift into the EMA20. The card's ATR is 4.94, and one pullback bar is 2.29× that, well over the 2× slam line. It is also followed straight away by a 1.15× bar. Under the 2026-09-24 ruling a single bar of 2× or more is a slam, so the TrendCont trigger is gone. There is a second concern that is not the decisive step. TP1 at 1686.90 sits just above the D1 prior high (the tall wick near 1680+). On H4, the swing table shows 1684.50 six bars ago, the most recent swing high and the extreme the pullback came from. Under the ruling that is not a wall.
+Changes my mind: If the card's ATR figures were wrong and no pullback bar reached 2× ATR, this would be a clean with-trend drift. I would then score steps 3–5 on the merits.
+
+LOG: TrendCont buy | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3? 4? 5? 6? | Q:- | step: 2 | slam: one pullback bar 2.29× H4 ATR, over the 2× threshold
+
+===== arc-14 | claude-opus-5-5 | high | TAKE | 151.0s
+VERDICT: TAKE (quick) (confidence: low)
+Checks — Start Here:  regime ✓   news ? (withheld on archive card, n/a)   correlation ? (withheld on archive card, n/a)
+Checks — TrendCont steps:  1?  2✓  3✓  4✓  5?  6?
+Why: Step 2 decides it, and I disagree with the card's SLAM label. The 3.59× bar (≈2.48 points) is the big red drop that made the 71.00 low. That is the trend moving in the sell direction, not a pullback bar, and no up-bar in the rise to 73.55 is anywhere near that size. The 12 real pullback bars top out at 1.40× ATR, and no two in a row reach 1.5×, so it passes as an orderly drift. The rally stopped at 73.55, the same level as the 73.55 high 37 bars ago and the EMA200, making a lower high under 74.72. The signal bar is a solid red body that closes near its low, back under EMA20/50. The 71.71 swing (0.62R) was already broken by the drop to 71.00. Only the 72.00 figure (0.37R) and the small shelf just below it (~71.8–72.0) sit in the way. I don't count a whole-dollar level on crude as a round-number wall, but it limits the grade to B.
+Changes my mind: SKIP if the 3.59× bar really is an up-bar in the pullback (then it's a true slam), or if the coach rules whole-dollar crude levels are round-number walls (72.00 inside 0.5R → step 5 ✗). Step 1 is `?` because D1 has been boxed in 70.5–74.5 with rising lows for about 15 days. Lower highs are intact, but it isn't a clean staircase.
+
+For the coach: the card's step-2 bar list appears to start one bar early, on the drop bar that made the low, so its automatic "SLAM" label may be wrong on this card.
+
+LOG: TrendCont SELL | TAKE (quick, low) | SH:✓?? steps:1?2✓3✓4✓5?6? | Q:- | step: 2 | card's 3.59× "slam" bar is the leg's own impulse bar; the 12 true pullback bars max 1.40× ATR = drift, resume off 73.55 double/EMA200 lower high
+
+===== arc-17 | sonnet | low | SKIP | 23.6s
+**VERDICT: SKIP (quick)** (confidence: high)
+
+Checks — Start Here: regime ✓ news N/A correlation N/A
+Checks — TrendCont steps: 1✓ 2✗ 3? 4? 5? 6?
+
+Why: Step 2 is decisive and the card's own ATR math gives it away — the pullback's largest bar is 2.10× H4 ATR(14), which meets the guide's slam threshold (≥2×) outright, and the chart confirms it visually as the one oversized green bar driving price back up into the EMA20/50 cluster rather than an orderly multi-bar drift. That's a slam, not a drift, so the entry is skipped on structure regardless of the otherwise-clean downtrend (D1 confirms TREND_DOWN with EMA200 sloping down and price below all three EMAs).
+
+Changes my mind: If the pullback had instead built with 1–1.8× ATR bars (ordinary per the guide) rather than the single 2.10× bar, this would read as a standard with-trend continuation entry.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓NN steps:1✓2✗3?4?5?6? | Q:- | step: 2 | single pullback bar at 2.10x H4 ATR(14) meets slam threshold (≥2x), not a drift
+
+===== arc-16 | claude-opus-5-5 | high | SKIP | 36.1s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (both n/a on this archive card)
+Checks — TrendCont steps:  1✓ 2✗ 3✓ 4? 5✓ 6?
+Why: **Step 2 decides it: the pullback is a slam, not a drift.** One pullback bar (the red H4 candle just before the signal bar) is 2.29× the H4 ATR of 4.94. That's about 11.3 points in one bar, and a single bar at 2× ATR or more is a slam. The earlier pullback bars (0.28–0.89×) were an orderly drift, but the last leg into the EMA20 was one freight-train bar. The rest of the setup is fine: D1 is still making higher highs and higher lows, the pullback just touches the EMA20, and TP1 has room. The table's 1679.40 and 1676.90 were already overtaken by the 1684.50 high, 1684.50 is the trend's own last extreme and sits beyond +1R anyway, and 1680 is at about 0.7R, outside the 0.5R round-number zone. The trigger candle is small and short on conviction, so step 4 is `?`.
+Changes my mind: nothing on this bar. A new signal after a drift of ordinary bars (under 1.8× ATR) that holds the EMA20 and closes with a decisive green resume candle would be a TAKE on this structure.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓?? steps:1✓ 2✗ 3✓ 4? 5✓ 6? | Q:- | step: 2 | slam — single pullback bar 2.29× H4 ATR into the EMA20
+
+===== arc-17 | claude-opus-5-5 | low | SKIP | 11.8s
+```
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ?   news ?   correlation ?
+Checks — TrendCont steps:  1? 2✗ 3? 4? 5✗ 6?
+Quality: -
+Why: Step 2 fails. The pullback into the EMA20 was a slam, not a drift: one bar hit 2.10× the H4 ATR of 0.00460, above the 2× limit. Step 5 also fails. Entry is at 1.43332 and the round number 1.43000 sits about 0.47R below it, inside the 0.5R limit. The 1.43262 swing low from 5 bars ago is right under entry too. The H4 chart also argues against a sell: price sits above EMA20, EMA50 and EMA200 after rallying from about 1.412, and on D1 price is tangled in its EMA20 and EMA50 even with the TREND_DOWN tag.
+Changes my mind: An orderly pullback of several bars under 1.8× ATR, with a close below 1.43000 and 1.43262, would clear both failed steps.
+```
+Regime is `?` only because the card withholds the date and calendar; the TREND_DOWN tag does agree with the D1 EMA200 slope. News and correlation are `?` because the card marks them not applicable.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:??? steps:1? 2✗ 3? 4? 5✗ 6? | Q:- | step: 2 | pullback had a 2.10× ATR slam bar and the 1.43000 round number sits within 0.5R
+
+===== arc-18 | sonnet | low | TAKE | 34.4s
+**VERDICT: TAKE** (quick) (confidence: medium)
+Checks — Start Here: regime ✓ · news n/a (withheld by design) · correlation n/a (withheld by design)
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5? 6✓
+
+Quality: B — capped by step 5
+
+Why: D1 regime is TREND_UP with-trend:1, and the pullback geometry passes clean — step 2's numbers show no slam (largest single bar 1.34x ATR, best consecutive pair 1.32x/1.22x, both under the 1.5x two-bar threshold), just an orderly grind down through H4 EMA20/50/200 with resumption candles now printing off the recent low. The decisive step is 5 (room to the bank): the swing table shows one high at 114.033, only 10 bars ago and just 0.018 above the 114.015 entry — inside the first 1R (114.015–114.407) — but it's a single untouched print, not a level "held twice or more," so per the guide that's a `?`, not a wall/veto. It caps quality at B rather than blocking the trade. TP1 114.795 sits close to the next cluster (114.548/114.788, 17–24 bars ago) but those are outside the first-1R test.
+
+Changes my mind: if the swing table showed that 114.033 level touched/held a second time, step 5 would flip to ✗ and this becomes a SKIP.
+
+LOG: TrendCont BUY | TAKE (quick, medium) | SH:✓nana steps:1✓2✓3✓4✓5?6✓ | Q:B | step: 5 (room to bank) | single untouched swing high 10 bars ago sits just above entry inside first 1R, not a repeated wall, so capped not vetoed
+
+===== arc-18 | claude-opus-5-5 | low | SKIP | 15.5s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation are not applicable: the card withholds them by design)
+Checks — TrendCont steps:  1✗ 2✓ 3✗ 4? 5? 6?
+Why: This no longer looks like a pullback inside an uptrend. On H4 the highs keep getting lower (115.057 → 114.788 → 114.548 → 114.033), and price is under the H4 EMA20, EMA50 and EMA200. On D1, price has slipped under both the EMA20 and the EMA50. Step 2 passes cleanly (largest bar 1.34× ATR, so it's a drift, not a slam). But the stop at 113.625 sits exactly on the 113.604/113.626 lows, and the 113.468 low 3 bars ago already broke through them, so the stop protects nothing. On step 5, the 114.033 high 10 bars ago is a single swing inside the first 1R, which marks the step `?`. The bigger problem is past 1R: the 114.55–114.65 area (EMA200) has capped price twice, and TP1 at 114.795 is only just above the 114.788 high.
+Changes my mind: An H4 close above 114.033 (breaking the run of lower highs) with the stop moved under 113.468 would bring it back to a real continuation read.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✗ 2✓ 3✗ 4? 5? 6? | Q:- | step: 1 | H4 lower-high sequence below all EMAs means a correction, not a pullback, and the stop sits on already-broken lows
+
+===== arc-17 | claude-opus-5-5 | high | SKIP | 62.8s
+VERDICT: **SKIP** (quick) (confidence: high)
+Checks — Start Here:  regime ✓   news ? (withheld, not applicable)   correlation ? (withheld, not applicable)
+Checks — TrendCont steps:  1? 2✗ 3✗ 4✓ 5✗ 6?
+Why: **Step 2 fails.** The pullback has a single bar of 2.10× H4 ATR (0.00460). That is over the 2× line, and it's the big green bar that drove price from the 1.43262 low up to the 1.44262 high, so this is a slam, not a drift. **Step 3 fails too.** Price has sat above a rising H4 EMA20 for about 20 bars with the EMA20 above the EMA50 and EMA200, and the table shows five higher lows (1.40573 → 1.43262). This sell is going into a rising H4 structure, not a pullback touching the average. **Step 5 fails.** The 1.4300 round number is 0.47R below entry (inside 0.5R), and the H4 EMA50/200 at about 1.427–1.429 also sit in the way to +1R (1.42633).
+Changes my mind: Only a different setup could: price closing back under the H4 EMA20/50 and breaking the 1.43262 low, then pulling back up in bars all under 2× ATR. Nothing in this bundle can turn this card into a TAKE.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓?? steps:1? 2✗ 3✗ 4✓ 5✗ 6? | Q:- | step: 2 | 2.10× ATR bar in the pullback is a slam, and price has camped above a rising H4 EMA20 for about 20 bars
+
+===== arc-19 | sonnet | low | SKIP | 17.7s
+TrendCont BUY, DISCRETION class. Step 2 is decisive: the card's own ATR multiples (2.52× on the oldest pullback bar, threshold ≥2× = slam) call it a SLAM outright, and the H4 chart shows a sharp near-vertical push into the entry zone rather than an orderly drift — that's the skip pattern per the guide, not the trade. Step 5 doesn't override it: the only level near TP-path is the single 6-bars-ago swing high (1.20826), not a repeated wall, so it isn't independently disqualifying, but a single-step slam already kills a TrendCont in DISCRETION mode.
+
+VERDICT: SKIP (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news n/a correlation n/a
+Checks — TrendCont steps: 1✓ 2✗ 3? 4? 5? 6?
+Why: Step 2 is a slam by the card's own math — oldest pullback bar 2.52× H4 ATR(14), clearing the ≥2× single-bar slam threshold — and the H4 chart shows a steep vertical stab into entry, not a multi-bar drift; that alone disqualifies a TrendCont continuation regardless of the other steps.
+Changes my mind: If the 2.52x bar were instead the initiating impulse leg (not part of the pullback itself) and the actual pullback bars are all the 0.83–1.37x range quoted after it, step 2 would read as an ordinary drift and this would flip toward TAKE.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓nana steps:1✓2✗3?4?5?6? | Q:- | step: 2 (drift vs slam) | oldest pullback bar 2.52x ATR = slam, not an orderly drift
+
+===== arc-19 | claude-opus-5-5 | low | SKIP | 12.7s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3? 4? 5✓ 6?
+Why: Step 2 decides it. The pullback's first bar is 2.52× H4 ATR (0.00440). The rule calls one bar at 2× or more a slam, so this is a slam, not an orderly drift. The chart agrees: after the 1.20826 swing high (6 bars ago), price drops sharply and then moves sideways. It never drifts down into the EMA20, which sits near 1.192 while entry is 1.19809. Step 5 passes: 1.20826 is the trend's own last extreme, so it doesn't count as a wall. The table shows no level held twice between entry and TP1 at 1.21607. News and correlation don't apply on this archive card.
+Changes my mind: If the 2.52× bar is the swing-high bar itself rather than a pullback bar, the rest are all under 1.5× and step 2 passes. Then it becomes a B-grade TAKE, because the pullback is shallow and hasn't reached the EMA20.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✗ 3? 4? 5✓ 6? | Q:- | step: 2 | slam: first pullback bar 2.52× ATR, over the 2× threshold, no drift into EMA20
+
+===== arc-18 | claude-opus-5-5 | high | SKIP | 54.7s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (news and correlation not applicable: the calendar and open exposure are withheld on this archive card)
+Checks — TrendCont steps:  1? 2✓ 3✗ 4✓ 5? 6?
+Why: Step 3 decides it. This is not a pullback that touched the H4 EMA20. Price has sat below the EMA20 for about 20 bars. The table shows H4 making its own downtrend: four lower highs (115.057 → 114.788 → 114.548 → 114.033) and falling lows down to 113.468 three bars ago. On H4 the EMA20 is below the EMA50, which is below the EMA200. The signal bar is the first close back at the average, so this is the guide's "failing trend taking a rest", not a resumption.
+Changes my mind: An H4 close above the 114.548 lower high, then a pullback that holds the EMA20 from above, would make this a real TrendCont. That won't happen by the next bar, so this is SKIP, not WAIT.
+
+Step notes:
+- **Step 1 (`?`):** D1 still has higher highs, and the D1 pullback low (~113.4–113.5) is above the prior D1 low (~112.9). But price closed below the D1 EMA20 and EMA50, and the D1 EMA20 is turning down. The staircase is stretched but not yet broken.
+- **Step 2 (✓):** The card gives ATR 0.263. The largest bar is 1.34×, and no two bars in a row reach 1.5×, so there is no slam.
+- **Step 4 (✓):** The signal bar is a decent green body that closes near its high.
+- **Step 5 (`?`):** The +1R bank is at 114.405. The 114.033 swing high is 0.05R above entry and is not the trend's own extreme; it is the last H4 lower high. It sits on the 114.023 old swing low, a support level that has flipped to resistance. The 114.207 old swing low is also inside 1R. Neither is a table-shown double top, so this is a `?`, not a veto.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓?? steps:1? 2✓ 3✗ 4✓ 5? 6? | Q:- | step: 3 | H4 camped below EMA20 ~20 bars with four lower highs 115.057→114.033, so the signal is the first reclaim of the average, not a pullback touching it
+
+===== arc-20 | sonnet | low | SKIP | 28.0s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here: regime ✓   news n/a   correlation n/a
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✗ 6✓
+Why: Step 5 is decisive. Entry 1.0613, SL distance 0.0022 → 1R sits at ~1.0591, and the swing-low table shows two touches right there (1.0591, 25 bars ago, and 1.0592, 28 bars ago) — a double bottom inside the first 1R, which the guide treats as a wall, not an untouched swing. That shelf sits well above TP1 (1.0568), so the road to TP1 is blocked by a level the table shows held twice. Step 2 is clean (no slam, largest pullback bar 1.09x ATR, guide threshold 2x/1.5x-pair not met) and regime/EMA structure support the sell, but the wall in the road overrides.
+Changes my mind: if the trader is willing to take partials only down to the 1.0591/1.0592 shelf (a tighter TP1) rather than 1.0568, this becomes a workable ADJUST instead of a skip.
+
+LOG: TrendCont SELL | SKIP (quick, high) | SH:✓nan | steps:1✓2✓3✓4✓5✗6✓ | Q:- | step: 5 | double-bottom wall at 1.0591/1.0592 inside first 1R blocks road to TP1
+
+===== arc-20 | claude-opus-5-5 | low | SKIP | 14.8s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?
+Checks — TrendCont steps:  1✓ 2✓ 3? 4✓ 5✗ 6?
+Why: Step 5 decides this. Entry is 1.0613 and 1R is 22 pips, so the first 1R runs down to 1.0591. The table shows a low that held twice right at that point, 1.0591 and 1.0592 (25 and 28 bars ago), which makes it a range floor. It also shows a fresh low at 1.0606 from 3 bars ago, only 7 pips below entry. Step 2 passes: the largest pullback bar is 1.09× ATR, so there is no slam. The D1 downtrend is intact, but price is sitting on the H4 EMA20/50 with no clean room to TP1 at 1.0568.
+Changes my mind: An H4 close below 1.0591 that breaks the double bottom would clear the road to TP1 and turn this into a TAKE.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✓ 3? 4✓ 5✗ 6? | Q:- | step: 5 | table shows 1.0591/1.0592 held twice at the edge of the first 1R, plus a fresh 1.0606 low 7 pips below entry
+
+===== arc-19 | claude-opus-5-5 | high | SKIP | 104.1s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   (both withheld on archive cards, so not applicable)
+Checks — TrendCont steps:  1✓ 2✗ 3✓ 4✓ 5✗ 6?
+Why: **Step 2 decides it.** The card's numbers show one pullback bar at 2.52× ATR(14) (0.00440). That is past the 2× line, so this counts as a slam. Step 5 fails too: the round number 1.2000 sits 19 pips above entry, which is 0.21R and inside the 0.5R limit. Price already went above 1.20, got rejected from 1.20826 and closed back below it, so 1.20 now acts as a lid. What passes: the H4 trend is a clean staircase, with swing lows 1.16326 → 1.18503 rising in order. The pullback held above the old breakout highs 1.19070/1.18977, just over the EMA20. The resume candle is a decisive green close.
+Changes my mind: the 2.52× bar looks like the bar that printed the 1.20826 high, not a bar falling toward the EMA. If the coach rules that bar isn't part of the pullback, the other bars (0.83–1.37×) pass step 2. It would still need a close back above 1.2000 to clear step 5.
+
+Note for the coach: the card lists 7 ranges for a pullback from a swing 6 bars ago, which suggests the step-2 list starts at the swing-high bar itself. If so, a wide bar that made the high can trip the SLAM label on its own. I tried to record this in `notes.live.opus-high.md`, but the Write tool is disabled here, so nothing was saved.
+
+LOG: TrendCont buy | SKIP (quick, medium) | SH:✓?? steps:1✓ 2✗ 3✓ 4✓ 5✗ 6? | Q:- | step: 2 | one bar at 2.52× ATR is a slam by the card's numbers, and 1.2000 sits at 0.21R inside the first 1R
+
+===== arc-20 | claude-opus-5-5 | high | SKIP | 86.8s
+VERDICT: **SKIP** (quick) (confidence: medium)
+Checks — Start Here:  regime ✓   news ?   correlation ?   *(news and correlation don't apply: the archive card withholds them)*
+Checks — TrendCont steps:  1? 2✓ 3✓ 4? 5✗ 6?
+Why: **Step 5 decides it.** The swing table shows a double bottom at 1.0591 and 1.0592 (25 and 28 bars ago). That level held twice, and the +1R bank sits right on it (entry 1.0613, 22-pip stop, bank at 1.0591). So the bank has to be paid at the exact level where support held twice before. Just beyond it are the 1.0586 old swing high and the shaded zone at 1.0583–1.0590, and 1.0600 is a round number at 0.59R. Two things add to it:
+- **Step 1:** on D1 the last two months look like a range from 1.045 to 1.08 with higher lows, not a falling staircase.
+- **H4 structure:** the rally from 1.0521 to 1.0679 took out the 1.0586, 1.0633 and 1.0658 lower highs. The H4 EMAs are now flat and tangled around 1.063–1.065.
+Changes my mind: an H4 body close below 1.0583 that clears the double bottom and the zone, followed by a retest from below. That would turn the cluster into resistance and open the road to TP1. It can't happen by the next bar close, so this is a SKIP, not a WAIT.
+
+On the other steps:
+- **Step 2 passes:** the four pullback bars are 1.09, 0.43, 0.95 and 0.91 × ATR, so it's a drift, not a slam.
+- **Step 3 passes:** price retested the H4 EMA20 from below without closing well above it.
+- **Step 4 is `?`:** the signal bar is a modest red close, about 0.4–0.5 ATR by eye, so it's not a decisive resume candle.
+
+The double bottom did break once (price later traded down to 1.0561 and 1.0521), so it's partly spent. That's why confidence is medium, not high. I left the Quality line out because this is a DISCRETION card. I didn't write to `notes.live.opus-high.md`, since one card isn't a recurring pattern.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓?? steps:1? 2✓ 3✓ 4? 5✗ 6? | Q:- | step: 5 | table double bottom 1.0591/1.0592 held twice sits on the 1R bank

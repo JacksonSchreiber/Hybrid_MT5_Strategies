@@ -1,0 +1,182 @@
+[
+ {
+  "key": "arc-01",
+  "symbol": "US100.dk",
+  "signal_time": "2022.06.03 12:00:00",
+  "won": true,
+  "r_multiple": 3.0,
+  "mfe_r": 4.0,
+  "direction": "SELL"
+ },
+ {
+  "key": "arc-02",
+  "symbol": "XAUUSD.dk",
+  "signal_time": "2024.12.20 12:00:00",
+  "won": true,
+  "r_multiple": 2.5,
+  "mfe_r": 4.0,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-03",
+  "symbol": "GBPUSD.dk",
+  "signal_time": "2025.10.10 20:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.17,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-04",
+  "symbol": "US100.dk",
+  "signal_time": "2019.09.11 20:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.2,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-05",
+  "symbol": "XAUUSD.dk",
+  "signal_time": "2025.02.11 12:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.15,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-06",
+  "symbol": "USDJPY.dk",
+  "signal_time": "2025.03.25 12:00:00",
+  "won": false,
+  "r_multiple": -1.01,
+  "mfe_r": 0.06,
+  "direction": "SELL"
+ },
+ {
+  "key": "arc-07",
+  "symbol": "US500.dk",
+  "signal_time": "2019.02.08 20:00:00",
+  "won": true,
+  "r_multiple": 2.5,
+  "mfe_r": 4.0,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-08",
+  "symbol": "US100.dk",
+  "signal_time": "2013.11.08 16:00:00",
+  "won": true,
+  "r_multiple": 2.5,
+  "mfe_r": 4.0,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-09",
+  "symbol": "USOIL.dk",
+  "signal_time": "2021.04.01 04:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.08,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-10",
+  "symbol": "GBPUSD.dk",
+  "signal_time": "2024.07.09 16:00:00",
+  "won": true,
+  "r_multiple": 2.51,
+  "mfe_r": 4.0,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-11",
+  "symbol": "EURUSD.dk",
+  "signal_time": "2024.12.09 16:00:00",
+  "won": true,
+  "r_multiple": 2.5,
+  "mfe_r": 4.0,
+  "direction": "SELL"
+ },
+ {
+  "key": "arc-12",
+  "symbol": "EURUSD.dk",
+  "signal_time": "2021.04.05 04:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.16,
+  "direction": "SELL"
+ },
+ {
+  "key": "arc-13",
+  "symbol": "US100.dk",
+  "signal_time": "2015.07.24 04:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.2,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-14",
+  "symbol": "USOIL.dk",
+  "signal_time": "2023.05.29 08:00:00",
+  "won": true,
+  "r_multiple": 2.5,
+  "mfe_r": 4.0,
+  "direction": "SELL"
+ },
+ {
+  "key": "arc-15",
+  "symbol": "GBPUSD.dk",
+  "signal_time": "2015.10.21 16:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.1,
+  "direction": "SELL"
+ },
+ {
+  "key": "arc-16",
+  "symbol": "US500.dk",
+  "signal_time": "2013.07.16 16:00:00",
+  "won": false,
+  "r_multiple": -0.99,
+  "mfe_r": 0.25,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-17",
+  "symbol": "GBPUSD.dk",
+  "signal_time": "2016.04.01 00:00:00",
+  "won": true,
+  "r_multiple": 2.56,
+  "mfe_r": 4.0,
+  "direction": "SELL"
+ },
+ {
+  "key": "arc-18",
+  "symbol": "USDJPY.dk",
+  "signal_time": "2022.01.24 20:00:00",
+  "won": true,
+  "r_multiple": 2.52,
+  "mfe_r": 4.0,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-19",
+  "symbol": "EURUSD.dk",
+  "signal_time": "2026.01.28 20:00:00",
+  "won": false,
+  "r_multiple": -1.0,
+  "mfe_r": 0.17,
+  "direction": "BUY"
+ },
+ {
+  "key": "arc-20",
+  "symbol": "EURUSD.dk",
+  "signal_time": "2017.02.20 00:00:00",
+  "won": true,
+  "r_multiple": 2.52,
+  "mfe_r": 4.0,
+  "direction": "SELL"
+ }
+]
