@@ -170,12 +170,26 @@ class Monitor:
                                      key=lambda h: C.parse_iso(h.get("ts")) or now, reverse=True)), None)
         if hb:
             f = hb["ftmo"]; ib = f.get("initial_balance") or 0
+            # One warning per band, on the way DOWN only. Headroom is equity minus the open risk-to-stop, so it ticks
+            # with every quote: sitting a few dollars either side of a band re-fired the alert every poll (2026-09-24,
+            # six alerts in four minutes across the 1% line). A band can only warn again once headroom has recovered
+            # REARM above it.
+            REARM = 1.15
+            agg = float(hb.get("aggregate_risk_to_stop") or 0)
             for name, hd in (("daily", f.get("headroom_daily")), ("max", f.get("headroom_max"))):
                 if hd is None: continue
+                key = f"account:{name}"
+                worst = self.st["headroom"].get(key)          # tightest band warned at since the last recovery
                 lvl = next((t for t in sorted(self.m["headroom_warn_pct"]) if hd < t * ib), None)
-                prev = self.st["headroom"].get(f"account:{name}")
-                if lvl is not None and lvl != prev: self.send(f"DRAWDOWN WARNING: {name}-loss headroom {hd:,.0f} < {lvl*100:.0f}% of initial ({ib:,.0f}) · equity {hb.get('equity')}")
-                self.st["headroom"][f"account:{name}"] = lvl
+                if lvl is not None and (worst is None or lvl < worst):
+                    self.st["headroom"][key] = lvl
+                    self.send(f"DRAWDOWN WARNING: {name}-loss headroom {hd:,.0f} < {lvl * 100:.0f}% of initial "
+                              f"({ib:,.0f}) · equity {hb.get('equity')} · this already deducts {agg:,.0f} of open "
+                              f"risk-to-stop, so it is what you would have left if every open stop were hit.")
+                elif worst is not None and hd > worst * ib * REARM:
+                    self.st["headroom"][key] = None
+                    self.send(f"drawdown headroom recovered: {name}-loss headroom back to {hd:,.0f} "
+                              f"({hd / ib * 100:.1f}% of initial) - warnings re-armed")
 
     def processes(self):
         if os.name != "nt": return
