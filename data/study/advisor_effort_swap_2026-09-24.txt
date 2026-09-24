@@ -1,0 +1,362 @@
+
+
+===== EURSEK.sim-1 | sonnet | low | TAKE | 23.6s
+VERDICT: TAKE (quick) (confidence: high)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✓ 6✓
+Quality: A — orderly multi-bar drift/chop into EMA20 (not a slam), clean road to TP1
+Why: D1 shows a sustained WITH-trend uptrend above all three EMAs; the H4 pullback into EMA20 is a grinding multi-bar drift with overlapping small bodies, not one or two large slam candles, which per the guide is the decisive TrendCont read. Swing table shows structure intact (recent swing high higher than the two before it) and no swing sits between entry and TP1. No EUR/SEK events in the window, and the ECB's hawkish posture in the brief supports the long bias without being needed as a reason.
+Changes my mind: if the next H4 bar prints a large single-candle spike through EMA20 rather than continuing the orderly drift, I'd downgrade quality and reconsider.
+
+LOG: TrendCont BUY | TAKE (quick, high) | SH:✓✓✓ steps:1✓2✓3✓4✓5✓6✓ | Q:A | step: 2 (drift vs slam) | orderly multi-bar drift into EMA20, clean road to TP1, no binding news
+
+===== EURSEK.sim-1 | claude-opus-5-5 | low | SKIP | 14.4s
+VERDICT: SKIP (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2? 3✗ 4✗ 5? 6✓
+Why: This is not a pullback in a trend. The daily chart is in an uptrend, but the H4 has moved sideways since about 14 Sep, between roughly 11.23 and 11.32. The H4 EMA20 is flat and price keeps crossing it. The failing step is 3: there is no orderly drift into a rising EMA20, only a range. Step 4 also fails. The road to TP1 (11.365) runs straight into the range top: swing highs at 11.3113 (2 bars ago), 11.3158 and 11.3191. That ceiling sits only about 0.4R above entry.
+Changes my mind: An H4 close above 11.3191 with the EMA20 turning up again. A retest of that level would then be a real continuation entry.
+
+Notes:
+- **Events and brief:** No EUR or SEK events fall inside the window. The market brief adds nothing for SEK and played no part in this verdict.
+- **Exposure:** No positions are open. But EURPLN BUY is also parked, so approving both would put EUR long at 1.0%. That is under the 1.5% limit, but it is the same idea twice.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2?3✗4✗5?6✓ | Q:- | step: 3 H4 structure | H4 is a flat 11.23–11.32 range with a flat EMA20, not a pullback, and TP1 must break the range ceiling
+
+===== EURSEK.sim-1 | claude-opus-5-5 | high | SKIP | 47.8s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2? 3? 4? 5✗ 6✓
+Why: Step 5 (room to the bank) fails. The swing table puts a triple ceiling just above entry: 11.31126 (2 bars ago), 11.31582 (21 bars ago) and 11.31908 (32 bars ago). That is the top of a 5-day H4 range and the D1 high of the move, and it sits only 0.4–0.6R above entry at 11.29797. The +1R bank at ~11.3315 can only fill if price breaks that range. The latest push already turned down at 11.311, so the resume is stalling under the wall. The rest is mixed, not bad. D1 is a clean staircase and the H4 swing lows are rising (11.2256 → 11.2308 → 11.2411). But the "pullback" is really a sideways range around a flat H4 EMA20, not a drift back to it.
+Changes my mind: An H4 body close above 11.3191 would clear the road. At that point it's a breakout from the range with open air to the bank, and the trader could reprice through the delay-reopen choice.
+
+Notes:
+- **Events:** No EUR or SEK events are listed in the 14-day window, so nothing blocks on the calendar. The brief's hawkish ECB posture is background only. It says nothing about SEK and doesn't change the read.
+- **Exposure:** Nothing is open, so this would be EUR long 0.50%. One of the parked signals is a EURPLN BUY; approving both would make EUR long 1.0%, still under the 1.5% cap but the same idea twice. The parked EURJPY SELL runs the other way on EUR, so it's a hedge, not a duplicate.
+- **Cost and timing:** The spread costs 0.074R, which is fine. It's Thursday in the Asia session, so the late-Friday rule doesn't apply.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2?3?4?5✗6✓ | Q:- | step: 5 room to the bank | triple swing-high ceiling 11.311–11.319 sits 0.4–0.6R above entry, inside the first 1R
+
+===== EURSEK.sim-1 | sonnet | high | TAKE | 97.9s
+**VERDICT: TAKE (quick) (confidence: medium)**
+Checks — Start Here: regime ✓  news ✓  correlation ✓
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5? 6✓
+Quality: B — orderly drift and clean EMA20 touch, but the swing table shows three recent swing highs (11.31126, 11.31582, 11.31908) stacked between entry and the +1R bank level (11.33147), so the road to the mechanical bank isn't fully clear.
+Why: D1 is a clean, still-accelerating staircase uptrend and the H4 pullback into the EMA20 is a multi-bar overlapping drift, not a slam — the decisive TrendCont read (step 2) is clean. No news binds EUR/SEK this window and there's no open exposure to double up on. The one soft flag is step 5: the authoritative swing table puts a small cluster of unbroken prior highs right in front of the +1R bank, which could stall or slow the mechanical bank even though it doesn't threaten the stop.
+Changes my mind: if that 11.315–11.319 zone rejects price hard on the next bar instead of clearing it, or the resume candle turns out weak/doji on a closer look, this flips to SKIP.
+
+LOG: TrendCont BUY | TAKE (quick, medium) | SH:✓✓✓ steps:1✓2✓3✓4✓5?6✓ | Q:B | step: 2 (drift vs slam) | orderly EMA20 drift but stacked prior highs cloud the road to the +1R bank
+
+===== CADJPY.sim-1 | sonnet | low | SKIP | 37.7s
+VERDICT: SKIP (quick, confidence: medium)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✗ 3✗ 4? 5? 6✓
+Why: The pullback into this level is a slam, not a drift — one large candle covers nearly the whole retracement from the mid-Sep low, then price camped sideways for ~10+ H4 bars well above/through the EMA20 rather than touching and resuming (step 3's "failing trend taking a rest" pattern). No clean resume candle is visible at the current bar, and 1R down sits right on top of the unswept swing low at 111.757 — thin room to the bank. Events and correlation are both clean right now (CAD retail sales is caution-only 12h out; BOJ CPI is 28h out and doesn't bind yet), but the chart itself fails the decisive TrendCont test.
+Changes my mind: A clean, decisive bearish resume candle printing off this range with the H4 20-EMA still meaningfully above price, rather than camped-in chop.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3✗4?5?6✓ | Q:- | step: 2 (pullback geometry — slam then camp, not drift) | one big candle covered the pullback, then price camped above EMA20 instead of drifting into it
+
+===== CADJPY.sim-1 | claude-opus-5-5 | low | SKIP | 15.9s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ?
+Checks — TrendCont steps:  1✓ 2✗ 3✗ 4? 5✗ 6✓
+Why: The deciding step is step 2, drift vs slam. On H4 the pullback is not a slow drift down into EMA20. Two very large green candles on 18 Sep pushed price up from about 111.6 to 112.9. Since then price has moved sideways above an EMA20 that is now rising and has crossed above EMA50. The H4 swing lows are rising (111.058 → 111.757 → 111.887 zone), so the local downtrend structure is broken, not just paused. Price also has to get through the 111.757 and 111.887 swing lows before TP1 at 111.41, and there is congestion there. On events: CAD retail sales in 12h is only a caution, and the BOJ CPI release is 28h away, so neither blocks the trade.
+Changes my mind: An H4 close below 111.757, followed by a slow drift back up to a flattening EMA20 that stalls there, would make this a real continuation sell.
+
+Correlation note: you have no open positions, so there's no correlation veto now. The EURJPY and GBPJPY sells waiting for your decision are the same JPY-long bet. If you approve two or more of them together with this one, you are buying the same idea two or three times.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓✓? steps:1✓2✗3✗4?5✗6✓ | Q:- | step: 2 drift vs slam | pullback was a two-candle slam that broke H4 structure; EMA20 now rising and swing lows below block the road to TP1
+
+===== CADJPY.sim-1 | claude-opus-5-5 | high | SKIP | 61.0s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2✗ 3✗ 4? 5✗ 6✓
+Why: **Step 3 decides it.** Price is supposed to pull back to the H4 EMA20. Instead it has sat above that line for about 20 bars, and the H4 EMA20 has turned up and crossed over the EMA50. The guide calls that "a failing trend taking a rest," not a pullback that touched the average.
+
+The way price got there is a slam too: one bar of about 3.5 ATR on 17 Sep drove it to 112.932. The entry at 112.061 is in the middle of a 111.76–112.47 range. The range floor (swing lows 111.887 and 111.757) sits between entry and the +1R bank at 111.735, so the road to the bank isn't clear.
+
+The D1 side is fine: price is below the D1 EMA20 and the 200, and the lower high still holds. The trade is the right idea at the wrong place on H4.
+
+Changes my mind: a firm H4 close below 111.757 would break the range floor, pull the H4 averages back down and clear the road to 1R. That would come as a fresh signal, not this one.
+
+Notes:
+- **Events:** CAD retail sales at 12:30 UTC today is only a caution. The BOJ Core CPI is 28h out, well past the 6h no-entry window, and holding through it would be legal.
+- **Market brief:** read. It says nothing about CAD or JPY and has no bearing on this verdict.
+- **Correlation:** nothing is open, so the check passes. But EURJPY and GBPJPY SELLs are also waiting for a decision. Approving all three would put 1.5% on long JPY and make three positions in the JPY-cross family, which is one bet placed three times. If you take any of them, take at most one or two.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3✗4?5✗6✓ | Q:- | step: 3 | ~20 bars camped above rising H4 EMA20 after a slam, entry mid-range with the 111.76–111.89 floor inside 1R; brief:yes
+
+===== USOIL.sim-1 | sonnet | low | SKIP | 29.1s
+**VERDICT: SKIP (quick) (confidence: medium)**
+
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✗ 3✓ 4? 5✓ 6✓
+Quality: C — decisive step failed
+Why: D1 uptrend is intact (regime ✓, correlation clean, no binding news veto), but the pullback into EMA20 is a slam, not a drift — three-plus large H4 candles dropping from ~107 to ~92.7 in barely two days, well oversized vs the prior grind up. The brief corroborates this as news-driven (Iran diplomatic-progress selloff), i.e. a sharp repricing leg rather than an orderly multi-bar retracement. Per the guide, geometry (bar count/size vs ATR) is decisive here, and this reads as a slam-into-EMA20 skip, not the drift-resume trade TrendCont wants.
+Changes my mind: if the next bar prints a small-bodied, orderly consolidation candle at/above EMA20 rather than another large range bar, the drift case would be back on the table.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3✓4?5✓6✓ | Q:C | step: 2 (drift vs slam) | pullback into EMA20 was a slam (large news-driven candles), not an orderly drift
+
+===== CADJPY.sim-1 | sonnet | high | SKIP | 139.8s
+**VERDICT: SKIP (quick) (confidence: medium)**
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✗ 3✗ 4? 5✓ 6✓
+
+Why: Steps 2/3 are decisive. The rally back up into the EMA20/50 zone wasn't an orderly multi-bar drift — it arrived via one giant candle (~180+ pips in a single H4 bar) plus fast follow-through, textbook "slam," and the guide is explicit that slams into the average are the skip, not the trade. Since then price has camped 8–10 bars above the average near the old 112.4–112.9 swing-high shelf rather than resolving — per the TrendCont tab, that's "a failing trend taking a rest," not a pullback proving itself. Step 1 still holds (D1 downtrend intact, no swing high broken by the bounce) and the resume/trigger candle at the current bar reads as small/mixed rather than a decisive body in the sell direction, so step 4 gets a `?` rather than a clean pass. News is clear (CAD items are caution-only; the JPY BOJ CPI V-flag is 28h out, well past the 6h/12h horizon). Correlation is clean right now (no open exposure), but flagging for the trader: EURJPY.sim SELL and GBPJPY.sim SELL are parked alongside this one — approving all three would put JPY long risk at exactly 1.5%, the cap, so at most two of the three JPY-short ideas should go through.
+
+Changes my mind: A fresh, decisive red body actually breaking back down through the EMA20/50 zone on the next bar — instead of more chop at these highs — would flip this to a take.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3✗4?5✓6✓ | Q:- | step: 2 (drift vs slam) | pullback slammed into the EMA via one huge rally candle then camped above it for many bars instead of drifting back and resuming
+
+===== USOIL.sim-1 | claude-opus-5-5 | low | SKIP | 15.3s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2✓ 3✗ 4✗ 5✓ 6?
+Why: The daily uptrend holds, and the drop from 106.8 to 92.2 was a steady multi-bar drift rather than a slam. But on the 4-hour chart the uptrend has broken: highs went 102.6 then 97.7, lows went 99.3 then 95.0 then 92.2. Price sits under a falling EMA20 and the EMA50. Entry at 96.3 buys the bounce back up into the EMA20 before any resumption shows. Price has to get through 97.7, the EMA50 (about 97.5) and the 102–102.6 supply band before TP1 at 103.5, so the decisive step is 3/4: no confirmed resumption and a blocked road to TP1.
+Changes my mind: An H4 close above the 97.688 swing high, with the EMA20 flattening, would turn this into a real resumption worth taking.
+
+Notes: Only "caution"-level speakers are due in the hold window, and NFP is 8.6 days away, so no event rule applies. There is no open exposure. The context brief (brief:yes) says crude is still unwinding the geopolitical spike. That is background only, not the reason for this skip. BTCUSD is also parked and waiting for a decision; approving both would stack them in the USD-short direction.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✓3✗4✗5✓6? | Q:- | step: 3/4 resumption unconfirmed + road to TP1 | H4 lower highs/lows under falling EMA20/50, entry into resistance below 97.688 with 102 supply before TP1; brief:yes
+
+===== EURSEK.sim-1 | sonnet | low | TAKE | 32.8s
+**VERDICT: TAKE (quick) (confidence: medium)**
+
+Checks — Start Here: regime ✓ (D1 clean uptrend, EMA20>50>200, WITH-TREND) news ✓ (no EUR/SEK-relevant releases in window, only caution-tier Fed/ECB/BoE speeches, none inside a binding horizon) correlation ✓ (no open exposure; this adds EUR long 0.50% / SEK short 0.50% — nothing stacked yet; note EURPLN BUY sitting in the parked queue would double up EUR long if also taken)
+
+Checks — TrendCont steps: 1✓ (D1 trend intact, price above all three EMAs, steady slope) 2✓ (H4 shows a multi-bar overlapping consolidation grinding down into EMA20 — small bodies, real overlap, not one or two oversized slam candles) 3✓ (trigger candle is a clean green reclaim off the EMA20/pullback-swing shelf) 4✓ (swing table: nearest swing high only 11.31126, TP1 11.36497 sits clear above recent structure — open road) 5✓ (spread cost 0.074R, well under the 0.15R gate) 6? (SEK cross — thinner liquidity than majors is a background risk, not a rule violation)
+
+Why: D1 regime is unambiguous WITH-TREND, and the decisive step-2 read is a genuine drift (overlapping small-range chop hugging EMA20) rather than a slam, which per the guide is the trade, not the skip. No binding event sits in the entry horizon and there's no correlated exposure yet to veto it.
+
+Changes my mind: if the H4 pullback candles were actually one or two oversized bars punching through EMA20 rather than the grind I'm reading, that would flip step 2 and this becomes a skip.
+
+LOG: TrendCont BUY | TAKE (quick, medium) | SH:✓✓✓ steps:1✓2✓3✓4✓5✓6? | Q:- | step: 2 (drift vs slam) | orderly multi-bar drift into EMA20, not a slam, with clear room to TP1
+
+===== USOIL.sim-1 | claude-opus-5-5 | high | SKIP | 50.9s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2? 3✗ 4✓ 5✗ 6✓
+Why: **Step 3 fails.** On H4, price has been closing below the EMA20 for about 25 bars. The EMA20 has crossed under the EMA50, and the swing table shows a clean H4 downtrend: highs of 106.8, 102.6 and 97.69, and lows of 99.2, 95.0 and 92.23. This is not a drift that touches the average. It is the guide's "failing trend taking a rest", and the signal bar is only the first time price has come back up to the EMA20 from below. **Step 5 also fails.** The last H4 lower high, 97.688, has not been retested since it formed and sits about 0.38R above entry, with the H4 EMA50 around 97.5. The old 99.2–99.3 floor sits at about 0.8R, and 100 sits right at the +1R bank (99.91). The road to the bank is crowded.
+
+Context: the D1 chart itself is fine. Higher lows are intact, price is pulling back to the D1 EMA20, the tag says WITH-TREND, and the resume candle is a solid green close near its high. The calendar is clean: only Fed speakers flagged "caution", and NFP is 8.6 days away. There are no open positions. The parked BTCUSD BUY at 0.5% would take USD short to exactly 1.5%. That is not over the cap, but approving both stacks two positions against the dollar. The brief's oil paragraph is purely descriptive (the war spike is unwinding on hopes of diplomacy) and played no part in the verdict.
+
+Changes my mind: an H4 close above 97.688, with price holding above the H4 EMA20, would reset the H4 structure to up and clear the first obstacle. If that prints before the 09:00 UTC deadline, re-consult.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2?3✗4✓5✗6✓ | Q:- | step: 3 | H4 pullback camped ~25 bars below EMA20 in a lower-high/lower-low structure, 97.69 lower high untouched at 0.38R (brief:yes)
+
+===== EURSEK.sim-1 | claude-opus-5-5 | low | SKIP | 16.5s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2✗ 3✗ 4✗ 5? 6✓
+Why: The daily uptrend is real, but this is not a pullback to the H4 EMA20. Since 14 Sep, H4 has moved sideways between about 11.23 and 11.32. The EMA20 is flat, and price has crossed it back and forth for about ten days. The low 5 bars ago (11.241) was a stab below the EMA50, not an orderly drift into the EMA20, so step 2 fails. The entry at 11.298 is also near the top of that range. The EA's swing highs at 11.311, 11.316 and 11.319 sit just above it, so the path to TP1 (11.365) runs straight into that ceiling before the first R is earned.
+Changes my mind: An H4 close above 11.32 that breaks the range, followed by a shallow drift back toward the EMA20, would make this a real TrendCont setup.
+
+Notes: There are no EUR or SEK events in the next 14 days, and the context brief changed nothing here. There is no open exposure. However, the parked EURPLN BUY is also EUR long, so taking both would put EUR at 1.0%. That is still under the 1.5% limit, but it is the same bet made twice.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3✗4✗5?6✓ | Q:- | step: 2 | H4 flat range chop, not a drift to EMA20; entry under 11.31–11.32 swing-high ceiling blocks TP1
+
+===== USOIL.sim-1 | sonnet | high | SKIP | 122.6s
+**VERDICT: SKIP (quick, confidence: medium)**
+
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✗ 2? 3✗ 4? 5✗ 6✓
+
+**Why:** The swing table shows the "pullback" broke three consecutive prior H4 swing lows in a row (100.882→99.199→99.274 all undercut down to a fresh 92.227), and camped there for several bars before this bounce attempt — that's step 1's explicit skip case ("a trend that just broke its last swing point is a turning point, not a pullback") and step 3's ("closed well beyond the average and camped there = a failing trend taking a rest"). Geometrically the decline unwound over ~30 bars, not a 1–2 candle slam, so it isn't disqualified by step 2's letter, but the depth is the problem, not the bar count: this round-tripped almost the entire prior leg (~111 back to ~92) rather than resting at EMA20. Step 5 also has a nearby obstacle — the 97.688 swing high sits inside the road to the +1R bank (~99.9). Market brief corroborates rather than drives this: the up-leg to $110 was a war-risk spike (Iran), and the retrace is described as unwinding on diplomatic hopes, not organic profit-taking — consistent with a real reversal, not a pause.
+
+**Changes my mind:** A clean, decisive resume candle that reclaims and holds above the 97.688 swing high would show the pullback is actually over and clear the road to +1R.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✗2?3✗4?5✗6✓ | Q:- | step: 1 | pullback broke three prior swing lows to a fresh low, not a rest at EMA20
+
+===== EURSEK.sim-1 | claude-opus-5-5 | high | SKIP | 49.0s
+VERDICT: **SKIP** (quick) (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2? 3? 4? 5✗ 6✓
+Quality: — (DISCRETION class)
+Why: Step 5 (room to the bank) fails. The +1R bank is at about 11.3315. Between the 11.29797 entry and that level sit three untouched swing highs: 11.31126 (2 bars ago), 11.31582 (21) and 11.31908 (32). They are the top of a 10-day H4 range and the D1 highs, only 0.4–0.6R above entry. There's no clean drift to the EMA20 behind this signal either: price has been going sideways across a flattening H4 EMA20 for about 60 bars, between 11.2256 and 11.3191. That makes steps 2 and 3 unclear, not passes. Buying just under the range ceiling is the wrong place for this entry.
+Changes my mind: An H4 body close above 11.3191, followed by a pullback that holds above it. That would clear the road and make a clean with-trend continuation. The rising lows (11.2256 → 11.2308 → 11.2411) under a flat top point that way, so the case for buying is real, just early.
+
+Notes:
+- **Events and correlation:** There are no EUR or SEK events in the 14-day window, and this isn't a late-Friday entry. The account has no open exposure. One thing to watch: EURPLN BUY is also waiting for a decision. Approving both would put EUR long at 1.0%, which is under the 1.5% cap but is the same EUR-long idea twice.
+- **Context brief (brief:yes):** It has nothing on SEK, only background on EUR and the ECB. It contains no directional calls and played no part in this verdict.
+- **Minor:** The signal bar printed at 21:00 UTC, when the market is thin. The spread (0.074R) is acceptable.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2?3?4?5✗6✓ | Q:- | step: 5 room to bank | 3 untouched swing highs 11.311–11.319 (range top/D1 highs) sit 0.4–0.6R above entry, inside the first 1R; brief:yes
+
+===== CADJPY.sim-1 | sonnet | low | TAKE | 22.5s
+VERDICT: TAKE (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✓ 6✓
+Quality: B — orderly multi-bar drift into EMA20 (Sep 17–23), not a slam, but the last few bars chop/overlap right at the SL zone rather than a clean stab down.
+Why: D1 confirms TREND_DOWN with-trend; H4 shows a genuine grind of small overlapping bars climbing back to EMA20/pullback-swing resistance after the mid-Sep impulse leg, which is the TrendCont "drift" case, not the slam skip. No entry-horizon event binds (BOJ CPI is 28h out; CAD Retail Sales is caution-only at 12h), and this is the first position of the session so correlation is clean even though CAD/JPY-adjacent signals (EURJPY, GBPJPY) are parked alongside it.
+Changes my mind: if EURJPY/GBPJPY SELLs get approved first and push JPY-long exposure past 1.5% before this one is acted on, re-check correlation before taking it.
+
+LOG: TrendCont SELL | TAKE (quick, medium) | SH:✓✓✓ steps:1✓2✓3✓4✓5✓6✓ | Q:B | step: 2 (drift vs slam) | orderly H4 drift into EMA20, not a slam, with correlation and event checks clear
+
+===== EURSEK.sim-1 | sonnet | high | TAKE | 127.7s
+VERDICT: TAKE (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✓ 3? 4✓ 5? 6✓
+Why: D1 is a clean staircase that just broke to new highs (11.20→11.32), and the H4 pullback is an orderly multi-bar drift/consolidation into a rising EMA20 — no slam candles anywhere in the last two weeks, which is the decisive read for this strategy. Calendar is clear for EUR/SEK this week (only speeches/PMI-caution tags), and there's no open exposure to conflict with (this would be the only EUR/SEK risk on the book, though EURPLN BUY is parked alongside it and would double EUR exposure if both get approved). Watch item: price has chopped sideways at the top of the range for ~40 bars rather than a swift touch-and-go, and three recent swing highs (11.31126, 11.31582, 11.31908) are stacked directly between entry and the +1R bank, so the first push may stall before it runs.
+Changes my mind: a slam candle (one or two big bodies) breaking back below the 11.24107 pullback low, or a clean rejection off the 11.31–11.32 cluster on strong volume.
+
+LOG: TrendCont BUY | TAKE (quick, medium) | SH:✓✓✓ steps:1✓2✓3?4✓5?6✓ | Q:- | step: 2 (drift vs slam) | orderly drift with D1 trend intact, but stacked resistance 11.31–11.32 sits before the 1R bank
+
+===== CADJPY.sim-1 | claude-opus-5-5 | low | SKIP | 16.8s
+**VERDICT: SKIP (quick) (confidence: medium)**
+
+**Checks — Start Here:** regime ✓   news ✓   correlation ✓
+**Checks — TrendCont steps:** 1✓ 2✗ 3✗ 4? 5✗ 6✓
+
+**Why:**
+- **Step 2 fails (drift vs slam).** The pullback into the EMA20 wasn't an orderly drift. Two or three big green H4 candles around 17–18 Sep drove price from about 111.3 to 112.9. Since then price has moved sideways for about 20 bars between about 111.76 and 112.47.
+- **The H4 EMAs are against the sell.** The EMA20 has crossed above the EMA50 and both are turning up. This looks like a base forming, not a trend resuming.
+- **The road to TP1 is blocked.** TP1 is 111.41, but the range floor sits in the way: swing lows at 111.887 (18 bars ago) and 111.757 (11 bars ago), plus the purple level near 111.8. Price has to break through the base before it can pay 2R.
+
+**Other checks:**
+- **News:** CAD retail sales at 12:30 UTC is marked caution only, and the BOJ Core CPI is 28h away, so no entry horizon is breached.
+- **Correlation:** there are no open positions, so this adds only JPY long 0.50%. The parked EURJPY and GBPJPY sells are the same JPY-long idea. Approving all three would take JPY long to the 1.5% limit and make three positions in one cluster. Pick at most one or two of them.
+- **Market brief:** it covers no CAD or JPY drivers, so it adds nothing here.
+
+**Changes my mind:** An H4 close below 111.757, breaking the range floor with the EMA20 turning back down, would make this a live trend resumption.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3✗4?5✗6✓ | Q:- | step: 2 drift vs slam | pullback was a slam into a 20-bar H4 base with EMA20>EMA50 and the range floor blocking TP1 | brief:yes
+
+===== CADJPY.sim-1 | claude-opus-5-5 | high | SKIP | 67.0s
+I've read the bundle, both charts, the brief and the full quick reference. Here's the verdict.
+
+```
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2? 3✗ 4? 5✗ 6✓
+Why: Step 5 decides it. The +1R bank at 111.735 is only 2 pips beyond the H4 range floor (swing lows 111.757 at 11 bars ago and 111.887 at 18 bars ago; the floor has been tested several times since 17 Sep). The first 0.3R down also has to get through the H4 EMA20/50 cluster sitting just under the entry. Step 3 supports the skip: price has stayed above the H4 EMA20 for about 25 bars while the EMA flattened up to meet it. That is a trend taking a rest in a box, not a drift back to the average and a clean resume.
+Changes my mind: An H4 close below the 111.76 floor. The floor would then act as resistance and the road to the bank would be clear. That would be a new signal, not this entry from the middle of the box.
+```
+
+**Notes on the other checks:**
+- **D1 (step 1 ✓):** The downtrend is still a staircase. The 110.3 low holds, the bounce stalled at the D1 EMA20 near 112.4, and the 200-EMA is well above.
+- **Pullback character (step 2 ?):** Mixed read. The move up off the 14 Sep low ended in a two-bar slam through both H4 EMAs on 17 Sep, which is the pattern the guide warns about. The last four bars into 112.362 were an orderly drift.
+- **Resume candle (step 4 ?):** The signal bar is modest. Price came down from 112.36 to 112.06 over two bars, about 1.2 ATR in total.
+- **News:** CAD Retail Sales at 12:30 UTC (12h away) is caution only. BOJ Core CPI is a no-entry-<6h release, but it's 28h out, so holding through it is legal.
+- **Correlation (✓ for this card alone):** There's no open exposure. But EURJPY SELL and GBPJPY SELL are also parked, and they're the same short-yen bet. Approving all three would put JPY long at 1.5% and make it the third position in that cluster. That's a code-5 skip on whichever one you approve third.
+- **Brief:** It has nothing on CAD or JPY and gives no directional calls, so it had no effect on this verdict.
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2?3✗4?5✗6✓ | Q:- | step: 5 room to bank | +1R bank sits 2 pips past the 111.76 H4 range floor with the EMA20/50 cluster just under entry
+
+===== USOIL.sim-1 | sonnet | low | SKIP | 25.5s
+VERDICT: SKIP (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✗ 3? 4✓ 5✓ 6✓
+Why: D1 is clean TREND_UP and WITH-TREND, room to TP1 is wide (entry 96.3 → TP1 102.3), no binding event or correlation issue — but step 2, the decisive read, fails: the move from the ~107 high into the EMA20 zone is a fast multi-bar slam (several large, low-overlap red candles) rather than an orderly drift, and the last few bars only just began consolidating at the level. That's the TrendCont skip pattern by geometry, not a news tag.
+Changes my mind: if the next H4 bar closes as a clean small-bodied hold/reclaim above EMA20 rather than another large range bar, the pullback reads as basing rather than continuation of the slam and I'd flip to TAKE.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3?4✓5✓6✓ | Q:- | step: 2 (drift vs slam) | fast multi-bar slam into EMA20, not an orderly drift
+
+===== CADJPY.sim-1 | sonnet | high | SKIP | 171.0s
+Read the bundle, guide (Start Here, TrendCont, Rules, Lessons), notes file (empty), and both charts.
+
+**Read of the setup:** D1 confirms REGIME: TREND_DOWN staying intact — the recent bounce off the mid-Sep low hasn't broken any prior D1 swing high, so Start-Here step 1 (staircase) holds. But the H4 pullback itself doesn't look like the textbook version: off the swing low at 111.058 (28 bars ago) price didn't drift back to the EMA — it slammed up in one big impulsive leg to 112.932 (22 bars ago), well *beyond* both EMA20/50, then camped in a tight 111.9–112.9 box for ~19 bars while the EMAs rose up to meet price rather than price coming down to them. That's the "failing trend taking a rest" pattern the TrendCont tab (step 3) names explicitly as a skip signature, not a "touching, not destroying" pullback. The bars immediately into entry are small and overlapping/indecisive — no clean, decisive resume candle. There's also a minor obstacle: the 111.757 swing low (11 bars ago) sits almost exactly at the +1R bank level, so the road isn't fully clear either.
+
+News: CAD Retail Sales tags are C-class (caution, tradeable regardless of the 12h proximity); JPY BOJ CPI is V-class but 28h out and past the decision deadline — no entry-horizon conflict. Correlation: no open positions right now, so no duplication yet, though EURJPY SELL / GBPJPY SELL sit parked alongside this — approving multiple would stack JPY-long past the 1.5% line; worth the trader's awareness even though it isn't a live conflict yet.
+
+```
+VERDICT: SKIP (quick) (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2? 3✗ 4? 5? 6✓
+Why: The bounce off the Sep-14 low was a fast slam well past the EMA, then camped ~19 bars near the highs while EMA20/50 rose to meet price instead of price drifting down to them — the "failing trend taking a rest" pattern, not a clean pullback. No decisive resume candle in the congestion, and a swing low at 111.757 sits almost exactly at the +1R bank level.
+Changes my mind: A clean, decisive bearish drive candle closing below the current cluster (through ~111.85) on the next bar would say the trend is actually resuming, not resting.
+```
+
+LOG: TrendCont SELL | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2?3✗4?5?6✓ | Q:- | step: 3 | pullback camped above EMA instead of drifting into it, no decisive resume candle
+
+===== USOIL.sim-1 | claude-opus-5-5 | low | SKIP | 16.1s
+VERDICT: SKIP (quick) (confidence: medium)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✗ 3✗ 4✓ 5✗ 6?
+Why: The daily uptrend tag holds, but this isn't a pullback to the H4 EMA20. It's a full H4 downtrend with lower highs (106.8 → 102.6 → 97.7) and lower lows (99.2 → 95.0 → 92.2). The drop from 107 ran straight through the EMA20 and EMA50 all the way to the EMA200, with several oversized red bars on the way. The decisive step is 2: this is a deep correction, not an orderly drift. The entry at 96.3 is just a bounce back up to a falling EMA20. The road to TP1 (103.5) is blocked by the 97.69 swing high, the EMA50 near 97.5 and the 102.2–102.6 supply shelf.
+Changes my mind: An H4 close above 97.69 that breaks the lower-high sequence and puts price back over the EMA20/50. That would make this a real resumption.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3✗4✓5✗6? | Q:- | step: 2 | deep H4 downtrend leg to EMA200 with lower highs, not an EMA20 drift; TP1 blocked by 97.7 and 102.5 | brief:yes
+
+===== USOIL.sim-1 | sonnet | high | SKIP | 120.5s
+**VERDICT: SKIP** (quick) (confidence: low)
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✗ 3✗ 4✓ 5✓ 6✓
+Why: D1 uptrend is still intact (higher low at 92.2 vs the July 76–88 base), news is clear, and there's no correlated exposure. But step 2 — the decisive TrendCont read — is the problem: the swing table shows price broke the 14-bar-ago low (95.007) by 2.8pts to a fresh 5-bar-ago low (92.227) in a short, accelerating final leg, then V-snapped straight back up — that's a slam-and-reclaim, not the orderly multi-bar drift this strategy wants. Step 3 also concerns: entry 96.335 sits materially below H4 EMA20 (~97.545), i.e. price undershot and camped beyond the average rather than just touching it before resuming. The brief adds fundamental weight to the caution: the whole rally was largely an Iran-war premium, and this leg down is a real retrace of that premium on diplomatic-progress hopes — not a reason to skip on its own, but it explains why the pullback looks like real selling pressure rather than routine profit-taking.
+Changes my mind: a clean, decisive bullish H4 close back above 97.688 (the last swing high) on unhurried, overlapping bars rather than another spike would turn this into a legitimate resume trigger.
+
+LOG: TrendCont BUY | SKIP (quick, low) | SH:✓✓✓ steps:1✓2✗3✗4✓5✓6✓ | Q:- | step: 2 | Slam-like final leg undershooting EMA20 amid a war-premium unwind, not an orderly drift.
+
+===== USOIL.sim-1 | claude-opus-5-5 | high | SKIP | 81.0s
+VERDICT: **SKIP** (quick) (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2? 3✗ 4✓ 5✗ 6✓
+Quality: n/a (DISCRETION)
+Why: This isn't a drift back to the H4 EMA20. It's an H4 downtrend (lower highs 102.575 → 97.688, lower lows 99.2 → 95.0 → 92.227) that has spent about 20+ bars closed well below a now-falling EMA20, which has crossed under the EMA50. Step 3 calls that "a failing trend taking a rest," and the signal only fires as price tags the EMA20 from below. Step 5 also fails: the bank at +1R (≈99.91) has two things in its way. The untouched lower high at 97.688 is only 0.38R away, with the falling EMA50 right beside it. The old swing-low shelf at 99.20–99.27 sits at about 0.8R.
+
+Changes my mind: an H4 close above 97.688 that also gets back above the EMA50 would clear the first wall and turn this into a real resumption. I'd judge the next signal on its own merits.
+
+Notes:
+- **D1 supports the idea but doesn't rescue it.** The daily staircase is intact: price is holding the rising D1 EMA20 and hasn't broken the late-August higher low, so step 1 passes. But the leg being retraced is a war-premium spike, and about 74% of it is already gone.
+- **The pullback shape is mixed (step 2 ?).** It's a multi-bar stairstep with overlap, not a two-bar slam. But it includes a couple of full-bodied bars of about 1.5–2 ATR, one of them straight into the D1 EMA20.
+- **The stop sits inside the pullback low.** SL 92.758 is 0.53 (about 0.27 ATR) above the 92.227 swing low. If you take this anyway, the one legal edit is to widen the stop past 92.227 and accept the smaller size. Don't micro-widen.
+- **Events are clean.** The next 24h has only Fed speeches marked caution. NFP is 8.6 days away and holding through it is legal. It isn't a Friday.
+- **Correlation passes.** You have no open positions. Adding this would put you at energy long 1.0% and USD short 1.0%. If you also approve the parked BTCUSD BUY (0.5%), USD short reaches exactly 1.5%. That's at the cap, not past it, and the two are in different clusters.
+- **The market brief** (brief:yes) only describes what's happening: crude is retracing on hopes of diplomatic progress. It makes no directional call. It adds background but isn't a skip reason here.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2?3✗4✓5✗6✓ | Q:- | step: 3/5 | H4 pullback camped ~20+ bars below a falling EMA20, and the untouched lower high 97.688 sits at 0.38R inside the first 1R (brief:y
+
+===== BTCUSD.sim-2 | sonnet | low | TAKE | 36.6s
+**VERDICT: TAKE (quick) (confidence: medium)**
+Checks — Start Here: regime ✓ news ✓ correlation ✓
+Checks — TrendCont steps: 1✓ 2✓ 3✓ 4✓ 5✓ 6✓
+Quality: B — orderly multi-bar drift into EMA20 after the impulse, but crypto pullback-continuations churn as a family so this needs to stay clean, not exceptional
+
+Why: D1 is unambiguously TREND_UP/WITH-TREND, and the H4 decisive step (drift vs slam) reads as an orderly, tight consolidation sitting right on EMA20 for several small-bodied bars rather than a violent slam through it — that's the TrendCont trade, and the prior big-bar leg up is the cascade doing its normal job of extending the trend, not a warning sign against the entry itself. TP1 sits just under the last minor swing high with a reasonably clear road, stop sits just under the 3-bar-ago swing low so it's structurally placed, not tucked inside noise. No binding event veto (only FOMC-speaker caution tags in the hold window), and crypto exposure is currently flat so this doesn't stack anything yet — flag for the trader that a second parked BTCUSD TrendCont BUY exists and would double the crypto cluster if both are taken.
+
+Changes my mind: if the next H4 bar breaks back below the pullback swing (83500) instead of resuming, that flips this from orderly drift to failed support and I'd go SKIP.
+
+LOG: TrendCont BUY | TAKE (quick, medium) | SH:✓✓✓ steps:1✓2✓3✓4✓5✓6✓ | Q:B | step: 2 (drift vs slam into EMA20) | orderly pullback into EMA20 in a confirmed D1 uptrend, no binding event veto
+
+===== BTCUSD.sim-2 | claude-opus-5-5 | low | SKIP | 13.4s
+VERDICT: SKIP   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2✗ 3? 4✓ 5? 6?
+Why: This fails step 2. The pullback isn't an orderly drift into the EMA20. Price fell from the 87,282 swing high to the 83,500 low in two or three large red H4 bars, about 3,000 points. The stop is 0.87 ATR, so that drop is roughly 2.8 ATR. That's a slam, not a drift. It's also crypto, where the crypto library says pullback continuations tend to chop sideways while sweeps work better, and the default for this class is to wait for proof rather than take part. Nothing else blocks the trade: D1 is trending up and the signal is with the trend, the USD events are only Fed-speaker cautions (NFP is 8.5 days away), and there are no open positions. The context brief is background only and didn't affect this call.
+Changes my mind: If the next one or two H4 bars stay at or above the 83,500 swing low as small, overlapping candles and one then closes firmly back above the EMA20, the slam turns into a base and the setup can be looked at again.
+
+LOG: TrendCont BUY | SKIP (quick, medium) | SH:✓✓✓ steps:1✓2✗3?4✓5?6? | Q:- | step: TrendCont 2 drift vs slam | ~2.8 ATR two-bar slam into EMA20 on crypto, default is proof not participation · brief:yes
+
+===== BTCUSD.sim-2 | claude-opus-5-5 | high | SKIP | 48.3s
+VERDICT: SKIP   (quick)   (confidence: high)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2✗ 3✓ 4? 5✗ 6✓
+Why: **Step 2 fails. The pullback was a slam, not a drift.** Per the swing table, price fell from 87282 to 83500 in 3 bars. The stop (0.87 ATR ≈ 930) puts ATR near 1,070, so the fall was about 3.5 ATR. Most of it came in one bar of about 2 ATR that broke the 85080 floor of the post-breakout range and closed below the EMA20. The crypto library says a move like that into your entry is forced selling, not traders' opinion, so skip it. **Step 5 also fails:** that broken 85080 floor, plus the 85,000 round number, sits about 0.8R above entry, inside the first 1R before the +1R bank at ~85255.
+Changes my mind: If the fall to 83500 had been several overlapping, modest bars that held above the 85080 floor, the rest of the checks would pass and I'd walk this to a TAKE.
+
+Notes:
+- **Step 1 (daily trend):** The daily chart still steps up cleanly. Highs went from ~83k in late August to 87.3k after the 20 Sep breakout, and the recent lows are higher. The trend tag and the chart agree.
+- **Step 3 (depth):** Price is sitting on the EMA20, not camped well below it. This is fine.
+- **Step 4 (resume candle):** The signal bar looks small next to recent bars, and I can't grade it with confidence from the image. It isn't what decides this.
+- **Events:** Only speeches before the deadline (Williams at 7h, Barkin and Hammack at 12h, Paulson at 13h), all marked caution. The only big release is NFP, 8.5 days out. Nothing blocks entry.
+- **Exposure:** No open positions. This would add crypto long 0.50% and USD short 0.50%. None of the parked signals has a USD leg, so none duplicates it.
+- **Crypto default:** Blind, the system loses money on this instrument, and pullback-continuations are the family that churned. On a crypto card the default is proof, not participation, and this pullback isn't clean enough to count as proof. The Asia session doesn't matter here because session rules are suspended for crypto.
+- **Brief (read, `brief:yes`):** It has no BTC section and makes no directional call. The Fed-hike background shaped nothing in this verdict.
+
+LOG: TrendCont BUY | SKIP (quick, high) | SH:✓✓✓ steps:1✓2✗3✓4?5✗6✓ | Q:- | step: 2 drift-vs-slam | one ~2-ATR bar broke the 85080 range floor into EMA20 (forced flow) and that floor now caps the first 1R · brief:yes
+
+===== BTCUSD.sim-2 | sonnet | high | TAKE | 92.5s
+**Read:** setup.md, quick-reference.html (Start Here, TrendCont tab, Rules, Lessons), crypto-market-structure.md, market-brief.md, both charts. notes.live.sonnet-low.md is empty (session start, nothing to carry forward).
+
+D1 shows a clean, strong staircase uptrend from the late-Aug low (~62.7k) to ~89k, price well above all three EMAs — regime tag TREND_UP / WITH-TREND checks out by eye, not just by tag. On H4, the pullback off the ~89k high runs over several overlapping bars down into the EMA20/~83.5k zone (a two-leg pullback, not one or two slam candles), then the signal bar is a large, decisive full-bodied green candle breaking back above the EMA20 and the pullback swing. Swing table shows the next swing high (86,707, 9 bars ago) sits above TP1 (86,185), so the road to the +1R bank and TP1 is clear of the printed structure. Events are all `caution`-class Fed-speaker items inside 12h — no NO ENTRY <6h, no NO-HOLD; NFP is 8.5 days out and irrelevant to this entry horizon. Open exposure is currently zero, so this signal alone doesn't breach the 1.5% cluster cap — but note there is a second, unrelated BTCUSD BUY TrendCont signal also parked awaiting decision; approving both would double the crypto/USD-short exposure, so treat this as a one-shot approval, not two.
+
+Per the crypto library, TrendCont (pullback-continuation) is specifically the family that historically churned and carried the drawdown on BTC, while sweeps carried the profit — so this needs to be cleaner than an FX TrendCont would, and the double-leg pullback (a failed first bounce before the deeper low) is a mild mark against "textbook single drift." Against that, the trend itself is unusually strong/parabolic and the resume candle is unambiguous.
+
+```
+VERDICT: TAKE   (quick)   (confidence: medium)
+Checks — Start Here:  regime ✓   news ✓   correlation ✓
+Checks — TrendCont steps:  1✓ 2✓ 3✓ 4✓ 5✓ 6✓
+Why: D1 is an unambiguous staircase trend; H4 pullback is a multi-bar drift into the EMA20 (not a 1-2 candle slam), capped by a strong full-body resume candle with clear road to +1R/TP1 per the swing table. Crypto's own data says TrendCont is the weaker family here, and this pullback had two legs down rather than one clean drift, so it's a take, not a slam-dunk.
+Changes my mind: If a later bar shows this resume candle was a wick-heavy fake break (closes back below EMA20), I'd flip to SKIP — that's the cascade-continuation failure mode the crypto library warns about.
+```
+
+LOG: TrendCont BUY | TAKE (qui
