@@ -99,3 +99,29 @@ def decisive_step(p: dict) -> int | None:
     for n, g in p.get("steps") or []:
         if g == "no": return n
     return None
+
+# What each numbered check actually means, so nothing the trader reads is a bare number (trader ruling 2026-09-24).
+# TrendCont is the one checklist the guide numbers explicitly; the others name their checks in prose, so an unknown
+# number is dropped from the sentence rather than shown.
+STEP_NAMES = {
+    "trendcont": {1: "the D1 staircase", 2: "the pullback's character", 3: "depth against the EMA20",
+                  4: "the resume candle", 5: "room to the first target", 6: "events, correlation and late-Friday"},
+}
+
+
+def step_name(strategy: str | None, n: int) -> str | None:
+    return STEP_NAMES.get((strategy or "").strip().lower().replace(" ", ""), {}).get(n)
+
+
+def plainify(text: str | None, strategy: str | None) -> str:
+    """Turn 'Step 5 fails' into 'room to the first target fails' - and where the checklist is not numbered in the
+    guide, drop the reference rather than print a number the trader has to look up."""
+    if not text: return ""
+    def sub(m):
+        paren = (m.group(4) or "").strip()                    # "step 4 (trigger candle)" already names itself
+        return paren or step_name(strategy, int(m.group(2))) or ""
+    out = re.sub(r"\b(step|item)\s*#?\s*(\d{1,2})\b(\s*\(([^)]{3,40})\))?", sub, text, flags=re.I)
+    out = re.sub(r"\(\s*\)", "", out)                       # an emptied bracket
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    out = re.sub(r"^[,;:\s-]+", "", out)
+    return out[:1].upper() + out[1:] if out[:1].islower() and not out[:4].isupper() else out

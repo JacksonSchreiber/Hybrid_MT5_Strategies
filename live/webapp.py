@@ -151,15 +151,19 @@ def verdict_card(p: dict, other: dict | None = None) -> str:
     conf = f'<span class="k">confidence {E(p["confidence"])}</span>' if p.get("confidence") else ""
     head = f'<div class="advrow">{vpill(p.get("verdict"))}{conf}' + (
         f'<span class="pill warn">format drift: no {E(", ".join(p["missing"][:3]))}</span>' if p.get("missing") else "") + "</div>"
-    sm = f'<div class="vline"><b>{E(p["summary"])}</b></div>' if p.get("summary") else ""
+    strat = p.get("strategy")
+    sm = f'<div class="vline"><b>{E(VF.plainify(p["summary"], strat))}</b></div>' if p.get("summary") else ""
     start = "".join(f'<span class="chip {g}">{E(n)} {"✓" if g == "ok" else ("✗" if g == "no" else "?")}</span>'
                     for n, g in p.get("start") or [])
-    steps = "".join(
-        f'<span class="chip {g}{" dec" if n == dec else ""}{" diff" if oth and oth.get(n) and oth.get(n) != g else ""}">'
-        f'{n}{"✓" if g == "ok" else ("✗" if g == "no" else "?")}</span>' for n, g in p.get("steps") or [])
+    def chip(n, g):
+        nm = VF.step_name(strat, n)
+        lbl = f'{n}{"✓" if g == "ok" else ("✗" if g == "no" else "?")}' + (f' {E(nm)}' if n == dec and nm else "")
+        return (f'<span class="chip {g}{" dec" if n == dec else ""}{" diff" if oth and oth.get(n) and oth.get(n) != g else ""}"'
+                + (f' title="{E(nm)}"' if nm else "") + f'>{lbl}</span>')
+    steps = "".join(chip(n, g) for n, g in p.get("steps") or [])
     q = (f'<div class="vline"><span class="k">quality</span> <b>{E(p["quality"])}</b>'
          + (f' <span class="k">{E(p["quality_why"])}</span>' if p.get("quality_why") else "") + "</div>") if p.get("quality") else ""
-    why = f'<div class="vline"><span class="k">why</span> {E(p["why"])}</div>' if p.get("why") else ""
+    why = f'<div class="vline"><span class="k">why</span> {E(VF.plainify(p["why"], strat))}</div>' if p.get("why") else ""
     chg = f'<div class="vline"><span class="k">changes my mind</span> {E(p["changes"])}</div>' if p.get("changes") else ""
     more = ((f'<div class="k">notes</div><pre>{E(p["notes"])}</pre>' if p.get("notes") else "")
             + f'<div class="k">raw reply</div><pre>{E(p.get("raw") or "")}</pre>')
@@ -189,7 +193,7 @@ def advisor_rows(key: str, sig: dict) -> str:
             p = _parsed_last(rec)
             body = (f'{vpill(p.get("verdict"))}'
                     + (f'<span class="k">{E(p["confidence"])}</span>' if p.get("confidence") else "")
-                    + f'<span class="sm">{E(p.get("summary") or "")}</span>')
+                    + f'<span class="sm">{E(VF.plainify(p.get("summary"), p.get("strategy") or sig.get("strategy")))}</span>')
         elif st == "failed": body = '<span class="vp skip">BUNDLE FAILED</span><span class="sm">no consult was run on this card</span>'
         elif (rec or {}).get("policy_skip"): body = f'<span class="vp none">not run</span><span class="sm">{E((rec or {}).get("note", ""))}</span>'
         elif st in ("rate_limited", "error"): body = f'<span class="vp none">{"rate-limited" if st == "rate_limited" else "failed"}</span><span class="sm">{E(str((rec or {}).get("note") or ""))}</span>'

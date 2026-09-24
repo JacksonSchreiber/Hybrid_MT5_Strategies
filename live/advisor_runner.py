@@ -326,7 +326,8 @@ def ensure_log_line(cfg: dict, sig: dict, mid: str, text: str, kind: str, log) -
     # coach 2026-09-24: the SUMMARY sentence is the last field of the line, and a verdict whose block did not parse
     # says so - that is how the coach sees which model is drifting from the output format.
     pv = VF.parse(text)
-    summ = (("SUMMARY(synth): " if pv.get("synthesised") else "SUMMARY: ") + pv["summary"]) if pv.get("summary") else "SUMMARY: -"
+    plain = VF.plainify(pv.get("summary"), pv.get("strategy") or sig.get("strategy"))
+    summ = (("SUMMARY(synth): " if pv.get("synthesised") else "SUMMARY: ") + plain) if plain else "SUMMARY: -"
     if pv.get("missing"): summ += f" | unparsed: {','.join(pv['missing'][:4])}"
     if payload:
         payload = re.sub(r"\s*\|\s*brief:(yes|no)\s*$", "", payload)
