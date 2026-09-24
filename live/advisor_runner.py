@@ -82,6 +82,38 @@ def swing_block(sig: dict) -> str:
             f"Bars ago counts back from the newest bar on the chart (its right edge); {anchor}. The newest entry may still be "
             "confirmed against the unfinished current bar. No sweep column: the EA tracks no per-swing pool status.")
 
+SLAM_ONE, SLAM_PAIR = 2.0, 1.5      # guide thresholds (coach 2026-09-24): one bar >= 2x ATR, or two consecutive >= 1.5x
+
+def slam_block(sig: dict) -> str:
+    """Step 2 in numbers. The two panels read the same 1.1-1.8 ATR bars opposite ways because each eyeballed "slam" off
+    the picture; the guide now carries thresholds, so the card carries the measurements they apply to. Pullback = from
+    the most recent swing the price retraced FROM (a swing high for a BUY) up to the signal bar, ranges as high-low."""
+    bars = charts.signal_bars(sig, "h4"); atr = float((sig.get("sizing") or {}).get("atr14") or 0)
+    if len(bars) < 12 or atr <= 0:
+        return ("- **Step 2 numbers:** (unavailable - " + ("no H4 bars" if len(bars) < 12 else "no ATR on this card")
+                + "; estimate against the last 14 bars on the chart and say you estimated)")
+    dg = charts._digits(sig)
+    idx = {b[0]: i for i, b in enumerate(bars)}
+    si = idx.get(charts._epoch(sig.get("signal_time")), len(bars) - 1)
+    up = str(sig.get("direction", "")).upper().startswith("B")
+    tbl = OV.swing_table(bars, 5); start = None
+    for sw in tbl["hi" if up else "lo"]:                      # newest first: the first one at or before the signal bar
+        j = len(bars) - 1 - sw["bars_ago"]
+        if j < si: start = (j, sw["p"]); break
+    if start is None: j0, from_txt = max(0, si - 7), "no swing of the right kind in the window, so the last 8 bars"
+    else: j0, from_txt = start[0], f"from the {start[1]:.{dg}f} swing {'high' if up else 'low'} ({si - start[0]} bar{'' if si - start[0] == 1 else 's'} before the signal bar)"
+    seg = bars[j0:si + 1]
+    if len(seg) < 2: return "- **Step 2 numbers:** (unavailable - the pullback window came out empty)"
+    xs = [(b[2] - b[3]) / atr for b in seg]
+    pair = max((min(xs[i], xs[i + 1]) for i in range(len(xs) - 1)), default=0.0)
+    slam = max(xs) >= SLAM_ONE or pair >= SLAM_PAIR
+    why = (f"largest bar {max(xs):.2f}x" + (" >= 2x" if max(xs) >= SLAM_ONE else "")
+           + f", best consecutive pair both >= {pair:.2f}x" + (" >= 1.5x" if pair >= SLAM_PAIR else ""))
+    return (f"- **Step 2 numbers (H4 ATR(14) = {atr:.{dg}f}):** pullback {from_txt} - bar ranges as multiples of ATR, "
+            f"oldest to newest: {' · '.join(f'{x:.2f}' for x in xs)}. {why}. By the guide's thresholds "
+            f"(slam = one bar >= {SLAM_ONE:g}x, or two consecutive >= {SLAM_PAIR:g}x): **{'SLAM' if slam else 'no slam'}**. "
+            "Ranges are high-low of each finished H4 bar; the last entry is the signal bar itself.")
+
 def build_setup_md(sig: dict, cfg: dict) -> str:
     lv = sig.get("levels") or {}; rr = sig.get("rr") or {}; sz = sig.get("sizing") or {}
     sig_t = C.parse_iso(sig.get("signal_time")); dl = C.parse_iso(sig.get("deadline"))
@@ -103,6 +135,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 - **Proposed levels:** entry {lv.get('entry')}{entry_note}, SL {lv.get('sl')}, TP1 {lv.get('tp1')}{tp2} (partial {lv.get('partial_fraction', 0.5):.0%} at TP1)
 - **Risk geometry:** SL 1.0R · TP1 {r_tp1}R · TP2 {r_run}R (floor {rr.get('floor')}R; detector already sized to the gate risk and cleared the R:R floor)
 {swing_block(sig)}
+{slam_block(sig)}
 - **Sizing:** {sz.get('lots_line', '')} · risk multiplier in effect {sz.get('risk_mult_applied', 1.0)} → effective {float(sz.get('risk_pct_effective', 0.01))*100:.2f}%
 - **Entry cost (spread) right now:** {sz.get('spread')} = **{float(sz.get('spread_r') or 0):.3f}R** of the stop{f" (gate: refused above {float(sz.get('max_spread_r') or 0):.2f}R)" if sz.get('max_spread_r') else ""} — you pay this the moment the trade opens
 {EXP.build(sig, cfg)}
@@ -118,6 +151,12 @@ def _atomic_copy(src: str, dst: str) -> None:
     import shutil
     shutil.copyfile(src, dst + ".tmp"); os.replace(dst + ".tmp", dst)
 
+MIN_DRAWN = {"h4": 20, "d1": 20}     # fewer bars than this on the image and the advisor is grading a blank chart
+
+def render_health(sig: dict) -> tuple[bool, dict]:
+    cnt = {tf: charts.drawn_bars(sig, tf) for tf in ("h4", "d1")}
+    return all(cnt[tf] >= MIN_DRAWN[tf] for tf in cnt), cnt
+
 def write_bundle(sig: dict, cfg: dict, sub: str | None = None) -> str:
     """bundles/<key>/ (the shared initial bundle both advisors are launched from) or bundles/<key>/<sub>/ (one model's
     fresh copy for a reply - never overwrites what the other model is reading)."""
@@ -131,7 +170,17 @@ def write_bundle(sig: dict, cfg: dict, sub: str | None = None) -> str:
     if b:
         _atomic_copy(b["path"], mb); brief_note = f"\n- **Context brief attached:** `market-brief.md` (generated {b['t'].strftime('%Y-%m-%d %H:%M UTC')}{'; FLAGGED directional wording: ' + ', '.join(b['flags']) if b['flags'] else ''}) - CLAUDE.live.md §Context brief governs its weight."
     elif os.path.exists(mb): os.remove(mb)
-    C.atomic_write_text(os.path.join(bdir, "setup.md"), build_setup_md(sig, cfg) + brief_note + "\n")
+    ok, cnt = render_health(sig)
+    if not ok:                        # coach 2026-09-24 item 5: ONE re-render, then fail the bundle - never consult a blank chart
+        time.sleep(3.0)
+        h4, d1 = charts.render_signal(sig, os.path.join(cfg["root"], "web", "charts"), fresh=True)
+        _atomic_copy(h4, os.path.join(bdir, "h4.png")); _atomic_copy(d1, os.path.join(bdir, "d1.png"))
+        ok, cnt = render_health(sig)
+    banner = "" if ok else (f"# BUNDLE FAILED - DO NOT GRADE THIS CARD\n\nThe charts rendered with h4={cnt['h4']} and "
+                            f"d1={cnt['d1']} bars drawn (minimum {MIN_DRAWN['h4']}/{MIN_DRAWN['d1']}) after a re-render, so the "
+                            "images are blank or near-blank. No consult is run on this bundle; the trader decides unaided.\n\n")
+    C.atomic_write_text(os.path.join(bdir, "setup.md"), banner + build_setup_md(sig, cfg) + brief_note + "\n")
+    C.atomic_write_json(os.path.join(bdir, "bundle_health.json"), {"ok": ok, "drawn": cnt, "at": C.now_iso()})
     return bdir
 
 # ----------------------------------------------------------------------------- models (coach 2026-09-21: dual advisor)
@@ -344,6 +393,16 @@ class Runner:
         except OSError: have = False
         if not have:
             write_bundle(sig, self.cfg); C.atomic_write_text(mark, stamp)
+        health = C.load_json(os.path.join(bdir, "bundle_health.json")) or {"ok": True}
+        if not health.get("ok"):      # item 5: a failed render is reported, never graded
+            why = f"BUNDLE FAILED: {health.get('drawn')} bars drawn after a re-render - no consult run"
+            self.log(f"{key}: {why}")
+            for m in todo:
+                rec = load_record(self.cfg, key, m["id"]) or new_record(self.cfg, sig, m)
+                rec.update(status="failed", note=why)
+                rec.setdefault("consults", []).append({"ts": C.now_iso(), "kind": "bundle", "ok": False, "error": why})
+                save_record(self.cfg, rec)
+            return
         for m in todo: self._spawn(key, m["id"], self.consult, sig, m, force)
 
     def consult(self, sig: dict, m: dict, force: bool = False) -> None:

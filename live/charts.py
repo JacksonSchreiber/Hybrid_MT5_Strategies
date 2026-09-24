@@ -176,6 +176,13 @@ def render_signal(sig: dict, out_dir: str, fresh: bool = False) -> tuple[str, st
     render(signal_bars(sig, "d1"), title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
     return p_h4, p_d1
 
+def drawn_bars(sig: dict, tf: str) -> int:
+    """how many bars the renderer would actually DRAW for this timeframe - i.e. what the advisor can see. The feed can
+    return nothing (symbol not selected, terminal down) and the EA's embedded bars can be short, and the result is a
+    blank chart the advisor then grades anyway (US100 #3 09-17, XAUUSD #6 09-23)."""
+    n = len(signal_bars(sig, tf))
+    return min(n, H4_BARS if tf == "h4" else D1_BARS)
+
 def _digits(sig: dict) -> int:
     e = (sig.get("levels") or {}).get("entry") or 1.0
     s = f"{e}"; return max(2, min(5, len(s.split(".")[1]) if "." in s else 2))
