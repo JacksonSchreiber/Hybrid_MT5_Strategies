@@ -328,31 +328,37 @@ def split_log(text: str) -> tuple[str, str | None]:
     return (text[:m.start()] + text[m.end():]).rstrip(), m.group(1).strip()
 
 def ensure_log_line(cfg: dict, sig: dict, mid: str, text: str, kind: str, log) -> None:
-    """the runner owns verdicts.live.log: ts | model | symbol | #id, then the model's LOG: fields; synthesize if absent.
-    Format: CLAUDE.live.md §Verdict log (model field added 2026-09-21)."""
-    p = os.path.join(cfg["advisor"]["live_dir"], "verdicts.live.log"); tag = f"#{sig['signal_id']}"
-    _, payload = split_log(text)
-    bflag = "brief:" + ("yes" if os.path.exists(os.path.join(cfg["advisor"]["live_dir"], "bundles", sig["signal_key"], "market-brief.md")) else "no")
-    # coach 2026-09-24: the SUMMARY sentence is the last field of the line, and a verdict whose block did not parse
-    # says so - that is how the coach sees which model is drifting from the output format.
-    pv = VF.parse(text)
-    plain = VF.plainify(pv.get("summary"), pv.get("strategy") or sig.get("strategy"))
-    summ = (("SUMMARY(synth): " if pv.get("synthesised") else "SUMMARY: ") + plain) if plain else "SUMMARY: -"
-    if pv.get("missing"): summ += f" | unparsed: {','.join(pv['missing'][:4])}"
-    if payload:
-        payload = re.sub(r"\s*\|\s*brief:(yes|no)\s*$", "", payload)
-        with _log_lock: C.append_line(p, " | ".join([C.now_iso(), mid, sig["symbol"], tag, payload, bflag, summ]))
-        if pv.get("missing"): log(f"{sig['signal_key']}/{mid}: verdict block incomplete - missing {', '.join(pv['missing'])}")
-        return
-    m = VERDICT_RE.search(text or "")
-    v = f"{m.group(1).upper()} ({m.group(2).lower()}, {m.group(3).lower()})" if m else "UNPARSED"
-    sh = re.search(r"regime\s*([✓✗?])\s*news\s*([✓✗?])\s*correlation\s*([✓✗?])", text or ""); steps = re.search(r"steps:\s*([0-9✓✗? ]+)", text or "")
-    q = re.search(r"Quality:\s*([ABC])", text or ""); why = re.search(r"Why:\s*(.+)", text or "")
-    line = " | ".join([C.now_iso(), mid, sig["symbol"], tag, f"{sig.get('strategy')} {sig.get('direction')}", v,
-                       f"SH:{''.join(sh.groups()) if sh else '???'} steps:{steps.group(1).strip().replace(' ', '') if steps else '-'}",
-                       f"Q:{q.group(1) if q else '-'}", "step: (runner-synthesized)", (why.group(1).strip()[:160] if why else "(no Why line)") + (" | reply" if kind == "reply" else " | runner"), bflag, summ])
-    with _log_lock: C.append_line(p, line)
-    log(f"{sig['signal_key']}/{mid}: log line synthesized ({kind})")
+    """The runner owns verdicts.live.log and builds every field from the parsed block (CLAUDE.live.md §Verdict log,
+    coach 2026-09-24). The model is no longer asked for a LOG: line: one source of truth, and a model drifting from
+    the output format shows up as empty fields rather than as a plausible-looking line it wrote itself.
+
+    <ts> | <model> | <symbol> | #<id> | <strat> <dir> | <VERDICT> (conf) | mech:<PASS|VETO:rule> d1ext:<±n.nn>
+        | opinion:<W>(conf) | SH:<r><n><c> steps:<...> | Q:<A|B|-> | sources:<n> | <one clause> | <SUMMARY>
+    """
+    p_ = os.path.join(cfg["advisor"]["live_dir"], "verdicts.live.log")
+    pv = VF.parse(text); strat = pv.get("strategy") or sig.get("strategy")
+    g = {"ok": "\u2713", "no": "\u2717", "maybe": "?", "na": "-"}
+    sh = "".join(g.get(v, "?") for _, v in (pv.get("start") or [])) or "???"
+    steps = "".join(f"{n}{g.get(v, '?')}" for n, v in (pv.get("steps") or [])) or "-"
+    mech = ("VETO:" + (pv.get("mech_rule") or "?") if pv.get("mech") == "VETO" else (pv.get("mech") or "-"))
+    d1 = f"{pv['d1_ext']:+.2f}" if pv.get("d1_ext") is not None else "-"
+    opin = (pv.get("opinion") or "-") + (f"({pv['opinion_conf']})" if pv.get("opinion_conf") else "")
+    nsrc = len(pv.get("sources") or [])
+    clause = VF.plainify((pv.get("why") or "").split(". ")[0], strat)[:150] or "(no Why line)"
+    summ = VF.plainify(pv.get("summary"), strat) or "-"
+    if pv.get("synthesised"): summ = "(synth) " + summ
+    flags = []
+    if pv.get("missing"): flags.append("unparsed:" + ",".join(pv["missing"][:4]))
+    if pv.get("opinion") and not nsrc: flags.append("UNSOURCED")
+    if kind == "reply": flags.append("reply")
+    line = " | ".join([C.now_iso(), mid, sig["symbol"], f"#{sig['signal_id']}",
+                       f"{sig.get('strategy')} {sig.get('direction')}",
+                       f"{pv.get('verdict') or '-'}" + (f" ({pv['confidence']})" if pv.get("confidence") else ""),
+                       f"mech:{mech} d1ext:{d1}", f"opinion:{opin}", f"SH:{sh} steps:{steps}",
+                       f"Q:{pv.get('quality') or '-'}", f"sources:{nsrc}", clause, summ]
+                      + ([" ".join(flags)] if flags else []))
+    with _log_lock: C.append_line(p_, line)
+    if flags: log(f"{sig['signal_key']}/{mid}: {' '.join(flags)}")
 
 def consult_log(cfg: dict, key: str, mid: str, kind: str, r: dict) -> None:
     """one line per consult attempt - the dashboard's per-model daily counts and the rate-limit alert read this."""
@@ -499,10 +505,10 @@ class Runner:
             rel = f"bundles/{key}"; bdir = os.path.join(self.cfg["advisor"]["live_dir"], "bundles", key)
             prompt = header(m) + (f"#{sig['signal_id']} — LIVE signal {sig['symbol']} {sig.get('strategy')} {sig.get('direction')}. "
                       f"Bundle: {rel}/setup.md, {rel}/h4.png, {rel}/d1.png" + (f", {rel}/market-brief.md (context brief - §Context brief rules apply)" if os.path.exists(os.path.join(bdir, "market-brief.md")) else "") + ". Read them all, then answer with the full scorecard. "
-                      f"Do NOT write to verdicts.live.log yourself and do not use shell commands (none are available): the runner appends the log line. "
-                      f"End your answer with one final line starting with 'LOG: ' followed by the verdict-log fields after the '#id' field, i.e. "
-                      f"'LOG: {sig.get('strategy')} {sig.get('direction')} | <VERDICT> (quick, <confidence>) | SH:<regime><news><corr> steps:<...> | Q:<A|B|C|-> | step: <decisive step> | <one-clause reason>' "
-                      f"using the glyphs ✓ ✗ ? exactly as in the role file (e.g. 'SH:✓✓✗ steps:1✓2✗3✗4?5?6✓').")
+                      f"Start from library/INDEX.md and the distilled notes it points at for this setup, then read the bundle. "
+                      f"Answer with the block exactly as CLAUDE.live.md specifies - SUMMARY, VERDICT, Mechanical, the two Checks lines, "
+                      f"OPINION, Sources, Why, Changes my mind - using the glyphs ✓ ✗ ? as in the role file. Do NOT write a LOG: line and do "
+                      f"not use shell commands (none are available): the runner writes the verdict log from your block.")
             self.log(f"{key}/{mid}: consult start (session {rec['session_id'][:8]}, timeout {m.get('timeout_s')}s)")
             r = run_claude(self.cfg, m, prompt, sid=rec["session_id"], resume=False, log=self.log)
             if not r["ok"] and "already in use" in (r.get("error") or "").lower():

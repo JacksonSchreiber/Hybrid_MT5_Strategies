@@ -14,23 +14,23 @@
  "advisor": {
   "claude_cmd": "C:\\Users\\hybridops\\AppData\\Roaming\\npm\\claude.cmd",
   "model": "claude-opus-5-5",
-  "effort": "low",
-  "timeout_s": 300,
+  "effort": "high",
+  "timeout_s": 200,
   "live_dir": "C:\\ProgramData\\hybrid\\advisor\\live\\advisor",
   "node_path": "C:\\Program Files\\nodejs;C:\\Users\\hybridops\\AppData\\Roaming\\npm",
   "token_file": "C:\\ProgramData\\hybrid\\secrets\\advisor.token",
   "models": [
    {
-    "id": "opus-low",
+    "id": "opus-high",
     "model": "claude-opus-5-5",
-    "effort": "low",
-    "timeout_s": 300,
-    "max_parallel": 3,
-    "label": "Opus 5.5 · low effort"
+    "effort": "high",
+    "timeout_s": 200,
+    "max_parallel": 2,
+    "label": "Opus 5.5 · deep read"
    }
   ],
   "opus_fallback": {
-   "model_id": "opus-low",
+   "model_id": "opus-high",
    "tested_symbols": [
     "EURUSD",
     "GBPUSD",

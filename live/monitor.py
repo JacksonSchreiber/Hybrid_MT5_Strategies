@@ -326,8 +326,46 @@ class Monitor:
                       "gap must exceed the <=1.5 bucket's by >= +0.30R for it to become a rule.\n"
                       "Re-run pipeline/trader_selection_study.py and pipeline/trader_driver_study.py with the live rows added.")
 
+    # Coach 2026-09-24: the opinion layer is now the thing being graded, so count it live. One line per TrendCont
+    # verdict since the deploy, its OPINION verdict joined to the journal's outcome; flag once at n=50.
+    OPINION_N = 50
+    OPINION_FROM = "2026-09-24"
+
+    def opinion_watch(self):
+        p = os.path.join(self.cfg["root"], "advisor", "opinion_watch.json")
+        st = C.load_json(p) or {"n": 0, "flagged": False}
+        lg = os.path.join(self.cfg["advisor"]["live_dir"], "verdicts.live.log")
+        ops: dict[tuple[str, str], str] = {}
+        try:
+            with open(lg, encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    parts = [x.strip() for x in ln.split("|")]
+                    if len(parts) < 8 or parts[0][:10] < self.OPINION_FROM: continue
+                    if "TrendCont" not in parts[4] or "reply" in ln: continue
+                    op = next((x[8:] for x in parts if x.startswith("opinion:")), "")
+                    w = op.split("(")[0].strip()
+                    if w and w != "-": ops[(parts[2], parts[3].lstrip("#"))] = w
+        except OSError: return
+        rows = {(r.get("symbol"), r.get("signal_id")): r for r in C.journal_rows(self.cfg)}
+        paired = []
+        for (sym, sid), w in ops.items():
+            r = rows.get((sym, sid))
+            try:
+                if r and r.get("closed") != "0" and r.get("r_multiple"): paired.append((w, float(r["r_multiple"])))
+            except ValueError: pass
+        n = len(ops)
+        if n != st.get("n") or len(paired) != st.get("paired"):
+            st["n"] = n; st["paired"] = len(paired); C.atomic_write_json(p, st)
+        if n >= self.OPINION_N and not st.get("flagged"):
+            st["flagged"] = True; C.atomic_write_json(p, st)
+            tk = [r for w, r in paired if w.startswith("TAKE")]; sk = [r for w, r in paired if w == "SKIP"]
+            m = lambda xs: f"{sum(xs)/len(xs):+.3f}R over {len(xs)}" if xs else "no closed rows yet"
+            self.send(f"COACH COUNTER DUE: {n} TrendCont opinions since {self.OPINION_FROM} ({len(paired)} with a closed "
+                      f"outcome).\nopinion TAKE: {m(tk)}\nopinion SKIP (blind outcome): {m(sk)}\n"
+                      "That is the first read on whether the advisor's own view carries anything.")
+
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()

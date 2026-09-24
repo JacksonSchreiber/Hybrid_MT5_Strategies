@@ -12,6 +12,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
+import re
 from live import charts
 from live import advisor_runner as AR
 from live import verdict_fmt as VF
@@ -149,8 +150,23 @@ def verdict_card(p: dict, other: dict | None = None) -> str:
     dec = VF.decisive_step(p)
     oth = dict(other.get("steps") or []) if other else {}
     conf = f'<span class="k">confidence {E(p["confidence"])}</span>' if p.get("confidence") else ""
-    head = f'<div class="advrow">{vpill(p.get("verdict"))}{conf}' + (
-        f'<span class="pill warn">format drift: no {E(", ".join(p["missing"][:3]))}</span>' if p.get("missing") else "") + "</div>"
+    # layer 1 beside layer 2 (coach 2026-09-24): the mechanical read is a chip row next to the verdict pill, so a
+    # mechanical VETO sitting beside a TAKE opinion - or the reverse - is visible without reading a word.
+    mech = ""
+    if p.get("mech"):
+        cls = "no" if p["mech"] == "VETO" else "ok"
+        lbl = "VETO" + (f' · {p["mech_rule"]}' if p.get("mech_rule") else "") if p["mech"] == "VETO" else "mechanical PASS"
+        bits = [f'<span class="chip {cls}">{E(lbl)}</span>']
+        if p.get("d1_ext") is not None:
+            bits.append(f'<span class="chip {"ok" if p["d1_ext"] >= 0.5 else "maybe"}">D1 {p["d1_ext"]:+.2f} ATR</span>')
+        for m in re.findall(r"(grade [ABC-])|(spread [0-9.]+R)|(\b\d{2}:\d{2} bar[^·]*)", p.get("mech_detail") or ""):
+            t = next((x for x in m if x), "").strip(" ·")
+            if t: bits.append(f'<span class="chip">{E(t)}</span>')
+        mech = '<div class="chips">' + "".join(bits) + "</div>"
+    flags = ""
+    if p.get("missing"): flags += f'<span class="pill warn">format drift: no {E(", ".join(p["missing"][:3]))}</span>'
+    if p.get("unsourced") and p.get("opinion"): flags += '<span class="pill warn">unsourced opinion</span>'
+    head = f'<div class="advrow">{vpill(p.get("verdict"))}{conf}{flags}</div>{mech}'
     strat = p.get("strategy")
     sm = f'<div class="vline"><b>{E(VF.plainify(p["summary"], strat))}</b></div>' if p.get("summary") else ""
     start = "".join(f'<span class="chip {g}">{E(n)} {"✓" if g == "ok" else ("✗" if g == "no" else "?")}</span>'
@@ -163,6 +179,16 @@ def verdict_card(p: dict, other: dict | None = None) -> str:
     steps = "".join(chip(n, g) for n, g in p.get("steps") or [])
     q = (f'<div class="vline"><span class="k">quality</span> <b>{E(p["quality"])}</b>'
          + (f' <span class="k">{E(p["quality_why"])}</span>' if p.get("quality_why") else "") + "</div>") if p.get("quality") else ""
+    op = ""
+    if p.get("opinion") or p.get("opinion_text"):
+        dis = p.get("opinion") and p.get("verdict") and p["opinion"] != p["verdict"]
+        op = (f'<div class="vline" style="{"border-left:3px solid #58a6ff;padding-left:8px" if dis else ""}">'
+              f'<span class="k">opinion</span> {vpill(p.get("opinion"))}'
+              + (f'<span class="k">{E(p["opinion_conf"])}</span>' if p.get("opinion_conf") else "")
+              + (f'<span class="k"> · differs from the verdict above</span>' if dis else "")
+              + f'<div style="margin-top:4px">{E(VF.plainify(p.get("opinion_text"), strat))}</div></div>')
+    src = (f'<div class="vline"><span class="k">sources</span> {E("; ".join(p["sources"]))}</div>' if p.get("sources")
+           else ('<div class="vline"><span class="k bad">no sources cited</span></div>' if p.get("opinion") else ""))
     why = f'<div class="vline"><span class="k">why</span> {E(VF.plainify(p["why"], strat))}</div>' if p.get("why") else ""
     chg = f'<div class="vline"><span class="k">changes my mind</span> {E(p["changes"])}</div>' if p.get("changes") else ""
     more = ((f'<div class="k">notes</div><pre>{E(p["notes"])}</pre>' if p.get("notes") else "")
@@ -170,7 +196,7 @@ def verdict_card(p: dict, other: dict | None = None) -> str:
     return (head + sm
             + (f'<div class="chips">{start}</div>' if start else "")
             + (f'<div class="chips">{steps}<span class="k">{E(p.get("strategy") or "")} steps</span></div>' if steps else "")
-            + q + why + chg + f'<details><summary class="k">more</summary>{more}</details>')
+            + q + op + src + why + chg + f'<details><summary class="k">more</summary>{more}</details>')
 
 
 def _parsed_last(rec: dict | None) -> dict:
@@ -408,6 +434,10 @@ def dashboard(q: dict) -> str:
     if acct: out.append(f'<div class="card"><div class="k">Account · from {E(acct.get("symbol", ""))} beat {C.rel_time(C.parse_iso(acct.get("ts")))}</div>' + ftmo_block(acct) + '</div>')
     out.append(shadow_line())
     out.append(tc_watch_line())
+    ow = C.load_json(os.path.join(CFG["root"], "advisor", "opinion_watch.json")) or {}
+    if ow.get("n"):
+        out.append(f'<div class="k">advisor opinions logged since the 2026-09-24 deploy: {int(ow["n"])}/50'
+                   f' ({int(ow.get("paired") or 0)} with a closed outcome){" — due for the coach\'s read" if ow.get("flagged") else ""}</div>')
     # backup + telegram test (trader rulings 2026-09-16: manual 30-day zip instead of a nightly pull)
     from live import backup
     ds = backup.days_since(CFG); lb = backup.last(CFG)

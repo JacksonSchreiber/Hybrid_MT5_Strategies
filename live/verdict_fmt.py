@@ -10,7 +10,7 @@ import re
 
 GLYPH = {"✓": "ok", "✔": "ok", "v": "ok", "x": "no", "✗": "no", "✘": "no", "×": "no", "?": "maybe", "-": "na"}
 VERDICTS = ("TAKE (DEFAULT)", "TAKE", "SKIP", "ADJUST", "WAIT")
-_LABEL = re.compile(r"^(SUMMARY|VERDICT|Quality|Why|Changes my mind|Notes)\s*:", re.I)
+_LABEL = re.compile(r"^(SUMMARY|VERDICT|Mechanical|OPINION|Sources|Quality|Why|Changes my mind|Notes)\s*:", re.I)
 _CHECKS = re.compile(r"^Checks\s*[—–-]\s*(.+?)\s*:\s*(.*)$", re.I)
 _STEP = re.compile(r"(\d{1,2})\s*([✓✔✗✘×?xXvV-])")            # v/V: some transports mangle the tick glyph
 _CHIP = re.compile(r"(regime|news|correlation)\s*([✓✔✗✘×?xXvV-])", re.I)
@@ -31,7 +31,11 @@ def parse(text: str | None) -> dict:
            changes, notes, missing[], synthesised}"""
     out: dict = {"summary": None, "verdict": None, "confidence": None, "mode": None, "start": [], "strategy": None,
                  "steps": [], "quality": None, "quality_why": None, "why": "", "changes": "", "notes": "",
-                 "missing": [], "synthesised": False, "raw": text or ""}
+                 "missing": [], "synthesised": False, "raw": text or "",
+                 # layer 1 / layer 2 (coach 2026-09-24): the mechanical read and the advisor's own opinion are
+                 # separate lines and may disagree - the card shows both rather than reconciling them.
+                 "mech": None, "mech_rule": None, "mech_detail": "", "d1_ext": None,
+                 "opinion": None, "opinion_conf": None, "opinion_text": "", "sources": [], "unsourced": True}
     if not text: out["missing"] = ["everything"]; return out
     cur, buf = None, []
 
@@ -42,6 +46,7 @@ def parse(text: str | None) -> dict:
             elif cur == "changes": out["changes"] = v
             elif cur == "notes": out["notes"] = (out["notes"] + "\n" + v).strip()
             elif cur == "summary": out["summary"] = v
+            elif cur == "opinion": out["opinion_text"] = re.sub(r"^[^—–-]*[—–-]\s*", "", v).strip() or v
     for ln in (text or "").splitlines():
         m = _LABEL.match(ln.strip())
         ck = _CHECKS.match(ln.strip())
@@ -59,6 +64,24 @@ def parse(text: str | None) -> dict:
                 cur = None
                 q = re.match(r"\s*([ABC-])\s*[—–-]?\s*(.*)$", rest)
                 if q: out["quality"], out["quality_why"] = q.group(1), q.group(2).strip()
+            elif lab == "mechanical":
+                cur = None
+                out["mech"] = "VETO" if re.search(r"\bveto\b", rest, re.I) else ("PASS" if re.search(r"\bpass\b", rest, re.I) else None)
+                mr = re.search(r"veto\s*\(([^)]{2,60})\)", rest, re.I)
+                out["mech_rule"] = mr.group(1).strip() if mr else None
+                out["mech_detail"] = re.sub(r"^(PASS|VETO)\s*(\([^)]*\))?\s*[—–-]?\s*", "", rest, flags=re.I).strip()
+                dx = re.search(r"D1\s*ext\w*\s*([+-]?\d+(?:\.\d+)?)", rest, re.I)
+                if dx: out["d1_ext"] = float(dx.group(1))
+            elif lab == "opinion":
+                cur = "opinion"; buf = [rest]
+                out["opinion"] = verdict_of(rest)
+                oc = re.search(r"\b(low|medium|high)\b", rest.split("—")[0] if "—" in rest else rest[:60], re.I)
+                out["opinion_conf"] = oc.group(1).lower() if oc else None
+            elif lab == "sources":
+                cur = None
+                out["sources"] = [x.strip() for x in re.split(r"[;\n]", rest) if len(x.strip()) > 2
+                                  and not re.fullmatch(r"(none|n/?a|-)", x.strip(), re.I)]
+                out["unsourced"] = not out["sources"]
             elif lab == "why": cur = "why"; buf = [rest]
             elif lab == "changes my mind": cur = "changes"; buf = [rest]
             elif lab == "notes": cur = "notes"; buf = [rest]
