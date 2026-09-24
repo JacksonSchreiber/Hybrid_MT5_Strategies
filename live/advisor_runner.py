@@ -150,25 +150,15 @@ def wall_line(tbl: dict, dist, R: float, dg: int, up: bool) -> str:
 
 def d1_ext_line(sig: dict) -> str:
     """D1's distance from its own EMA20, in D1 ATR(14), signed by the trade's direction (coach 2026-09-24). The
-    driver study found this is the only measured feature that explains the trader's selection edge: his picks beat
-    his passes by +0.67R where D1 sits more than 1.5 ATR out, and by nothing at all where it sits near the mean."""
-    bars = charts.signal_bars(sig, "d1")
-    if len(bars) < 40: return "- **D1 extension:** (unavailable — not enough D1 bars on this card)"
-    c = [b[4] for b in bars]
-    k = 2.0 / 21; e = c[0]
-    for v in c: e = v * k + e * (1 - k)
-    tr = [max(bars[j][2] - bars[j][3], abs(bars[j][2] - bars[j - 1][4]), abs(bars[j][3] - bars[j - 1][4]))
-          for j in range(max(1, len(bars) - 200), len(bars))]
-    if len(tr) < 14: return "- **D1 extension:** (unavailable — not enough D1 history)"
-    a = sum(tr[:14]) / 14
-    for x in tr[14:]: a = (a * 13 + x) / 14
-    if a <= 0: return "- **D1 extension:** (unavailable — D1 ATR is zero)"
-    up = str(sig.get("direction", "")).upper().startswith("B")
-    ext = ((c[-1] - e) / a) * (1 if up else -1)
+    driver study found this is the only measured feature that explains the trader's selection edge, and the blind
+    record backs it: above +0.5 ATR the graded TrendCont population returns +0.18R against -0.08R below it."""
+    ext = charts.d1_extension(sig)
+    if ext is None: return "- **D1 extension:** (unavailable — not enough D1 history on this card)"
     where = ("stretched well away from the mean" if ext > 1.5 else
-             ("moderately extended" if ext > 0.5 else ("near its mean" if ext > -0.5 else "extended AGAINST this trade")))
+             ("extended with the trade" if ext >= 0.5 else ("near its mean" if ext > -0.5 else "extended AGAINST this trade")))
+    band = "inside the studied band (>= +0.5 ATR)" if ext >= 0.5 else "below the studied band (< +0.5 ATR)"
     return (f"- **D1 extension:** last D1 close sits **{ext:+.2f} ATR** from its own EMA20, signed in the trade's "
-            f"direction ({where}). D1 ATR(14) {a:.{charts._digits(sig)}f}.")
+            f"direction — {where}, {band}.")
 
 
 def build_setup_md(sig: dict, cfg: dict) -> str:

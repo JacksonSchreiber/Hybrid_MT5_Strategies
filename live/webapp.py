@@ -416,11 +416,20 @@ def dashboard(q: dict) -> str:
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{C.now_utc().strftime("%Y%m")}.zip">this month so far</a></div></div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
+    # Load filter, coach ruling 2026-09-24: a SORT, not a cut - every card stays visible, ranked by D1 extension
+    # descending (the one feature that separates outcomes on the blind record). Hard drops are the EA's, unchanged.
+    ext = {}
+    for s_ in opn:
+        try: ext[s_["signal_key"]] = charts.d1_extension(s_)
+        except Exception: ext[s_["signal_key"]] = None
+    opn.sort(key=lambda x: (ext.get(x["signal_key"]) is None, -(ext.get(x["signal_key"]) or 0)))
     out.append("<h2>Pending signals</h2>")
     if not opn: out.append('<div class="card k">none</div>')
     for s in opn:
         out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{cls_pill(s.get("decision_class"))}<span class="k">#{s["signal_id"]}</span></div>'
-                   f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span></div>'
+                   f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span>'
+                   + (f'<span class="pill {"take" if (ext.get(s["signal_key"]) or 0) >= 0.5 else ""}">D1 {ext[s["signal_key"]]:+.2f} ATR</span>' if ext.get(s["signal_key"]) is not None else '<span class="k">D1 ext n/a</span>')
+                   + '</div>'
                    + advisor_rows(s["signal_key"], s) + '</div></a>')
     # pending orders (approved with "pending at the original entry"; resting on the broker until price comes back)
     out.append("<h2>Pending orders</h2>")

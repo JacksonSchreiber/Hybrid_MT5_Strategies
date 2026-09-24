@@ -177,6 +177,24 @@ def render_signal(sig: dict, out_dir: str, fresh: bool = False) -> tuple[str, st
     render(signal_bars(sig, "d1"), title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
     return p_h4, p_d1
 
+def d1_extension(sig: dict) -> float | None:
+    """D1's distance from its own EMA20 in D1 ATR(14), signed by the trade's direction (+ = extended WITH the trade).
+    The one feature that separates outcomes on the blind record (coach 2026-09-24): above +0.5 ATR the graded
+    TrendCont population returns +0.18R against -0.08R below it. Printed on the card, and the home screen's sort."""
+    bars = signal_bars(sig, "d1")
+    if len(bars) < 40: return None
+    c = [b[4] for b in bars]
+    k = 2.0 / 21; e = c[0]
+    for v in c: e = v * k + e * (1 - k)
+    tr = [max(bars[j][2] - bars[j][3], abs(bars[j][2] - bars[j - 1][4]), abs(bars[j][3] - bars[j - 1][4]))
+          for j in range(max(1, len(bars) - 200), len(bars))]
+    if len(tr) < 14: return None
+    a = sum(tr[:14]) / 14
+    for x in tr[14:]: a = (a * 13 + x) / 14
+    if a <= 0: return None
+    up = str(sig.get("direction", "")).upper().startswith("B")
+    return ((c[-1] - e) / a) * (1 if up else -1)
+
 def drawn_bars(sig: dict, tf: str) -> int:
     """how many bars the renderer would actually DRAW for this timeframe - i.e. what the advisor can see. The feed can
     return nothing (symbol not selected, terminal down) and the EA's embedded bars can be short, and the result is a

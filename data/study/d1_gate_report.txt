@@ -1,0 +1,26 @@
+record rows with a D1 extension: 2346
+
+(a) PRE-2020 SLICE — above-minus-below at the 0.5 ATR cut (bar: >= +0.15R, same sign in both halves)
+  EURUSD 2017-19 (the specified test)              above +0.367R (n=51)  below -0.102R (n=44)  diff +0.469 +-0.271
+                                                   halves: +0.666 / +0.342  -> PASS (>= +0.15R: yes, same sign: yes)
+  GBPUSD 2014-16 (the other pre-2020 sample on disk) above -0.008R (n=49)  below -0.050R (n=45)  diff +0.041 +-0.258
+                                                   halves: +0.440 / -0.263  -> FAIL (>= +0.15R: no, same sign: no)
+
+(b) STUDY-TEMPLATE BAR on the gated population (ext >= +0.5 ATR), COSTS ON
+  full record                  n= 1263  raw +0.184R  costed +0.166R +-0.036  bank 56%
+  first half (to 2021.11.25)   n=  632  raw +0.208R  costed +0.188R +-0.052  bank 57%
+  second half                  n=  631  raw +0.159R  costed +0.144R +-0.050  bank 55%
+  -> PASS (>= +0.15R costed: yes, n >= 150: yes, both halves positive: yes)
+  per-symbol costed mean inside the gate:
+    EURUSD.dk    +0.130R  (n=206, discount 0.006R)
+    GBPUSD.dk    +0.101R  (n=137, discount 0.008R)
+    US100.dk     +0.083R  (n=224, discount 0.008R)
+    US500.dk     +0.115R  (n=200, discount 0.010R)
+    USDJPY.dk    +0.209R  (n=105, discount 0.007R)
+    USOIL.dk     +0.218R  (n=292, discount 0.049R)
+    XAUUSD.dk    +0.421R  (n=99, discount 0.015R)
+
+(c) HIS TAKES by extension bucket, W11-W14 - absolute mean R and count (what the gate would cost him)
+  below the gate (<0.5 ATR)    n= 13  mean -0.464R  total -6.03R
+  inside the gate (>=0.5 ATR)  n= 70  mean +0.370R  total +25.87R
+  his TrendCont R in those windows: +19.84 over 83 takes; the gate would have blocked 13 of them (-6.03R)
