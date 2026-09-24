@@ -66,7 +66,10 @@ def parse(text: str | None) -> dict:
                 if q: out["quality"], out["quality_why"] = q.group(1), q.group(2).strip()
             elif lab == "mechanical":
                 cur = None
-                out["mech"] = "VETO" if re.search(r"\bveto\b", rest, re.I) else ("PASS" if re.search(r"\bpass\b", rest, re.I) else None)
+                # the leading token decides, never a stray "veto" later in the sentence: models write
+                # "PASS - ... no binding veto", and matching that as a VETO inverts the whole line.
+                lead = rest.lstrip()[:16].upper()
+                out["mech"] = "VETO" if lead.startswith("VETO") else ("PASS" if lead.startswith("PASS") else None)
                 mr = re.search(r"veto\s*\(([^)]{2,60})\)", rest, re.I)
                 out["mech_rule"] = mr.group(1).strip() if mr else None
                 out["mech_detail"] = re.sub(r"^(PASS|VETO)\s*(\([^)]*\))?\s*[—–-]?\s*", "", rest, flags=re.I).strip()
