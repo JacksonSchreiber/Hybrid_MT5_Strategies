@@ -140,7 +140,7 @@ with ack reason **`weekend_flat`**. The flatten repeats at poll cadence, so a re
 ## Config files
 
 - `live.json` `{schema_version, election_horizon_days (14), max_age_bars (3), task_max_age_hours (24), max_parks (4),
-  weekend_flat_symbols ("BTCUSD" - comma list of roots), max_spread_r (0.10; 0 = off - coach 2026-09-23, aligned to the universe cost cap)}` — written with the input defaults if missing. Source of truth:
+  weekend_flat_symbols ("BTCUSD" - comma list of roots), max_spread_r (0.10; 0 = off - coach 2026-09-23, aligned to the universe cost cap), trendcont_d1_ext_min (0.5; 0 = off - coach 2026-09-24: TrendCont needs the D1 close at least this far from its own D1 EMA20 in D1 ATR(14), signed by the trade)}` — written with the input defaults if missing. Source of truth:
   `provisioning/live.json` (`deploy_live.sh --config`).
 - `lineup.txt` — the charts `HybridLiveLauncher` opens at terminal start (one symbol per line, `#` comments); falls back to
   the script's compiled default when absent. Source: `provisioning/lineup.txt` (= `lineup_full.txt`, 47 symbols since

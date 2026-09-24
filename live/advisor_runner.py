@@ -161,6 +161,25 @@ def d1_ext_line(sig: dict) -> str:
             f"direction — {where}, {band}.")
 
 
+def quality_line(sig: dict) -> str:
+    """The Quality grade, computed (coach 2026-09-24): D1 extension >= 1.5 ATR = A, 0.5-1.5 = B, and one grade off for
+    a spread of 0.05R or worse, or for the broker-midnight bar (00:00 broker = the 21:00 UTC rollover close, where the
+    exotics' spread runs 0.5-1R). Printed so the panel restates the grade instead of inventing one."""
+    ext = sig.get("sizing", {}).get("d1_ext")
+    if ext is None: ext = charts.d1_extension(sig)          # older cards / EA without the field
+    if ext is None: return "- **Quality (mechanical):** not computable — no D1 history on this card."
+    ext = float(ext)
+    base = "A" if ext >= 1.5 else ("B" if ext >= 0.5 else "C")
+    pens = []
+    spr = float((sig.get("sizing") or {}).get("spread_r") or 0)
+    if spr >= 0.05: pens.append(f"spread {spr:.3f}R (>= 0.05R)")
+    bar = str(sig.get("decision_bar") or "")                 # broker clock, as the EA writes it
+    if bar[11:13] == "00": pens.append("broker-midnight bar (21:00 UTC rollover)")
+    grade = {"A": "B", "B": "C", "C": "C"}[base] if pens else base
+    why = f"D1 extension {ext:+.2f} ATR → {base}" + (f", minus one for {' and '.join(pens)}" if pens else ", no penalty")
+    return f"- **Quality (mechanical):** **{grade}** — {why}. State this grade; do not invent a different one."
+
+
 def build_setup_md(sig: dict, cfg: dict) -> str:
     lv = sig.get("levels") or {}; rr = sig.get("rr") or {}; sz = sig.get("sizing") or {}
     sig_t = C.parse_iso(sig.get("signal_time")); dl = C.parse_iso(sig.get("deadline"))
@@ -184,6 +203,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 {swing_block(sig)}
 {slam_block(sig)}
 {d1_ext_line(sig)}
+{quality_line(sig)}
 - **Sizing:** {sz.get('lots_line', '')} · risk multiplier in effect {sz.get('risk_mult_applied', 1.0)} → effective {float(sz.get('risk_pct_effective', 0.01))*100:.2f}%
 - **Entry cost (spread) right now:** {sz.get('spread')} = **{float(sz.get('spread_r') or 0):.3f}R** of the stop{f" (gate: refused above {float(sz.get('max_spread_r') or 0):.2f}R)" if sz.get('max_spread_r') else ""} — you pay this the moment the trade opens
 {EXP.build(sig, cfg)}

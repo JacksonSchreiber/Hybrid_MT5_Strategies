@@ -103,6 +103,7 @@ input double InpRiskPct     = 0.01;     // risk per trade (fraction of equity)
 input double InpMinStopATR  = 0.5;      // reject signal if SL distance < this * ATR(14)
 input double InpMinStopSpreads = 2.0;   // ...also require SL distance >= this * current spread
 input double InpMaxSpreadR  = 0.0;      // live: refuse a signal whose CURRENT spread costs more than this in R (0 = off; live.json max_spread_r)
+input double InpD1ExtMin    = 0.0;      // live: TrendCont needs D1 at least this far from its own D1 EMA20 in D1 ATR, signed by the trade (0 = off; live.json trendcont_d1_ext_min)
 input double InpMaxMarginPct = 0.50;    // hard cap: one position may use <= this fraction of free margin
 input long   InpMagic       = 990217;   // magic number (graded stream)
 //--- EMArev INVERSE live option (interactive tester only; ungraded, isolated cohort).
@@ -364,6 +365,8 @@ int          g_delayed_id     = 0;       // its stable signal id (unchanged acro
 bool         g_delay_replaying= false;   // current HandleSignal call is a delay re-present
 int          g_delay_count    = 0;       // how many times the CURRENT signal has been delayed (audit)
 int          g_h_ema200_d1  = INVALID_HANDLE;  // D1 200-EMA handle (regime tag)
+int          g_h_ema20_d1   = INVALID_HANDLE;  // D1 20-EMA handle (extension gate, coach 2026-09-24)
+int          g_h_atr14_d1   = INVALID_HANDLE;  // D1 ATR(14) handle (extension gate)
 int          g_h_adx_d1      = INVALID_HANDLE; // D1 ADX(14) handle (regime tag)
 int          g_h_e20         = INVALID_HANDLE; // display-only 3-EMA overlay handles (item 8)
 int          g_h_e50         = INVALID_HANDLE;
@@ -473,6 +476,7 @@ ParkSlot g_slots[MAX_PARKS];
 int      g_cfg_max_parks=1;
 string   g_cfg_wf_symbols="";   // live.json weekend_flat_symbols: roots (comma list) held to §10.1 on the LIVE path
 double   g_cfg_max_spread_r=0.0;  // live.json max_spread_r: refuse a signal whose spread costs more than this in R (0 = off)
+double   g_cfg_d1_ext_min=0.0;    // live.json trendcont_d1_ext_min: TrendCont needs this much D1 extension, in D1 ATR (0 = off)
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
 void LiveRecomputeParked(){ g_live_parked=(ParkCount()>0); }
@@ -737,6 +741,7 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_max_parks=(int)MathMax(1,MathMin(MAX_PARKS,StringToInteger(JGet(k,v,"max_parks","1"))));   // parking slots per symbol (trader ruling 2026-09-16)
       g_cfg_wf_symbols=JGet(k,v,"weekend_flat_symbols","");   // §10.1 live (coach 2026-09-21): e.g. "BTCUSD"
       g_cfg_max_spread_r=StringToDouble(JGet(k,v,"max_spread_r",DoubleToString(InpMaxSpreadR,3)));   // trader 2026-09-23: spread gate, in R
+      g_cfg_d1_ext_min=StringToDouble(JGet(k,v,"trendcont_d1_ext_min",DoubleToString(InpD1ExtMin,3)));   // coach 2026-09-24: D1-extension gate for TrendCont
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
@@ -993,6 +998,9 @@ int OnInit()
    //--- D1 regime indicators (coach Phase-2.5 gate): 200-EMA + ADX(14) on the daily.
    g_h_ema200_d1=iMA(_Symbol,PERIOD_D1,200,0,MODE_EMA,PRICE_CLOSE);
    g_h_adx_d1  =iADX(_Symbol,PERIOD_D1,14);
+   //--- D1 extension (coach 2026-09-24 gate): EMA20 + ATR(14) on the daily, read at the last CLOSED bar.
+   g_h_ema20_d1=iMA(_Symbol,PERIOD_D1,20,0,MODE_EMA,PRICE_CLOSE);
+   g_h_atr14_d1=iATR(_Symbol,PERIOD_D1,14);
    if(g_h_ema200_d1==INVALID_HANDLE || g_h_adx_d1==INVALID_HANDLE)
       Print("WARNING: D1 regime indicator handle failed - regime column will be blank.");
 
@@ -1491,6 +1499,23 @@ double MinStopDist(double atr)
 //--- what the CURRENT spread costs on this setup, in R (spread / stop distance). The trader pays it the moment the
 //--- trade opens, so it is the honest per-trade entry cost: 0.01R is noise, 0.5R eats half the risk budget. Exotic pairs
 //--- widen 15-70x at the rollover hour (measured 2026-09-23 21:18 UTC), which is when two of the six H4 bars close.
+//--- D1 distance from its own D1 EMA20, in D1 ATR(14), at the LAST CLOSED daily bar, signed by the trade's direction
+//--- (+ = the daily trend is extended the way this trade wants to go). The only feature in the 2026-09-24 measurement
+//--- programme that separates outcomes on the blind record: >= +0.5 ATR the graded TrendCont population returns
+//--- +0.18R against -0.08R below it (n=2,346, costs on, both halves). Returns D1EXT_NA when the daily history is short.
+#define D1EXT_NA -999.0
+double D1ExtensionATR(int dir)
+  {
+   if(g_h_ema20_d1==INVALID_HANDLE || g_h_atr14_d1==INVALID_HANDLE) return(D1EXT_NA);
+   double e[1],a[1];
+   if(CopyBuffer(g_h_ema20_d1,0,1,1,e)<1) return(D1EXT_NA);
+   if(CopyBuffer(g_h_atr14_d1,0,1,1,a)<1) return(D1EXT_NA);
+   if(a[0]<=0.0) return(D1EXT_NA);
+   double c=iClose(_Symbol,PERIOD_D1,1);
+   if(c<=0.0) return(D1EXT_NA);
+   return(((c-e[0])/a[0])*(dir>0 ? 1.0 : -1.0));
+  }
+
 double SpreadR(double entry,double sl)
   {
    double stop=MathAbs(entry-sl); if(stop<=0.0) return 0.0;
@@ -1747,6 +1772,8 @@ void WriteSignalJson(string status,string auto_reason)
      j.KNum("spread",SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID),_Digits);
      j.KNum("spread_r",SpreadR(c.entry,c.sl),4); j.KNum("max_spread_r",g_cfg_max_spread_r,3);   // entry cost in R (trader 2026-09-23)
      j.KNum("sl_atr",(atr>0.0? risk/atr : 0.0),2); j.KNum("atr14",atr,_Digits);
+     { double dx=D1ExtensionATR(c.direction);   // the EA's own D1 extension, so the card and the gate agree (coach 2026-09-24)
+       if(dx!=D1EXT_NA){ j.KNum("d1_ext",dx,2); j.KNum("d1_ext_min",g_cfg_d1_ext_min,2); } }
    j.EndObj();
    j.Key("regime"); j.BeginObj();
      j.KStr("tag",g_sig_regime); j.KStr("with_trend",g_sig_with_trend); j.KStr("pretty",RegimePretty());
@@ -2808,6 +2835,20 @@ void HandleSignal(SignalCandidate &cand)
                                 SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID),spr,stopdist,g_cfg_max_spread_r));
          JournalReject(id,cand,StringFormat("spread %.3fR of the stop > max %.3fR - entry cost too high",spr,g_cfg_max_spread_r));
          return;
+        }
+      //--- D1-EXTENSION GATE (coach 2026-09-24, TrendCont only): a pullback bought while the daily sits on its own mean
+      //--- has no measured edge; from +0.5 ATR out it does. Journaled like the spread gate so the gated population can
+      //--- be graded later (revisit at n=100 gated rows, per-symbol).
+      if(g_cfg_d1_ext_min>0.0 && cand.strategy=="TrendCont")
+        {
+         double ext=D1ExtensionATR(cand.direction);
+         if(ext!=D1EXT_NA && ext<g_cfg_d1_ext_min)
+           {
+            AuditLine("d1_ext_gate","","",StringFormat("sig:%d",id),"rejected","d1_ext_below_min",
+                      StringFormat("%s D1 extension %+.2f ATR < min %+.2f ATR",cand.strategy,ext,g_cfg_d1_ext_min));
+            JournalReject(id,cand,StringFormat("d1_ext_gate: D1 extension %+.2f ATR < min %+.2f ATR",ext,g_cfg_d1_ext_min));
+            return;
+           }
         }
      }
 

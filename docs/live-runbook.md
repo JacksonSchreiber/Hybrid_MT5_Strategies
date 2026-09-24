@@ -272,6 +272,25 @@ majors, so any study leaning on the discount takes the per-bar column instead (c
    (0.124 / 0.119R) and EURHUF loses 01:00 (0.109R). Neither is detached - their 09:00-17:00 bars are inside the cap.
    The dashboard's amber/red thresholds now read `max_spread_r` itself (red = an approve would be refused right now).
 
+## D1-extension gate on TrendCont (coach 2026-09-24)
+
+`live.json trendcont_d1_ext_min` (0.5; 0 = off). A TrendCont signal is only published when the last CLOSED D1 bar sits
+at least that many D1 ATR(14) from its own D1 EMA20, signed by the trade's direction. Below it the EA writes a
+`rejected` row whose `reject_reason` starts `d1_ext_gate:` (full levels and lots, like the spread gate) and an audit
+line `d1_ext_gate ... d1_ext_below_min`. The signal JSON carries `sizing.d1_ext` / `sizing.d1_ext_min`, so the card,
+the gate and the dashboard sort all read one number.
+
+Why: the 2026-09-24 measurement programme tested every structural step of the TrendCont checklist against the graded
+record (n=2,346) and none separated outcomes. D1 extension does: above +0.5 ATR the population returns +0.166R costed
+(n=1,263, both halves positive, bank 56%), below it -0.084R. Confirmed out of sample on EURUSD 2017-19 (+0.469R,
+both halves); NOT confirmed on GBPUSD 2014-16 (+0.041R, halves +0.440 / -0.263) - on the record as a caveat. On the
+trader's own W11-W14 takes the gate removes 13 of 83 worth -6.03R and keeps the 70 worth +25.87R.
+
+Quality is mechanical from the same number (card prints it): >= 1.5 ATR A, 0.5-1.5 B, one grade off for a spread of
+0.05R or worse or for the broker-midnight bar (00:00 broker = the 21:00 UTC rollover close).
+
+Revisit at n=100 gated rows with a per-symbol split.
+
 ## Standing items (checked when the named condition occurs)
 
 - **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and
