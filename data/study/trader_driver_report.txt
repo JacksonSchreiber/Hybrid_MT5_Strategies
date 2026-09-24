@@ -1,0 +1,85 @@
+180 decisions with a full feature set: 60 taken, 120 skipped
+overall gap: taken +0.140R vs skipped -0.057R = +0.197R
+(a feature that EXPLAINS this edge makes the gap vanish inside its buckets)
+
+RETRACEMENT of the prior leg
+  bucket             take rate     n |            R taken          R skipped |     gap
+  <38%                             6 | (too few either side: 1 taken / 5 skipped)
+  38-62%                   44%    36 | +0.723+-0.39 (n=16) +0.020+-0.29 (n=20) |   +0.70
+  >62%                     31%   138 | -0.050+-0.16 (n=43) -0.060+-0.12 (n=95) |   +0.01
+  -> gap < +0.05R in 1 of 2 buckets
+
+PRIOR LEG length in ATR
+  bucket             take rate     n |            R taken          R skipped |     gap
+  <3 ATR                   33%   113 | +0.037+-0.19 (n=37) -0.009+-0.14 (n=76) |   +0.05
+  3-6 ATR                  31%    61 | +0.209+-0.29 (n=19) -0.098+-0.19 (n=42) |   +0.31
+  >6 ATR                           6 | (too few either side: 4 taken / 2 skipped)
+  -> gap < +0.05R in 1 of 2 buckets
+
+PRIOR LEG length in bars
+  bucket             take rate     n |            R taken          R skipped |     gap
+  <6 bars                  31%   110 | +0.135+-0.21 (n=34) -0.023+-0.14 (n=76) |   +0.16
+  6-12 bars                34%    61 | +0.276+-0.29 (n=21) -0.102+-0.18 (n=40) |   +0.38
+  >12 bars                 56%     9 | -0.396+-0.37 (n=5) -0.253+-0.43 (n=4) |   -0.14
+  -> gap < +0.05R in 1 of 3 buckets
+
+PULLBACK duration
+  bucket             take rate     n |            R taken          R skipped |     gap
+  1-3 bars                 33%    49 | +0.146+-0.34 (n=16) +0.118+-0.24 (n=33) |   +0.03
+  4-7 bars                 33%   100 | +0.122+-0.20 (n=33) -0.147+-0.14 (n=67) |   +0.27
+  8+ bars                  35%    31 | +0.187+-0.41 (n=11) -0.044+-0.26 (n=20) |   +0.23
+  -> gap < +0.05R in 1 of 3 buckets
+
+PULLBACK bar overlap fraction
+  bucket             take rate     n |            R taken          R skipped |     gap
+  <0.85                    29%    14 | +0.705+-0.72 (n=4) +0.668+-0.47 (n=10) |   +0.04
+  0.85-0.95                        8 | (too few either side: 2 taken / 6 skipped)
+  >0.95                    34%   158 | +0.047+-0.16 (n=54) -0.135+-0.11 (n=104) |   +0.18
+  -> gap < +0.05R in 1 of 2 buckets
+
+H4 EMA20 slope (in the trade's direction)
+  bucket             take rate     n |            R taken          R skipped |     gap
+  flat/against             14%    78 | +0.181+-0.41 (n=11) +0.013+-0.15 (n=67) |   +0.17
+  0.1-0.4 ATR              38%    52 | +0.173+-0.24 (n=20) -0.226+-0.18 (n=32) |   +0.40
+  >0.4 ATR                 58%    50 | +0.102+-0.25 (n=29) -0.024+-0.29 (n=21) |   +0.13
+  -> gap < +0.05R in 0 of 3 buckets
+
+H4 ADX(14)
+  bucket             take rate     n |            R taken          R skipped |     gap
+  <20                      26%    53 | -0.188+-0.28 (n=14) -0.162+-0.19 (n=39) |   -0.03
+  20-30                    31%    83 | +0.370+-0.25 (n=26) +0.174+-0.18 (n=57) |   +0.20
+  >30                      45%    44 | +0.072+-0.29 (n=20) -0.436+-0.15 (n=24) |   +0.51
+  -> gap < +0.05R in 1 of 3 buckets
+
+D1 distance from its EMA20
+  bucket             take rate     n |            R taken          R skipped |     gap
+  <0.5 ATR                 20%    45 | -0.504+-0.25 (n=9) -0.374+-0.17 (n=36) |   -0.13
+  0.5-1.5 ATR              29%    82 | +0.080+-0.24 (n=24) +0.232+-0.17 (n=58) |   -0.15
+  >1.5 ATR                 51%    53 | +0.409+-0.26 (n=27) -0.263+-0.22 (n=26) |   +0.67
+  -> gap < +0.05R in 2 of 3 buckets  ** CANDIDATE DRIVER **
+
+THIS pullback vs the previous one
+  bucket             take rate     n |            R taken          R skipped |     gap
+  shallower (<0.7)         25%    44 | +0.184+-0.41 (n=11) +0.042+-0.24 (n=33) |   +0.14
+  similar (0.7-1.3)        40%    50 | +0.320+-0.30 (n=20) -0.113+-0.21 (n=30) |   +0.43
+  deeper (>1.3)            34%    86 | +0.000+-0.21 (n=29) -0.085+-0.15 (n=57) |   +0.09
+  -> gap < +0.05R in 0 of 3 buckets
+
+DECISION LATENCY (decision_ms)
+  bucket             take rate     n |            R taken          R skipped |     gap
+  <10 s                    15%    41 | +0.333+-0.54 (n=6) -0.239+-0.21 (n=35) |   +0.57
+  10-60 s                  36%    95 | +0.219+-0.22 (n=34) +0.026+-0.15 (n=61) |   +0.19
+  >60 s                    45%    44 | -0.052+-0.26 (n=20) -0.004+-0.25 (n=24) |   -0.05
+  -> gap < +0.05R in 1 of 3 buckets
+
+BAR OF DAY
+  bucket             take rate     n |            R taken          R skipped |     gap
+  000                      22%    18 | +0.637+-0.72 (n=4) +0.131+-0.34 (n=14) |   +0.51
+  004                      27%    26 | -0.360+-0.30 (n=7) -0.157+-0.28 (n=19) |   -0.20
+  008                      27%    22 | +0.673+-0.65 (n=6) -0.001+-0.30 (n=16) |   +0.67
+  012                      39%    46 | +0.201+-0.34 (n=18) -0.044+-0.22 (n=28) |   +0.25
+  016                      39%    41 | +0.232+-0.29 (n=16) +0.219+-0.28 (n=25) |   +0.01
+  020                      33%    27 | -0.332+-0.27 (n=9) -0.552+-0.23 (n=18) |   +0.22
+  -> gap < +0.05R in 2 of 6 buckets
+
+candidate drivers (gap < +0.05R in >= 2 of 3 buckets): D1 distance from its EMA20
