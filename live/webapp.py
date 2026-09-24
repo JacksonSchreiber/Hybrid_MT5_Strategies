@@ -124,6 +124,20 @@ def _last_word(rec: dict | None) -> str | None:
             if w: return w
     return None
 
+# Measured run-to-run stability (coach 2026-09-24): three repeats of four identical cards. Sonnet returned
+# SKIP / ADJUST / TAKE on one of them - at the coach's 1-in-5 bar - so a DISAGREE badge has to say that the fast
+# panel's verdict is not reproducible, otherwise the trader reads a coin flip as a second opinion.
+FLIP_RATE = {"sonnet-low": (1, 4, "SKIP/ADJUST/TAKE on three identical runs"), "opus-high": (0, 4, "")}
+
+def stability_note(ms: list, words: dict) -> str:
+    bits = []
+    for m in ms:
+        f = FLIP_RATE.get(m["id"])
+        if not f or not f[0] or not words.get(m["id"]): continue
+        bits.append(f'{m["id"].split("-")[0].title()} flipped on {f[0]} of {f[1]} repeat runs of the same card ({f[2]})')
+    return f'<div class="k" style="margin-top:4px">⚠ {E(" · ".join(bits))}</div>' if bits else ""
+
+
 def advisor_section(key: str) -> tuple[str, str]:
     """both advisor panels + the AGREE / DISAGREE badge. Returns (html, version) - the page polls /api/advisor/<key>
     and swaps the html in the moment a verdict lands."""
@@ -140,7 +154,8 @@ def advisor_section(key: str) -> tuple[str, str]:
     elif len(ms) > 1 and len(have) == len(ms):
         agree = len(set(have)) == 1
         badge = (f'<span class="badge agree">AGREE · {E(have[0])}</span>' if agree else
-                 '<span class="badge disagree">DISAGREE · ' + " vs ".join(E(f"{words[m['id']]} ({m['id'].split('-')[0].title()})") for m in ms) + '</span>')
+                 '<span class="badge disagree">DISAGREE · ' + " vs ".join(E(f"{words[m['id']]} ({m['id'].split('-')[0].title()})") for m in ms) + '</span>'
+                 + stability_note(ms, words))
     else:
         agree = True
         badge = f'<span class="badge wait">{len(have)} of {len(ms)} verdicts in</span>'

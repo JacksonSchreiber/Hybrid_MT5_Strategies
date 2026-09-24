@@ -1,0 +1,49 @@
+approved TrendCont rows classified: 2346
+  excluded     1  (EURUSD.dk: unusable row)
+  excluded     1  (GBPUSD.dk: unusable row)
+  excluded     1  (US100.dk: unusable row)
+  excluded     1  (US500.dk: unusable row)
+  excluded     1  (USDJPY.dk: unusable row)
+  excluded     1  (USOIL.dk: unusable row)
+  per symbol: EURUSD.dk 379, GBPUSD.dk 286, US100.dk 384, US500.dk 390, USDJPY.dk 195, USOIL.dk 496, XAUUSD.dk 216
+
+STEP 5 - obstacles between entry and +1R (EA swing set)   (mean R +- SE | +1R bank | n)
+  none                          0.080 +-0.068      52%   347
+  single                        0.010 +-0.039      50%  1031
+  repeated                      0.107 +-0.042      52%   968
+
+STEP 5 - same, EXCLUDING the swing the pullback retraced from (the amended rule)   (mean R +- SE | +1R bank | n)
+  none                          0.052 +-0.054      51%   539
+  single                        0.030 +-0.039      50%  1026
+  repeated                      0.106 +-0.047      52%   781
+
+STEP 5 - by nearest level's distance   (mean R +- SE | +1R bank | n)
+  single <=0.5R                -0.001 +-0.046      49%   703
+  single 0.5-1R                 0.033 +-0.070      52%   328
+  repeated <=0.5R               0.095 +-0.044      51%   847
+  repeated 0.5-1R               0.194 +-0.119      56%   121
+
+STEP 2 - largest pullback bar / H4 ATR(14)   (mean R +- SE | +1R bank | n)
+  <1.5                          0.019 +-0.063      51%   358
+  1.5-2                         0.016 +-0.046      49%   780
+  >=2                           0.101 +-0.037      52%  1208
+
+STEP 5 - FIRST half (to 2021.10.28)   (mean R +- SE | +1R bank | n)
+  none                          0.148 +-0.101      54%   165
+  single                        0.053 +-0.056      52%   514
+  repeated                      0.078 +-0.057      52%   495
+
+STEP 2 - FIRST half (to 2021.10.28)   (mean R +- SE | +1R bank | n)
+  <1.5                          0.050 +-0.089      54%   174
+  1.5-2                         0.089 +-0.066      52%   413
+  >=2                           0.076 +-0.052      52%   587
+
+STEP 5 - SECOND half   (mean R +- SE | +1R bank | n)
+  none                          0.019 +-0.091      49%   182
+  single                       -0.033 +-0.053      48%   517
+  repeated                      0.137 +-0.061      52%   473
+
+STEP 2 - SECOND half   (mean R +- SE | +1R bank | n)
+  <1.5                         -0.010 +-0.089      48%   184
+  1.5-2                        -0.067 +-0.063      46%   367
+  >=2                           0.125 +-0.052      53%   621

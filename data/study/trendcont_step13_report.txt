@@ -1,0 +1,43 @@
+approved TrendCont rows classified: 2346
+  excluded     1  (EURUSD.dk: unusable row)
+  excluded     1  (GBPUSD.dk: unusable row)
+  excluded     1  (US100.dk: unusable row)
+  excluded     1  (US500.dk: unusable row)
+  excluded     1  (USDJPY.dk: unusable row)
+  excluded     1  (USOIL.dk: unusable row)
+
+STEP 1 - D1 staircase, last 5 D1 bars before the signal   (mean R +- SE | +1R bank | n)
+  intact                        0.061 +-0.032      51%  1483
+  broken                        0.058 +-0.044      50%   863
+
+STEP 1 - D1 staircase, last 10 D1 bars before the signal   (mean R +- SE | +1R bank | n)
+  intact                        0.022 +-0.033      50%  1413
+  broken                        0.118 +-0.043      52%   933
+
+STEP 3 - bars closed beyond the H4 EMA20 before the trigger   (mean R +- SE | +1R bank | n)
+  0-2                           0.080 +-0.042      52%   925
+  3-5                           0.043 +-0.068      51%   332
+  6+                            0.048 +-0.038      51%  1089
+
+STEP 3 - deepest excursion beyond the EMA20   (mean R +- SE | +1R bank | n)
+  <=0.5 ATR                     0.094 +-0.050      51%   663
+  0.5-1 ATR                     0.014 +-0.082      50%   229
+  >1 ATR                        0.052 +-0.033      51%  1454
+
+STEP 1 (N=10) - FIRST half (to 2021.10.28)   (mean R +- SE | +1R bank | n)
+  intact                        0.038 +-0.046      51%   705
+  broken                        0.135 +-0.062      54%   469
+
+STEP 3 run - FIRST half (to 2021.10.28)   (mean R +- SE | +1R bank | n)
+  0-2                           0.133 +-0.061      54%   465
+  3-5                          -0.022 +-0.094      52%   149
+  6+                            0.057 +-0.054      51%   560
+
+STEP 1 (N=10) - SECOND half   (mean R +- SE | +1R bank | n)
+  intact                        0.006 +-0.046      50%   708
+  broken                        0.101 +-0.061      50%   464
+
+STEP 3 run - SECOND half   (mean R +- SE | +1R bank | n)
+  0-2                           0.027 +-0.058      50%   460
+  3-5                           0.097 +-0.097      50%   183
+  6+                            0.040 +-0.054      50%   529

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 TERM = r"C:\Program Files\OANDA MetaTrader 5\terminal64.exe"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "study")
-SYMS = ["EURUSD.dk", "GBPUSD.dk", "USDJPY.dk", "XAUUSD.dk", "US100.dk", "US500.dk", "USOIL.dk"]
+SYMS = ["EURUSD.dk", "GBPUSD.dk", "USDJPY.dk", "XAUUSD.dk", "US100.dk", "US500.dk", "USOIL.dk", "BTCUSD.dk"]
 FROM, TO = datetime(2012, 1, 1), datetime.utcnow() + timedelta(days=2)
 
 

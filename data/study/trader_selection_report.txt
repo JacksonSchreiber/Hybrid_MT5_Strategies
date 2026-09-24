@@ -1,0 +1,70 @@
+W11 US100 2017     31 TrendCont decisions joined to the baseline
+W12a EUR 2021      34 TrendCont decisions joined to the baseline
+W12b USOIL 2017    28 TrendCont decisions joined to the baseline
+W13a GBP 2023      30 TrendCont decisions joined to the baseline
+W13b US100 2019    35 TrendCont decisions joined to the baseline
+W14 BTCUSD 2019    22 TrendCont decisions joined to the baseline
+  unjoined   12  (W11 US100 2017)
+  unjoined    8  (W12a EUR 2021)
+  unjoined   12  (W12b USOIL 2017)
+  unjoined   14  (W13a GBP 2023)
+  unjoined    1  (W13a GBP 2023 (unusable))
+  unjoined   20  (W13b US100 2019)
+  unjoined   13  (W14 BTCUSD 2019)
+  unjoined    1  (W14 BTCUSD 2019 (unusable))
+
+total 180 decisions: 60 taken (33%), 120 skipped
+selection alpha on the baseline measure: taken +0.140R vs skipped -0.057R
+
+STEP 2 - largest pullback bar / ATR
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  <1.5                   31% |      -0.091+-0.37 (n=13)      -0.280+-0.22 (n=29) |   +0.19 |    +0.071
+  1.5-2                  22% |      +0.637+-0.38 (n=12)      +0.265+-0.19 (n=43) |   +0.37 |    +0.531
+  >=2                    42% |      +0.056+-0.20 (n=35)      -0.211+-0.17 (n=48) |   +0.27 |    +0.225
+
+STEP 5 - structure in the road to +1R
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  none                   45% |      +0.308+-0.35 (n=15)      -0.431+-0.18 (n=18) |   +0.74 |    +0.159
+  single                 33% |      +0.250+-0.26 (n=28)      +0.140+-0.18 (n=58) |   +0.11 |    +0.507
+  repeated               28% |      -0.189+-0.19 (n=17)      -0.164+-0.17 (n=44) |   -0.02 |    -0.084
+
+STEP 3 - depth beyond the EMA20
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  <=0.5 ATR              45% |      -0.017+-0.19 (n=40)      -0.023+-0.18 (n=49) |   +0.01 |    +0.044
+  0.5-1 ATR              39% |      +0.785+-0.39 (n=11)      +0.132+-0.33 (n=17) |   +0.65 |    +0.909
+  >1 ATR                 14% |       +0.052+-0.40 (n=9)      -0.148+-0.15 (n=54) |   +0.20 |    +0.378
+
+STEP 3 - bars closed beyond the EMA20
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  0-2                    43% |      +0.180+-0.18 (n=50)      -0.108+-0.15 (n=65) |   +0.29 |    +0.244
+  3-5                    15% |       -0.013+-0.49 (n=3)      +0.564+-0.35 (n=17) |   -0.58 |    +0.490
+  6+                     16% |       -0.077+-0.51 (n=7)      -0.248+-0.18 (n=38) |   +0.17 |    +0.214
+
+BAR OF DAY (broker clock)
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  00:00                  22% |       +0.637+-0.72 (n=4)      +0.131+-0.34 (n=14) |   +0.51 |    +0.385
+  04:00                  27% |       -0.360+-0.30 (n=7)      -0.157+-0.28 (n=19) |   -0.20 |    +0.267
+  08:00                  27% |       +0.673+-0.65 (n=6)      -0.001+-0.30 (n=16) |   +0.67 |    +0.502
+  12:00                  39% |      +0.201+-0.34 (n=18)      -0.044+-0.22 (n=28) |   +0.25 |    +0.310
+  16:00                  39% |      +0.232+-0.29 (n=16)      +0.219+-0.28 (n=25) |   +0.01 |    +0.339
+  20:00                  33% |       -0.332+-0.27 (n=9)      -0.552+-0.23 (n=18) |   +0.22 |    -0.253
+
+SYMBOL
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  BTCUSD.dk              36% |       -0.395+-0.26 (n=8)      +0.034+-0.34 (n=14) |   -0.43 |    -0.036
+  EURUSD.dk              41% |      +0.153+-0.33 (n=14)      +0.275+-0.27 (n=20) |   -0.12 |    +0.081
+  GBPUSD.dk              37% |      -0.000+-0.34 (n=11)      +0.005+-0.26 (n=19) |   -0.01 |    +0.252
+  US100.dk               20% |      +0.842+-0.43 (n=13)      -0.181+-0.17 (n=53) |   +1.02 |    +0.534
+  USOIL.dk               50% |      -0.108+-0.29 (n=14)      -0.239+-0.30 (n=14) |   +0.13 |    +0.328
+
+REGIME AGE (D1 bars the tag has held)
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  new (<=10d)            37% |      -0.020+-0.22 (n=28)      -0.023+-0.18 (n=47) |   +0.00 |    +0.233
+  10-40d                 32% |      +0.380+-0.26 (n=25)      -0.167+-0.16 (n=54) |   +0.55 |    +0.331
+  >40d                   27% |       -0.073+-0.51 (n=7)      +0.170+-0.29 (n=19) |   -0.24 |    +0.051
+
+REGIME TAG
+  bucket           take rate |         baseline R taken       baseline R skipped |     gap | his own R
+  TREND_UP               25% |      +0.270+-0.28 (n=22)      -0.188+-0.14 (n=67) |   +0.46 |    +0.206
+  TREND_DOWN             57% |      -0.002+-0.24 (n=21)      +0.184+-0.29 (n=16) |   -0.19 |    +0.204
+  CHOP                   31% |      +0.148+-0.32 (n=17)      +0.076+-0.22 (n=37) |   +0.07 |    +0.372
