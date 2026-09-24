@@ -1,0 +1,15 @@
+182 cards over W11-W14 (60 taken, his realised R = +15.15)
+ranker = D1 extension descending; tiebreak (symbol x bar-of-day); hard drops not reconstructible - see the docstring
+
+    keep  cards kept  removed |  his R kept  retained | taken kept | bars met
+     10%          18      90% |      +4.70       31% |    9/60    | 
+     15%          27      85% |      +7.86       52% |   14/60    | 
+     20%          36      80% |      +9.49       63% |   19/60    | 
+     25%          46      75% |      +7.52       50% |   26/60    | 
+     30%          55      70% |      +7.75       51% |   27/60    | 
+     40%          73      60% |      +6.79       45% |   31/60    | 
+     50%          91      50% |     +12.04       79% |   40/60    | 
+
+what the filter would have removed, by whether he took it:
+  keep 25%: drops 136 cards - 34 of them his takes, worth +7.63R (mean +0.224R); the 102 he skipped were worth -4.52R blind
+  keep 40%: drops 109 cards - 29 of them his takes, worth +8.36R (mean +0.288R); the 80 he skipped were worth -4.91R blind

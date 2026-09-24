@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """archive_discrimination.py - coach 2026-09-24 item 2: can the advisors tell record winners from record losers?
 
-Runs the 20 blind archive bundles (pipeline/archive_bundles.py) past three cells - Sonnet-low, Opus-low, Opus-high -
-and reports each cell's TAKE rate on winners vs losers. The coach's bars: SKIPs >= 18 of 20 = a prior, not a read;
+Runs the 20 blind archive bundles (pipeline/archive_bundles.py) past three cells - Sonnet-low, Opus-low, Opus-high.
+With every structural step demoted to a quality mark the TAKE/SKIP split is near-constant by construction, so the
+re-grade is on QUALITY (coach 2026-09-24): A-rate on record winners vs A-rate on record losers, >= 30 points = a read. The coach's bars: SKIPs >= 18 of 20 = a prior, not a read;
 TAKE rate on winners exceeding the losers' by >= 30 points = a read; in between, the live ledger decides.
 
 Offline: no live records, no journals, no shadow clock. Runs ON THE BOX, ssh session kept open.
@@ -10,7 +11,7 @@ Offline: no live records, no journals, no shadow clock. Runs ON THE BOX, ssh ses
 import collections, concurrent.futures as cf, json, os, re, subprocess, sys, time, uuid
 
 sys.path.insert(0, r"C:\ProgramData\hybrid\live")
-from live import advisor_runner as AR, common as C                          # noqa: E402
+from live import advisor_runner as AR, common as C, verdict_fmt as VF        # noqa: E402
 
 CFG = C.load_config(r"C:\ProgramData\hybrid\live\live_config.json")
 LIVE = CFG["advisor"]["live_dir"]
@@ -45,11 +46,14 @@ def run(key, hid, model, effort, to):
     except subprocess.TimeoutExpired: txt = f"TIMEOUT {to}s"
     except Exception as e: txt = f"ERROR {type(e).__name__}: {e}"[:200]
     el = round(time.time() - t0, 1)
-    v = AR.verdict_word(txt) or ("ERR" if txt.startswith(("ERROR", "TIMEOUT")) else "?")
+    pv = VF.parse(txt)
+    v = pv.get("verdict") or AR.verdict_word(txt) or ("ERR" if txt.startswith(("ERROR", "TIMEOUT")) else "?")
     mm = re.search(r"step:\s*([^|\n]{0,60})", txt)
     with open(RAW, "a", encoding="utf-8") as f:
         f.write(f"\n\n===== {key} | {model} | {effort} | {v} | {el}s\n{txt[:2000]}")
-    return {"key": key, "cell": f"{model.split('-')[0]}-{effort}", "v": v, "s": el, "step": mm.group(1).strip() if mm else ""}
+    return {"key": key, "cell": f"{model.split('-')[0]}-{effort}", "v": v, "s": el, "q": pv.get("quality") or "-",
+            "conf": pv.get("confidence") or "-", "summary": (pv.get("summary") or "")[:120],
+            "step": mm.group(1).strip() if mm else ""}
 
 
 jobs = [(k, h, mo, e, to) for k in KEYS for (h, mo, e, to) in CELLS]
@@ -57,10 +61,12 @@ print(f"{len(jobs)} runs, 2 at a time\n", flush=True)
 rows = []
 with cf.ThreadPoolExecutor(max_workers=2) as ex:
     for r in ex.map(lambda a: run(*a), jobs):
-        rows.append(r); print(f"  {r['key']} {r['cell']:14} -> {r['v']:6} ({r['s']:6.1f}s) {r['step'][:44]}", flush=True)
+        rows.append(r); print(f"  {r['key']} {r['cell']:14} -> {r['v']:6} Q:{r['q']:2} ({r['s']:6.1f}s) {r['summary'][:60]}", flush=True)
 json.dump(rows, open(r"C:\ProgramData\hybrid\tmp\arc_discrim.json", "w"), indent=1)
-print("\nverdict counts per cell (grading happens off-box, where the manifest is):")
+print("\nverdict + quality counts per cell (grading happens off-box, where the manifest is):")
 for c in sorted({r["cell"] for r in rows}):
     cnt = collections.Counter(r["v"] for r in rows if r["cell"] == c)
-    print(f"  {c:14} " + ", ".join(f"{k} {v}" for k, v in sorted(cnt.items())))
-print("\nper card: " + " ".join(f"{r['key']}:{r['cell'][:6]}={r['v']}" for r in sorted(rows, key=lambda x: (x['key'], x['cell']))))
+    qc = collections.Counter(r["q"] for r in rows if r["cell"] == c)
+    print(f"  {c:14} verdicts: " + ", ".join(f"{k} {v}" for k, v in sorted(cnt.items()))
+          + "  |  quality: " + ", ".join(f"{k} {v}" for k, v in sorted(qc.items())))
+print("\nper card: " + " ".join(f"{r['key']}:{r['cell']}={r['v']}/Q{r['q']}" for r in sorted(rows, key=lambda x: (x['key'], x['cell']))))

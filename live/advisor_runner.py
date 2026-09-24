@@ -148,6 +148,29 @@ def wall_line(tbl: dict, dist, R: float, dg: int, up: bool) -> str:
                    + " → step 5 is `?` at worst, quality capped at B, not a veto")
     return f"    - **Step 5 arithmetic (in R, the unit the rule is written in):** in the road to +1R: {txt}. {verdict}."
 
+def d1_ext_line(sig: dict) -> str:
+    """D1's distance from its own EMA20, in D1 ATR(14), signed by the trade's direction (coach 2026-09-24). The
+    driver study found this is the only measured feature that explains the trader's selection edge: his picks beat
+    his passes by +0.67R where D1 sits more than 1.5 ATR out, and by nothing at all where it sits near the mean."""
+    bars = charts.signal_bars(sig, "d1")
+    if len(bars) < 40: return "- **D1 extension:** (unavailable — not enough D1 bars on this card)"
+    c = [b[4] for b in bars]
+    k = 2.0 / 21; e = c[0]
+    for v in c: e = v * k + e * (1 - k)
+    tr = [max(bars[j][2] - bars[j][3], abs(bars[j][2] - bars[j - 1][4]), abs(bars[j][3] - bars[j - 1][4]))
+          for j in range(max(1, len(bars) - 200), len(bars))]
+    if len(tr) < 14: return "- **D1 extension:** (unavailable — not enough D1 history)"
+    a = sum(tr[:14]) / 14
+    for x in tr[14:]: a = (a * 13 + x) / 14
+    if a <= 0: return "- **D1 extension:** (unavailable — D1 ATR is zero)"
+    up = str(sig.get("direction", "")).upper().startswith("B")
+    ext = ((c[-1] - e) / a) * (1 if up else -1)
+    where = ("stretched well away from the mean" if ext > 1.5 else
+             ("moderately extended" if ext > 0.5 else ("near its mean" if ext > -0.5 else "extended AGAINST this trade")))
+    return (f"- **D1 extension:** last D1 close sits **{ext:+.2f} ATR** from its own EMA20, signed in the trade's "
+            f"direction ({where}). D1 ATR(14) {a:.{charts._digits(sig)}f}.")
+
+
 def build_setup_md(sig: dict, cfg: dict) -> str:
     lv = sig.get("levels") or {}; rr = sig.get("rr") or {}; sz = sig.get("sizing") or {}
     sig_t = C.parse_iso(sig.get("signal_time")); dl = C.parse_iso(sig.get("deadline"))
@@ -170,6 +193,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 - **Risk geometry:** SL 1.0R · TP1 {r_tp1}R · TP2 {r_run}R (floor {rr.get('floor')}R; detector already sized to the gate risk and cleared the R:R floor)
 {swing_block(sig)}
 {slam_block(sig)}
+{d1_ext_line(sig)}
 - **Sizing:** {sz.get('lots_line', '')} · risk multiplier in effect {sz.get('risk_mult_applied', 1.0)} → effective {float(sz.get('risk_pct_effective', 0.01))*100:.2f}%
 - **Entry cost (spread) right now:** {sz.get('spread')} = **{float(sz.get('spread_r') or 0):.3f}R** of the stop{f" (gate: refused above {float(sz.get('max_spread_r') or 0):.2f}R)" if sz.get('max_spread_r') else ""} — you pay this the moment the trade opens
 {EXP.build(sig, cfg)}

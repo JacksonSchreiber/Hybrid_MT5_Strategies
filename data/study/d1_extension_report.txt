@@ -1,0 +1,27 @@
+approved TrendCont rows classified: 2346
+  excluded     1  (EURUSD.dk: unusable row)
+  excluded     1  (GBPUSD.dk: unusable row)
+  excluded     1  (US100.dk: unusable row)
+  excluded     1  (US500.dk: unusable row)
+  excluded     1  (USDJPY.dk: unusable row)
+  excluded     1  (USOIL.dk: unusable row)
+
+D1 EXTENSION at the signal (distance from the D1 EMA20, signed by the trade)   (mean R +- SE | +1R bank | n)
+  against (<0)                 -0.109 +-0.045      44%   723
+  0-0.5 ATR                    -0.033 +-0.065      47%   360
+  0.5-1.5 ATR                   0.180 +-0.050      54%   721
+  >1.5 ATR                      0.189 +-0.053      59%   542
+
+D1 EXTENSION - FIRST half (to 2021.10.28)   (mean R +- SE | +1R bank | n)
+  against (<0)                 -0.071 +-0.065      46%   371
+  0-0.5 ATR                    -0.028 +-0.089      49%   183
+  0.5-1.5 ATR                   0.203 +-0.073      56%   337
+  >1.5 ATR                      0.188 +-0.074      58%   283
+
+D1 EXTENSION - SECOND half   (mean R +- SE | +1R bank | n)
+  against (<0)                 -0.150 +-0.063      41%   352
+  0-0.5 ATR                    -0.038 +-0.095      45%   177
+  0.5-1.5 ATR                   0.161 +-0.067      53%   384
+  >1.5 ATR                      0.189 +-0.075      59%   259
+
+>1.5 ATR minus everything else: +0.167R +- 0.061 (n 542 vs 1804)

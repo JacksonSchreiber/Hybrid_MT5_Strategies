@@ -319,10 +319,12 @@ class Monitor:
         if n != st.get("count"): st["count"] = n; C.atomic_write_json(p, st)
         if n >= self.TC_WATCH_N and not st.get("flagged"):
             st["flagged"] = True; C.atomic_write_json(p, st)
-            self.send(f"COACH WATCH ITEM DUE: {n} TrendCont decisions since {self.TC_WATCH_FROM}. The two calibration "
-                      "asymmetries are up for re-check - over-taking in TREND_DOWN (57% vs 25% in TREND_UP, and the only "
-                      "negative selection gap at -0.19R) and under-taking on US100 (20%, where the picks returned +0.84R "
-                      "against -0.18R for the passes). Re-run pipeline/trader_selection_study.py with the live rows added.")
+            self.send(f"COACH WATCH ITEM DUE: {n} TrendCont decisions since {self.TC_WATCH_FROM}. Report all three together:\n"
+                      "1) TREND_DOWN over-taking - 57% taken vs 25% in TREND_UP, and the only negative selection gap (-0.19R).\n"
+                      "2) US100 under-taking - 20% taken, where his picks returned +0.84R against -0.18R for his passes.\n"
+                      "3) PRE-REGISTERED out-of-sample test of the D1-extension driver: the >1.5 ATR bucket's take-minus-skip "
+                      "gap must exceed the <=1.5 bucket's by >= +0.30R for it to become a rule.\n"
+                      "Re-run pipeline/trader_selection_study.py and pipeline/trader_driver_study.py with the live rows added.")
 
     def tick(self):
         for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch):
