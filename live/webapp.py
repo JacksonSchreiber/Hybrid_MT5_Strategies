@@ -235,9 +235,14 @@ def advisor_section(key: str) -> tuple[str, str]:
         badge = (f'<span class="badge agree">AGREE · {E(have[0])}</span>' if agree else
                  '<span class="badge disagree">DISAGREE · ' + " vs ".join(E(f"{words[m['id']]} ({m['id'].split('-')[0].title()})") for m in ms) + '</span>'
                  + stability_note(ms, words))
+    elif len(ms) == 1 and have:
+        # single panel (coach 2026-09-24, after the veto-discrimination pass): the verdict itself is the badge -
+        # there is nothing left to agree or disagree with.
+        agree = True
+        badge = f'<span class="badge agree">{E(have[0])}</span>'
     else:
         agree = True
-        badge = f'<span class="badge wait">{len(have)} of {len(ms)} verdicts in</span>'
+        badge = f'<span class="badge wait">{len(have)} of {len(ms)} verdict{"" if len(ms) == 1 else "s"} in</span>'
     parsed = {m["id"]: _parsed_last(recs[m["id"]]) for m in ms}     # both, so each card can mark where they differ
     panels = []
     for m in ms:

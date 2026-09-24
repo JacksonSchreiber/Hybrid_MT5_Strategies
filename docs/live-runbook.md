@@ -291,6 +291,23 @@ Quality is mechanical from the same number (card prints it): >= 1.5 ATR A, 0.5-1
 
 Revisit at n=100 gated rows with a per-symbol split.
 
+## One advisor panel (coach 2026-09-24)
+
+`live_config.vps.json advisor.models` carries a single entry: `opus-low` (claude-opus-5-5, effort low, 300 s). Sonnet
+and Opus-high are retired; the DISAGREE badge and the instability flag disappear with them, and the home-screen row
+is one line.
+
+Why: three measured results, in order. The paired panel split 10 of 14 on TrendCont and the split followed the MODEL,
+not the effort (Opus reached SKIP in 13 s at low effort). Neither panel could tell record winners from record losers -
+on 20 blind cards every cell's TAKE rate on winners equalled its rate on losers, and the Quality re-grade after the
+checklist was demoted was no better (every A grade in that run went to a record loser). What Opus-low CAN do is the
+job the guide actually asks of it: on 20 cards whose calendar and exposure blocks were written to a case it fired
+12 of 12 binding vetoes, named the right rule in plain English every time, raised none of the 6 controls and correctly
+left both hedges alone (`pipeline/veto_cards.py`, `pipeline/veto_run.py`; transcripts in
+`data/study/veto_discrimination_2026-09-24.txt`).
+
+Reverting is a config edit: put the other models back in `advisor.models` and redeploy.
+
 ## Standing items (checked when the named condition occurs)
 
 - **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and
