@@ -20,9 +20,9 @@ counts as hit when mfe_r >= 1.0):
 
 Both tables are also split into halves by signal date, because a threshold that only works in one half is noise.
 
-Bars come from data/backtests/emarev_inv/<SYM>.h4.csv. US500 has no such file and the files stop at 2025-12, so those
-rows are reported as excluded rather than silently dropped; --mt5 adds them by attaching READ-ONLY to a terminal that
-is ALREADY running (it never launches one - house rule).
+Bars come from data/study/h4/<SYM>.csv (pipeline/dump_h4_dk.py, a read-only attach to the running terminal), falling
+back to the old partial exports in data/backtests/emarev_inv. Rows whose signal bar is outside the available history
+are reported as excluded, never silently dropped.
 """
 from __future__ import annotations
 import argparse, csv, glob, os, statistics as st, sys
@@ -34,13 +34,15 @@ from live import overlays as OV                                             # no
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 REC = os.path.join(ROOT, "data", "study", "trendcont")
-H4 = os.path.join(ROOT, "data", "backtests", "emarev_inv")
+H4 = os.path.join(ROOT, "data", "study", "h4")                  # pipeline/dump_h4_dk.py parks the full .dk history here
+H4_FALLBACK = os.path.join(ROOT, "data", "backtests", "emarev_inv")
 CLUSTER_R = 0.10          # two swings within 0.1R are the same level touched twice (the coach's definition)
 
 
 def load_bars(sym: str) -> list[list]:
     """[[key, o, h, l, c]] oldest first, key = 'YYYY.MM.DD HH:MM' (the journal's own clock)."""
-    p = os.path.join(H4, f"{sym}.h4.csv")
+    p = os.path.join(H4, f"{sym}.csv")
+    if not os.path.exists(p): p = os.path.join(H4_FALLBACK, f"{sym}.h4.csv")
     if not os.path.exists(p): return []
     out = []
     with open(p, newline="") as f:
@@ -119,8 +121,7 @@ def table(rows: list[dict], keyf, order, title, half=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("--mt5", action="store_true", help="also pull US500/2026 bars from an ALREADY-RUNNING terminal")
-    a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.parse_args()
     rows, excluded = [], defaultdict(int)
     for p in sorted(glob.glob(os.path.join(REC, "*.csv"))):
         sym = os.path.basename(p)[:-4]
