@@ -69,7 +69,14 @@ def swing_block(sig: dict) -> str:
     if len(bars) < 12:
         return "- **Recent swing structure:** (unavailable — no H4 bars for this signal; do not estimate swing levels off the image, say the table is missing)"
     tbl = OV.swing_table(bars, 5); dg = charts._digits(sig)
-    def row(xs): return " · ".join(f"{s['p']:.{dg}f} ({s['bars_ago']} bars ago)" for s in xs) or "(none in the window)"
+    lv = sig.get("levels") or {}
+    try: e, R = float(lv.get("entry")), abs(float(lv.get("entry")) - float(lv.get("sl")))
+    except (TypeError, ValueError): e = R = 0.0
+    up = str(sig.get("direction", "")).upper().startswith("B")
+    def dist(p): return ((p - e) if up else (e - p)) / R if R > 0 else 0.0     # + = in the trade direction, in R
+    def row(xs):
+        return " · ".join(f"{x['p']:.{dg}f} ({x['bars_ago']} bars ago"
+                          + (f", {dist(x['p']):+.2f}R" if R > 0 else "") + ")" for x in xs) or "(none in the window)"
     idx = {b[0]: i for i, b in enumerate(bars)}; st = charts._epoch(sig.get("signal_time"))
     ago = (len(bars) - 1 - idx[st]) if st in idx else None
     anchor = (f"the signal bar is {ago} bar{'' if ago == 1 else 's'} back from that edge" if ago is not None
@@ -80,7 +87,8 @@ def swing_block(sig: dict) -> str:
             "    - 5-bar fractal (2 left / 2 right) on H4 over a 14-day rolling window — the same set the chart marks, but only the "
             "five most recent of each: the chart marks more, so an unlisted marker is not a spurious one. "
             f"Bars ago counts back from the newest bar on the chart (its right edge); {anchor}. The newest entry may still be "
-            "confirmed against the unfinished current bar. No sweep column: the EA tracks no per-swing pool status.")
+            "confirmed against the unfinished current bar. No sweep column: the EA tracks no per-swing pool status.\n"
+            + wall_line(tbl, dist, R, dg, up))
 
 SLAM_ONE, SLAM_PAIR = 2.0, 1.5      # guide thresholds (coach 2026-09-24): one bar >= 2x ATR, or two consecutive >= 1.5x
 
@@ -113,6 +121,31 @@ def slam_block(sig: dict) -> str:
             f"oldest to newest: {' · '.join(f'{x:.2f}' for x in xs)}. {why}. By the guide's thresholds "
             f"(slam = one bar >= {SLAM_ONE:g}x, or two consecutive >= {SLAM_PAIR:g}x): **{'SLAM' if slam else 'no slam'}**. "
             "Ranges are high-low of each finished H4 bar; the last entry is the signal bar itself.")
+
+WALL_R = 0.10        # the guide's "held twice or more" tolerance - measured in R, not in ATR (coach 2026-09-24)
+
+def wall_line(tbl: dict, dist, R: float, dg: int, up: bool) -> str:
+    """Step 5's arithmetic, done FOR the advisor and in the unit the rule is written in. The rule is "a level the table
+    shows held twice or more inside the first 1R", tolerance 0.1R - and an advisor that converts that gap into ATR
+    lands on the wrong side of it (Opus did exactly that on EURSEK #1: it called a 0.109R pair a "0.11 ATR double top"
+    and vetoed on it). So the card states which levels are in the road, which pairs are within 0.1R, and how wide the
+    closest pair is."""
+    if R <= 0: return "    - (no entry/SL on this card, so the step-5 distances could not be computed)"
+    road = sorted(((x["p"], dist(x["p"])) for x in tbl["hi" if up else "lo"] if 0 < dist(x["p"]) <= 1.0), key=lambda z: z[1])
+    if not road:
+        return "    - **Step 5 arithmetic:** no swing of the blocking kind inside the first 1R — the road to the +1R bank is clear."
+    pairs = [(road[i], road[i + 1], road[i + 1][1] - road[i][1]) for i in range(len(road) - 1)]
+    walls = [(x, y, g) for x, y, g in pairs if g <= WALL_R]
+    txt = " · ".join(f"{p:.{dg}f} at {d:+.2f}R" for p, d in road)
+    if walls:
+        w = ", ".join(f"{x[0]:.{dg}f}/{y[0]:.{dg}f} ({g:.3f}R apart)" for x, y, g in walls)
+        verdict = f"**a level held twice within {WALL_R:.2f}R → step 5 ✗**: {w}"
+    else:
+        close = min((g for _, _, g in pairs), default=None)
+        verdict = (f"no level is held twice within {WALL_R:.2f}R"
+                   + (f" (closest pair {close:.3f}R apart)" if close is not None else " (only one level in the road)")
+                   + " → step 5 is `?` at worst, quality capped at B, not a veto")
+    return f"    - **Step 5 arithmetic (in R, the unit the rule is written in):** in the road to +1R: {txt}. {verdict}."
 
 def build_setup_md(sig: dict, cfg: dict) -> str:
     lv = sig.get("levels") or {}; rr = sig.get("rr") or {}; sz = sig.get("sizing") or {}

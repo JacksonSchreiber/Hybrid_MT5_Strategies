@@ -5,13 +5,13 @@ backtest happened to export (data/backtests/emarev_inv covers US100 2021-22 and 
 Windows-side, READ-ONLY: it attaches to the ALREADY-RUNNING local terminal and aborts if none is running or if the
 process count grows - it never launches or closes the trader's MT5.
     python.exe pipeline\dump_h4_dk.py
-Writes data/study/h4/<SYMBOL>.csv  (time,open,high,low,close, oldest first, the terminal's own bar clock).
+Writes data/study/<tf>/<SYMBOL>.csv  (time,open,high,low,close, oldest first, the terminal's own bar clock).
 """
 import argparse, csv, os, subprocess, sys
 from datetime import datetime, timedelta
 
 TERM = r"C:\Program Files\OANDA MetaTrader 5\terminal64.exe"
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "study", "h4")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "study")
 SYMS = ["EURUSD.dk", "GBPUSD.dk", "USDJPY.dk", "XAUUSD.dk", "US100.dk", "US500.dk", "USOIL.dk"]
 FROM, TO = datetime(2012, 1, 1), datetime.utcnow() + timedelta(days=2)
 
@@ -24,7 +24,8 @@ def interactive_terminals() -> int:
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--out", default=OUT)     # the repo lives on the WSL side; when this
-    a = ap.parse_args(); out_dir = a.out                                      # runs from a Windows temp copy, point --out at one too
+    ap.add_argument("--tf", default="h4", choices=["h4", "d1"])               # runs from a Windows temp copy, point --out at one too
+    a = ap.parse_args(); out_dir = os.path.join(a.out, a.tf)
     before = interactive_terminals()
     if before == 0: sys.exit("no terminal64 running - open MT5 first (this script never launches one)")
     import MetaTrader5 as m
@@ -34,7 +35,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     for s in SYMS:
         m.symbol_select(s, True)
-        r = m.copy_rates_range(s, m.TIMEFRAME_H4, FROM, TO)
+        r = m.copy_rates_range(s, m.TIMEFRAME_H4 if a.tf == "h4" else m.TIMEFRAME_D1, FROM, TO)
         if r is None or len(r) == 0:
             print(f"{s:12} no H4 history ({m.last_error()})"); continue
         p = os.path.join(out_dir, f"{s}.csv")

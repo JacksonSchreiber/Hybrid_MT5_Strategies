@@ -39,7 +39,7 @@ def _price_range(bars, extra: list[float]) -> tuple[float, float]:
 
 def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict | None = None, n_show: int = H4_BARS,
            signal_t: int | None = None, size=(1000, 520), digits: int = 5, marks: list[tuple[int, str]] | None = None,
-           strategy: str = "", imbal: bool = False) -> Image.Image:
+           strategy: str = "", imbal: bool = False, hide_dates: bool = False) -> Image.Image:
     """bars: [[t_epoch,o,h,l,c,v]] oldest->newest (all of them; EMAs are computed on the full series)."""
     W, H = size; pad_l, pad_r, pad_t, pad_b = 12, 92, 30, 28
     img = Image.new("RGB", (W, H), BG); d = ImageDraw.Draw(img, "RGBA")
@@ -71,7 +71,8 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
         t = datetime.fromtimestamp(show[i][0], timezone.utc)                          # bar epochs are the BROKER clock...
         t = t - timedelta(hours=C.server_offset_h(t - timedelta(hours=3)))           # ...labels in true UTC, like the card
         d.line([(X(i), y1), (X(i), y1 + 4)], fill=DIM)
-        d.text((X(i) - 20, y1 + 6), t.strftime("%d %b" if n_show > 100 else "%d %b %H:%M"), fill=DIM, font=f_small)
+        d.text((X(i) - 20, y1 + 6), (f"-{n - 1 - i} bars" if hide_dates else            # hide_dates: blind archive cards
+                                     t.strftime("%d %b" if n_show > 100 else "%d %b %H:%M")), fill=DIM, font=f_small)
     # overlay zones (behind candles): zone / zone2 span zone.from..zone.to exactly as the tester rectangles
     z_from = z_to = None
     if overlay:
