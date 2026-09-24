@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
 from live import charts
 from live import advisor_runner as AR
+from live import verdict_fmt as VF
 from live import eligibility as ELIG
 
 CFG: dict = {}
@@ -43,6 +44,18 @@ textarea,select,input{width:100%;background:#0b0f14;color:var(--txt);border:1px 
 .advtag{display:inline-block;padding:3px 9px;border-radius:10px;font-size:13px;font-weight:700}.advtag.fam-sonnet{background:#132a45;color:#79c0ff}.advtag.fam-opus{background:#2d1f47;color:#d2a8ff}
 .badge{display:inline-block;padding:4px 12px;border-radius:12px;font-weight:800;font-size:14px;letter-spacing:.05em}.badge.agree{background:#12301a;color:#3fb950;border:1px solid #2ea043}.badge.disagree{background:#3a1d1d;color:#ff7b72;border:1px solid #f85149}.badge.wait{background:#21262d;color:var(--dim)}
 .vw{font-size:18px;font-weight:800}
+.vp{display:inline-block;padding:3px 12px;border-radius:12px;font-weight:800;font-size:14px;letter-spacing:.04em}
+.vp.take{background:#12301a;color:#3fb950;border:1px solid #2ea043}.vp.takedef{background:#0d1f13;color:#3fb950;border:1px dashed #2ea043}
+.vp.skip{background:#3a1d1d;color:#ff7b72;border:1px solid #f85149}.vp.adjust{background:#3a2f1f;color:#e3b341;border:1px solid #9e6a03}
+.vp.wait,.vp.none{background:#21262d;color:var(--dim);border:1px solid var(--line)}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
+.chip{display:inline-block;padding:2px 8px;border-radius:9px;font-size:12px;font-weight:700;background:#21262d;color:var(--dim);border:1px solid transparent}
+.chip.ok{color:#3fb950}.chip.no{color:#ff7b72}.chip.maybe{color:#e3b341}.chip.na{color:var(--dim)}
+.chip.dec{border-color:#f85149;box-shadow:0 0 0 1px #f85149;background:#2a1717}
+.chip.diff{border-color:#58a6ff}
+.vline{margin:6px 0}.vline b{color:var(--fg)}
+.advrow{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin-top:6px}
+.advrow .sm{color:var(--dim);font-size:13px;flex:1 1 220px;min-width:0}
 .cd{font-weight:600}.brief h2{color:var(--txt);text-transform:none;letter-spacing:0;font-size:17px;margin-top:14px}.brief p,.brief li{font-size:15px;line-height:1.5}.brief a{word-break:break-all}
 """
 JS = """
@@ -124,6 +137,68 @@ def _last_word(rec: dict | None) -> str | None:
             if w: return w
     return None
 
+PILL = {"TAKE": "take", "TAKE (default)": "takedef", "SKIP": "skip", "ADJUST": "adjust", "WAIT": "wait"}
+
+def vpill(v: str | None) -> str:
+    return f'<span class="vp {PILL.get(v or "", "none")}">{E(v or "no verdict")}</span>'
+
+
+def verdict_card(p: dict, other: dict | None = None) -> str:
+    """The verdict block as a card (coach 2026-09-24). Whatever parsed is rendered; the raw text always stays one
+    click away under "more", so a model drifting from the format costs detail, never the verdict."""
+    dec = VF.decisive_step(p)
+    oth = dict(other.get("steps") or []) if other else {}
+    conf = f'<span class="k">confidence {E(p["confidence"])}</span>' if p.get("confidence") else ""
+    head = f'<div class="advrow">{vpill(p.get("verdict"))}{conf}' + (
+        f'<span class="pill warn">format drift: no {E(", ".join(p["missing"][:3]))}</span>' if p.get("missing") else "") + "</div>"
+    sm = f'<div class="vline"><b>{E(p["summary"])}</b></div>' if p.get("summary") else ""
+    start = "".join(f'<span class="chip {g}">{E(n)} {"✓" if g == "ok" else ("✗" if g == "no" else "?")}</span>'
+                    for n, g in p.get("start") or [])
+    steps = "".join(
+        f'<span class="chip {g}{" dec" if n == dec else ""}{" diff" if oth and oth.get(n) and oth.get(n) != g else ""}">'
+        f'{n}{"✓" if g == "ok" else ("✗" if g == "no" else "?")}</span>' for n, g in p.get("steps") or [])
+    q = (f'<div class="vline"><span class="k">quality</span> <b>{E(p["quality"])}</b>'
+         + (f' <span class="k">{E(p["quality_why"])}</span>' if p.get("quality_why") else "") + "</div>") if p.get("quality") else ""
+    why = f'<div class="vline"><span class="k">why</span> {E(p["why"])}</div>' if p.get("why") else ""
+    chg = f'<div class="vline"><span class="k">changes my mind</span> {E(p["changes"])}</div>' if p.get("changes") else ""
+    more = ((f'<div class="k">notes</div><pre>{E(p["notes"])}</pre>' if p.get("notes") else "")
+            + f'<div class="k">raw reply</div><pre>{E(p.get("raw") or "")}</pre>')
+    return (head + sm
+            + (f'<div class="chips">{start}</div>' if start else "")
+            + (f'<div class="chips">{steps}<span class="k">{E(p.get("strategy") or "")} steps</span></div>' if steps else "")
+            + q + why + chg + f'<details><summary class="k">more</summary>{more}</details>')
+
+
+def _parsed_last(rec: dict | None) -> dict:
+    for c in reversed((rec or {}).get("consults") or []):
+        if c.get("ok") and c.get("kind") == "verdict": return VF.parse(c.get("text"))
+    return VF.parse(None)
+
+
+def advisor_rows(key: str, sig: dict) -> str:
+    """Home screen: one row per advisor - label, verdict pill, confidence, the SUMMARY sentence - filled in as each
+    consult returns, so the trader can triage from the list without opening anything."""
+    out = []
+    for m in AR.models(CFG):
+        mid = m["id"]; lab = m.get("label", mid).split(" ·")[0]
+        rec = C.load_json(os.path.join(CFG["root"], "advisor", "verdicts", f"{key}.{mid}.json"))
+        if rec is not None and not AR.rec_matches(rec, sig): rec = None
+        st = (rec or {}).get("status") or "idle"
+        tag = f'<span class="advtag fam-{_fam(mid)}">{E(lab)}</span>'
+        if st == "ok" or ((rec or {}).get("consults") and any(c.get("ok") for c in rec["consults"])):
+            p = _parsed_last(rec)
+            body = (f'{vpill(p.get("verdict"))}'
+                    + (f'<span class="k">{E(p["confidence"])}</span>' if p.get("confidence") else "")
+                    + f'<span class="sm">{E(p.get("summary") or "")}</span>')
+        elif st == "failed": body = '<span class="vp skip">BUNDLE FAILED</span><span class="sm">no consult was run on this card</span>'
+        elif (rec or {}).get("policy_skip"): body = f'<span class="vp none">not run</span><span class="sm">{E((rec or {}).get("note", ""))}</span>'
+        elif st in ("rate_limited", "error"): body = f'<span class="vp none">{"rate-limited" if st == "rate_limited" else "failed"}</span><span class="sm">{E(str((rec or {}).get("note") or ""))}</span>'
+        elif st in ("running", "queued"): body = f'<span class="vp none">consulting…</span><span class="sm">{E(st)}</span>'
+        else: body = '<span class="vp none">consulting…</span><span class="sm">waiting to start</span>'
+        out.append(f'<div class="advrow">{tag}{body}</div>')
+    return "".join(out)
+
+
 # Measured run-to-run stability (coach 2026-09-24): three repeats of four identical cards. Sonnet returned
 # SKIP / ADJUST / TAKE on one of them - at the coach's 1-in-5 bar - so a DISAGREE badge has to say that the fast
 # panel's verdict is not reproducible, otherwise the trader reads a coin flip as a second opinion.
@@ -159,6 +234,7 @@ def advisor_section(key: str) -> tuple[str, str]:
     else:
         agree = True
         badge = f'<span class="badge wait">{len(have)} of {len(ms)} verdicts in</span>'
+    parsed = {m["id"]: _parsed_last(recs[m["id"]]) for m in ms}     # both, so each card can mark where they differ
     panels = []
     for m in ms:
         mid = m["id"]; rec = recs[mid] or {}; st = rec.get("status") or "idle"; lab = m.get("label", mid)
@@ -175,9 +251,15 @@ def advisor_section(key: str) -> tuple[str, str]:
         elif st == "ok": line = f'<span class="ok">answered</span> <span class="k">in {last.get("elapsed_s")}s</span>'
         else: line = '<span class="k">waiting to start…</span>'
         body = []
+        first_steps = dict(parsed.get(mid, {}).get("steps") or [])
         for c in cs:
             if c.get("kind") == "reply": body.append(f'<div class="k">you · {E(c.get("ts", ""))}</div><pre>{E(c.get("prompt", ""))}</pre>')
-            if c.get("ok"): body.append(f'<div class="k">{E(mid)} · {E(c.get("ts", ""))} · {c.get("elapsed_s")}s</div><pre>{E(c.get("text") or "")}</pre>')
+            if c.get("ok"):
+                pv = VF.parse(c.get("text"))
+                oth = parsed.get(next((x["id"] for x in ms if x["id"] != mid), ""), None)
+                body.append(f'<div class="k">{E(mid)} · {E(c.get("ts", ""))} · {c.get("elapsed_s")}s'
+                            + (" · follow-up" if c.get("kind") == "reply" else "") + "</div>"
+                            + verdict_card(pv, oth if c.get("kind") != "reply" else {"steps": list(first_steps.items())}))
             elif c.get("kind") == "verdict" and not c.get("interrupted"): body.append(f'<div class="k bad">{E(mid)} · {E(c.get("ts", ""))} · no answer: {E(str(c.get("error"))[:160])}</div>')
         w = words.get(mid)
         answered = any(c.get("ok") for c in cs)
@@ -334,7 +416,8 @@ def dashboard(q: dict) -> str:
     if not opn: out.append('<div class="card k">none</div>')
     for s in opn:
         out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{cls_pill(s.get("decision_class"))}<span class="k">#{s["signal_id"]}</span></div>'
-                   f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span></div></div></a>')
+                   f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span></div>'
+                   + advisor_rows(s["signal_key"], s) + '</div></a>')
     # pending orders (approved with "pending at the original entry"; resting on the broker until price comes back)
     out.append("<h2>Pending orders</h2>")
     pend = pending_orders()

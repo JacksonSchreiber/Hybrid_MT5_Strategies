@@ -24,6 +24,7 @@ from live import charts
 from live import overlays as OV
 from live import exposure as EXP
 from live import brief_runner
+from live import verdict_fmt as VF
 
 SESSION_NS = uuid.UUID("5f0a3c1e-9b7d-4c1a-8f2e-2d3b4a5c6d7e")
 DISALLOWED = "Bash,WebFetch,WebSearch,Task,Agent,NotebookEdit"
@@ -298,9 +299,15 @@ def ensure_log_line(cfg: dict, sig: dict, mid: str, text: str, kind: str, log) -
     p = os.path.join(cfg["advisor"]["live_dir"], "verdicts.live.log"); tag = f"#{sig['signal_id']}"
     _, payload = split_log(text)
     bflag = "brief:" + ("yes" if os.path.exists(os.path.join(cfg["advisor"]["live_dir"], "bundles", sig["signal_key"], "market-brief.md")) else "no")
+    # coach 2026-09-24: the SUMMARY sentence is the last field of the line, and a verdict whose block did not parse
+    # says so - that is how the coach sees which model is drifting from the output format.
+    pv = VF.parse(text)
+    summ = (("SUMMARY(synth): " if pv.get("synthesised") else "SUMMARY: ") + pv["summary"]) if pv.get("summary") else "SUMMARY: -"
+    if pv.get("missing"): summ += f" | unparsed: {','.join(pv['missing'][:4])}"
     if payload:
         payload = re.sub(r"\s*\|\s*brief:(yes|no)\s*$", "", payload)
-        with _log_lock: C.append_line(p, " | ".join([C.now_iso(), mid, sig["symbol"], tag, payload, bflag]))
+        with _log_lock: C.append_line(p, " | ".join([C.now_iso(), mid, sig["symbol"], tag, payload, bflag, summ]))
+        if pv.get("missing"): log(f"{sig['signal_key']}/{mid}: verdict block incomplete - missing {', '.join(pv['missing'])}")
         return
     m = VERDICT_RE.search(text or "")
     v = f"{m.group(1).upper()} ({m.group(2).lower()}, {m.group(3).lower()})" if m else "UNPARSED"
@@ -308,7 +315,7 @@ def ensure_log_line(cfg: dict, sig: dict, mid: str, text: str, kind: str, log) -
     q = re.search(r"Quality:\s*([ABC])", text or ""); why = re.search(r"Why:\s*(.+)", text or "")
     line = " | ".join([C.now_iso(), mid, sig["symbol"], tag, f"{sig.get('strategy')} {sig.get('direction')}", v,
                        f"SH:{''.join(sh.groups()) if sh else '???'} steps:{steps.group(1).strip().replace(' ', '') if steps else '-'}",
-                       f"Q:{q.group(1) if q else '-'}", "step: (runner-synthesized)", (why.group(1).strip()[:160] if why else "(no Why line)") + (" | reply" if kind == "reply" else " | runner"), bflag])
+                       f"Q:{q.group(1) if q else '-'}", "step: (runner-synthesized)", (why.group(1).strip()[:160] if why else "(no Why line)") + (" | reply" if kind == "reply" else " | runner"), bflag, summ])
     with _log_lock: C.append_line(p, line)
     log(f"{sig['signal_key']}/{mid}: log line synthesized ({kind})")
 
