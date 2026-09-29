@@ -15,7 +15,7 @@
   "claude_cmd": "C:\\Users\\hybridops\\AppData\\Roaming\\npm\\claude.cmd",
   "model": "claude-opus-5-5",
   "effort": "high",
-  "timeout_s": 200,
+  "timeout_s": 600,
   "live_dir": "C:\\ProgramData\\hybrid\\advisor\\live\\advisor",
   "node_path": "C:\\Program Files\\nodejs;C:\\Users\\hybridops\\AppData\\Roaming\\npm",
   "token_file": "C:\\ProgramData\\hybrid\\secrets\\advisor.token",
@@ -24,7 +24,7 @@
     "id": "opus-high",
     "model": "claude-opus-5-5",
     "effort": "high",
-    "timeout_s": 200,
+    "timeout_s": 600,
     "max_parallel": 2,
     "label": "Opus 5.5 · deep read"
    }
