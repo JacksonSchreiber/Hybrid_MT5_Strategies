@@ -112,19 +112,21 @@ def ftmo_block(hb: dict) -> str:
 
 
 def ftmo_room_block(s: dict) -> str:
-    """'room for N more at 0.5% / M at 1.0%' - the EA's own pre-order check (equity - aggregate risk-to-stop - this trade must
+    """'room for N more at <this signal's true risk %>' - the EA's own pre-order check (equity - aggregate risk-to-stop - this trade must
     stay above the daily AND max floors + buffer), from the freshest heartbeat. Approving past it = EA auto-reject, code 10."""
     hbs = [h for h in (C.heartbeat(CFG, x) for x in C.symbols(CFG)) if h and (h.get("ftmo") or {}).get("initial_balance")]
     if not hbs: return '<div class="card k">FTMO room: unknown (no heartbeat with the account limits yet)</div>'
     hb = max(hbs, key=lambda h: C.parse_iso(h.get("ts")) or C.now_utc()); f = hb["ftmo"]; eq = float(hb.get("equity") or 0)
     spare = min(float(f.get("headroom_daily", 0)), float(f.get("headroom_max", 0))) - float(f.get("buffer", 0))
-    n05 = max(0, int(spare // (0.005 * eq))) if eq > 0 else 0; n10 = max(0, int(spare // (0.01 * eq))) if eq > 0 else 0
+    # count at the risk this signal actually sizes at (the ladder rung x multiplier), not fixed 0.5%/1.0% tiers
     this = float((s.get("sizing") or {}).get("risk_pct_effective") or 0)
+    per = this if this > 0 else 0.001
+    n = max(0, int(spare // (per * eq))) if eq > 0 else 0
     fits = eq > 0 and spare >= this * eq
-    cls = "ok" if (fits and n05 >= 2) else ("warn" if fits else "bad")
+    cls = "ok" if (fits and n >= 2) else ("warn" if fits else "bad")
     note = ("" if fits else " — <b>this signal does NOT fit: approving it would be auto-rejected by the EA (code 10)</b>")
     return (f'<div class="card"><div class="k">FTMO room before this approval (aggregate risk-to-stop {float(hb.get("aggregate_risk_to_stop") or 0):,.0f}, '
-            f'spare {spare:,.0f} above the tighter floor + buffer)</div><div class="big {cls}">room for {n05} more at 0.5% · {n10} at 1.0%</div>'
+            f'spare {spare:,.0f} above the tighter floor + buffer)</div><div class="big {cls}">room for {n} more at {per * 100:.2f}%</div>'
             f'<div class="k">this signal sizes at {this * 100:.2f}%{note}</div></div>')
 
 # ----------------------------------------------------------------------------- advisors (coach 2026-09-21: two per signal)
