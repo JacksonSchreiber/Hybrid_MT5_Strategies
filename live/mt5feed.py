@@ -178,6 +178,19 @@ def position_costs(posid: int) -> dict | None:
         return {"n": len(ds), "symbol": sym, **tot, "net": sum(tot.values()),
                 "tick_value": float(si.trade_tick_value) if si else None, "tick_size": float(si.trade_tick_size) if si else None}
 
+def position_fills(posid: int) -> list | None:
+    """every deal of one position with its price: [[time, entry(0 in / 1 out / 2 inout / 3 out_by), volume, price], ...]
+    oldest first - the shadow bank log compares these fills to the modelled levels (coach 2026-09-30 item 8)."""
+    if FEED_URL:
+        r = _remote(f"/fills?position={int(posid)}", 6.0); return (r or {}).get("fills")
+    with _lock:
+        if not _ensure(): return None
+        try:
+            ds = _mt5.history_deals_get(position=int(posid))
+        except Exception:
+            _reset(); return None
+        return sorted([[int(d.time), int(d.entry), float(d.volume), float(d.price)] for d in (ds or [])])
+
 def balance_history(t_from: int, t_to: int) -> dict | None:
     """Every deal that moved the balance between two epochs, oldest first, plus the balance NOW - so the caller can
     rebuild the curve backwards from a known anchor even if the window misses the account's first deposit.

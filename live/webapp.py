@@ -449,7 +449,8 @@ def dashboard(q: dict) -> str:
                f'<form method="post" action="/telegram_test" class="inline"><button class="btn">Telegram test</button></form></div>'
                f'<div class="row" style="margin-top:8px"><span class="k">Monthly export for the coach (journals + expired-TAKE blind outcomes):</span>'
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{(C.now_utc().replace(day=1) - timedelta(days=1)).strftime("%Y%m")}.zip">last month</a>'
-               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{C.now_utc().strftime("%Y%m")}.zip">this month so far</a></div></div>')
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{C.now_utc().strftime("%Y%m")}.zip">this month so far</a>'
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/shadow_bank.csv">bank shadow log</a></div></div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
     # coach 2026-09-30: sorted by signal time (oldest first - nearest deadline); the D1-extension sort was withdrawn with
@@ -1094,6 +1095,12 @@ class H(BaseHTTPRequestHandler):
                 data, name, man = backup.build(CFG, 30); backup.record(CFG, man, name)
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backup|{name}|{len(data)}B|{man['files']} files|by=web")
                 self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
+            if parts[0] == "shadow_bank.csv":                                # coach 2026-09-30 item 8
+                try:
+                    with open(os.path.join(CFG["root"], "web", "shadow_bank.csv"), "rb") as f: data = f.read()
+                except OSError: data = b"not built yet - the monitor writes it hourly\n"
+                self.send_response(200); self.send_header("Content-Type", "text/csv"); self.send_header("Content-Disposition", 'attachment; filename="shadow_bank.csv"')
                 self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
             if parts[0] == "health": return self._send(json.dumps({"ok": True, "ts": C.now_iso()}), "application/json")
             if parts[0] == "signal" and len(parts) == 2: return self._send(signal_page(parts[1], q))

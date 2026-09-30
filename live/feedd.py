@@ -44,6 +44,10 @@ class H(BaseHTTPRequestHandler):
                 try: pid = int(q.get("position", "0"))
                 except ValueError: return self._j({"error": "bad request"}, 400)
                 return self._j({"deals": mt5feed.position_costs(pid)})
+            if u.path == "/fills":
+                try: pid = int(q.get("position", "0"))
+                except ValueError: return self._j({"error": "bad request"}, 400)
+                return self._j({"fills": mt5feed.position_fills(pid)})
             if u.path == "/orders":
                 sym = q.get("symbol") or None
                 if sym and not C.safe_key(sym): return self._j({"error": "bad request"}, 400)

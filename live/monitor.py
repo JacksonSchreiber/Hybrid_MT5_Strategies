@@ -405,8 +405,22 @@ class Monitor:
                       f"{hb.get('aggregate_risk_to_stop', '')}")
         self.st["equity_last"] = now
 
+    SHADOW_EVERY_S = 3600
+
+    def shadow_bank(self):
+        """coach 2026-09-30 item 8: the bank shadow log, hourly; one Telegram line when the 30-fill revisit point is met."""
+        now = time.time()
+        if now - self.st.get("shadow_last", 0) < self.SHADOW_EVERY_S: return
+        from live import shadow_bank
+        n, be, ok = shadow_bank.write(self.cfg)
+        self.st["shadow_last"] = now; self.st["shadow"] = [n, be, ok]
+        if ok >= 30 and not self.st.get("shadow_flagged"):
+            self.st["shadow_flagged"] = True
+            self.send(f"COACH REVISIT POINT: {ok} live TrendCont stop-to-entry exits filled within 0.05R of modelled "
+                      f"(of {be}; {n} closed TrendConts in the bank shadow log). web/shadow_bank.csv has the rows.")
+
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch, self.equity_sample):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch, self.equity_sample, self.shadow_bank):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()
