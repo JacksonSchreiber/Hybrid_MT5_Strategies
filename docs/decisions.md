@@ -19,3 +19,18 @@ All user-approved decisions, newest first.
 | 2026-07-16 | Project location | WSL-native ext4 (/home/jack/hybrid_project), not OneDrive |
 | 2026-07-16 | GitHub remote | JacksonSchreiber/Hybrid_MT5_Strategies (user-provided PAT, stored outside repo) |
 | 2026-07-16 | Overall plan approved | 4 phases; user gates every phase transition |
+
+## 2026-09-30 — Coach rulings after the D1 withdrawal and the exit programme
+
+- **D1 extension withdrawn.** `trendcont_d1_ext_min` = 0 (deployed 20:20 UTC). The number stays on the card as an
+  observation; the mechanical Quality grade is gone (the advisor's own Quality line returns); the home screen sorts by
+  signal time. The opinion counter restarted at the 20:22 UTC redeploy.
+- **Study rule (pipeline, standing):** every study that joins a higher-timeframe bar states its bar-index rule in the
+  report header (daily features use the last D1 bar dated strictly before the signal's day), and reconciles the
+  feature against the EA's published value on at least 10 live cards before any result goes to the coach.
+- **Doctrine v2 exit, TrendCont, live:** bank 25% at +1R (or TP1 if nearer), stop to entry at +1R, runner to TP2.
+  `live.json trendcont_bank_frac: 0.25`, read at the moment of the bank; EA deployed 20:31 UTC, journaling of the
+  share actually banked from 20:37 UTC (`partial_frac`; the lot step rounds 25% of 0.05 lots to 0.01 = 20%, and a
+  0.01-lot position cannot split -> 0). Positions already banked at 50% stay as they are. Other detectors stay at 50%.
+  Guards: the MT5 tester reproduction (EURUSD, US100, EA exit code, within +-0.02R of the replay) - fail = revert to
+  50%; the bank shadow log (`web/shadow_bank.csv`, hourly) - 30 in-tolerance stop-to-entry fills is a revisit point.
