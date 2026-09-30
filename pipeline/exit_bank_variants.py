@@ -46,7 +46,7 @@ def main():
     m5 = {name: [M5.m5_replay(x["M"], x["k0"], x["up"], x["e"] - x["off"], x["s"] - x["off"],
                               (x["tp1"] - x["off"]) if x["tp1"] else None, (x["tp2"] - x["off"]) if x["tp2"] else None,
                               f, s) or 0.0 for x in use] for name, at, f, s in V}
-    report("M5, 5 symbols (no XAUUSD / USDJPY), costed", use, m5)
+    report(f"M5, {len({x['sym'] for x in use})} symbols, costed", use, m5)
 
 
 if __name__ == "__main__": main()
