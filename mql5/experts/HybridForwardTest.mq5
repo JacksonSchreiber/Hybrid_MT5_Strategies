@@ -2082,7 +2082,11 @@ void LiveWritePositions()
       j.KNum("sl_live",PositionGetDouble(POSITION_SL),_Digits); j.KNum("tp_live",PositionGetDouble(POSITION_TP),_Digits);
       j.KNum("tp1",g_rows[i].tp1,_Digits); j.KNum("tp2",g_rows[i].tp2,_Digits);
       j.KNum("lots_init",g_rows[i].lots,2); j.KNum("lots_live",PositionGetDouble(POSITION_VOLUME),2);
-      j.KNum("risk_pct_effective",g_rows[i].risk_pct_gate*g_rows[i].risk_mult_applied,5);   // sized-at risk (fraction of equity)
+      //--- sized-at risk (fraction of equity). Since the ladder (2026-09-29) risk_pct_gate IS the final risk - the rung
+      //--- already includes the multiplier - so multiplying again showed 0.01% for a 0.10% trade (fixed 2026-09-30).
+      //--- Rows sized before the ladder carry risk_pct_gate == InpRiskPct and still need the multiplier.
+      double rpe=(MathAbs(g_rows[i].risk_pct_gate-InpRiskPct)>1e-9 ? g_rows[i].risk_pct_gate : g_rows[i].risk_pct_gate*g_rows[i].risk_mult_applied);
+      j.KNum("risk_pct_effective",rpe,5);
       j.KNum("open_r",oR,3); j.KNum("banked_r",g_rows[i].r_multiple,3); j.KNum("closenow_r",oR+g_rows[i].r_multiple,3);
       j.KBool("banked",g_rows[i].banked); j.KBool("tp1_done",g_rows[i].tp1_done); j.KBool("ratcheted",g_rows[i].ratcheted);
       bool beok=BEPlaceable(i); PositionSelectByTicket((ulong)g_rows[i].posid);
