@@ -142,9 +142,22 @@ def trader_files():
     return out
 
 
+DEMO = os.path.join(ROOT, "data", "study", "demo_journal")      # the 14-day demo (box live\\archive\\demo-20260929\\journal)
+
+
+def demo_files():
+    out = []
+    for p in sorted(glob.glob(os.path.join(DEMO, "*.csv"))):
+        if any(x in p for x in (".actions", ".delays")): continue
+        rows = [dict(r, decision=("approved" if r.get("decision") == "approved_pending" else r.get("decision")))
+                for r in csv.DictReader(open(p, newline="", encoding="ascii", errors="replace"))]
+        out.append((p, rows))
+    return out
+
+
 def load_trader_rows():
     out, seen = [], set()
-    for p, rows in trader_files():
+    for p, rows in trader_files() + demo_files():
         sym = os.path.basename(p).split("_")[0]
         h4 = load(sym, "h4")
         if not h4: print(f"  no H4 bars for {sym}, skipping {os.path.basename(p)}"); continue
@@ -176,6 +189,7 @@ def load_trader_rows():
             tp1 = float(r["tp1"]) if r.get("tp1") else None
             tp2 = float(r["tp2"]) if r.get("tp2") else (float(r["tp"]) if r.get("tp") else None)
             out.append({"sym": sym, "t": r["signal_time"], "up": up, "e": e, "s": s_, "tp1": tp1, "tp2": tp2, "i0": i0,
+                        "src": "demo" if p.startswith(DEMO) else "tester",
                         "journal_r": float(r.get("r_multiple") or 0), "journal_term": r.get("terminal"), "strat": r["strategy"],
                         "bars": h4, "cost": DRAG.get(sym.split(".")[0], 0.007)})
     return out
@@ -211,7 +225,7 @@ def main():
     rows = load_trader_rows() if trader else load_rows()
     from collections import Counter
     print(f"replaying {len(rows)} " + ("of the TRADER's own approved trades (all strategies)" if trader else "approved TrendCont rows") + " over H4")
-    if trader: print("  by strategy:", dict(Counter(x["strat"] for x in rows)), " by symbol:", dict(Counter(x["sym"].split(".")[0] for x in rows)))
+    if trader: print("  by source:", dict(Counter(x["src"] for x in rows)), " by strategy:", dict(Counter(x["strat"] for x in rows)), " by symbol:", dict(Counter(x["sym"].split(".")[0] for x in rows)))
     print()
     base = run(rows, "base")
     bm = st.mean(x["r"] for x in base); bj = st.mean(x["journal_r"] for x in base)
