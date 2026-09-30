@@ -113,6 +113,12 @@ def build(sig: dict, cfg: dict) -> str:
         lines.append(f"    - this signal ({sig.get('symbol')} {sig.get('direction')} at {rp_new:.2f}%) would add: " + "; ".join(parts))
         same = sorted({root(p["symbol"]) for p in pos if root(p["symbol"]) in CLUSTERS and CLUSTERS[root(p["symbol"])] == CLUSTERS.get(root(sig.get("symbol", "")))})
         if same: lines.append(f"    - already open in the same cluster ({CLUSTERS[root(sig.get('symbol', ''))]}): {', '.join(same)}")
+    # item 9 (coach 2026-09-30 late): measured correlation and effective correlated risk against the 1.5% cap
+    try:
+        from live import correlation as CORR
+        lines.append("    " + CORR.text(CORR.compute(sig, cfg)).replace("\n", "\n    "))
+    except Exception as e:
+        lines.append(f"    - correlated risk: could not be computed ({e!r}) - check exposure by hand")
     # account numbers the EA enforces (§11-7)
     hb = newest_heartbeat(cfg)
     if hb:

@@ -129,6 +129,24 @@ def ftmo_room_block(s: dict) -> str:
             f'spare {spare:,.0f} above the tighter floor + buffer)</div><div class="big {cls}">room for {n} more at {per * 100:.2f}%</div>'
             f'<div class="k">this signal sizes at {this * 100:.2f}%{note}</div></div>')
 
+def corr_block(s: dict) -> str:
+    """item 9 (coach 2026-09-30 late): measured 60d correlation with every open position, weighted 1.0 / 0.5 / 0, and the
+    effective correlated risk against the 1.5% cap (over it = a correlation veto, code 5)."""
+    try:
+        from live import correlation as CORR
+        r = CORR.compute(s, CFG)
+    except Exception as e:
+        return f'<div class="card k">correlated risk: unavailable ({E(repr(e))})</div>'
+    cls = "bad" if r["veto"] else ("warn" if r["total"] > 0.75 * r["cap"] else "ok")
+    rows = "".join(
+        f'<div class="k">{E(x["symbol"])} {E(str(x["direction"]))} #{E(str(x["signal_id"]))}: '
+        + ("same symbol, same direction" if x["same"] else ("corr n/a" if x["corr"] is None else f'corr {x["corr"]:+.2f} → signed {x["signed"]:+.2f}'))
+        + f' · weight {x["weight"]:.1f} × unbanked {x["unbanked"]:.2f}% = +{x["adds"]:.2f}%</div>'
+        for x in sorted(r["pairs"], key=lambda x: -x["adds"]))
+    return (f'<div class="card"><div class="k">Correlated risk (60-day daily correlation; weight 1.0 at ≥0.6 or same trade, 0.5 at 0.3–0.6)</div>'
+            f'<div class="big {cls}">{r["total"]:.2f}% of {r["cap"]:.1f}%{" — correlation veto (code 5)" if r["veto"] else ""}</div>'
+            f'<div class="k">this signal {r["own"]:.2f}% + weighted unbanked open risk</div>{rows or "<div class=k>no open positions</div>"}</div>')
+
 # ----------------------------------------------------------------------------- advisors (coach 2026-09-21: two per signal)
 def _fam(mid: str) -> str: return "opus" if "opus" in mid else ("sonnet" if "sonnet" in mid else "other")
 
@@ -555,6 +573,7 @@ def signal_page(key: str, q: dict) -> str:
     # FTMO room (coach 2026-09-21): what the account can still take before an approve is auto-rejected (code 10)
     if is_open:
         out.append(ftmo_room_block(s))
+        out.append(corr_block(s))
     # actions
     if is_open:
         modes = s.get("entry_modes") or ["market"]
