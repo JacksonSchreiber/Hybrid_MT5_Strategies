@@ -121,7 +121,9 @@ def main():
         t = int(datetime.strptime(r["signal_time"], "%Y.%m.%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
         i = ih.get(t)
         if i is None or i < 60: print(f"  {key} {sym}: signal bar not in the H4 file - skipped"); continue
-        jd = max((k for k, b in enumerate(d1) if b[0] <= t), default=None)
+        # coach 2026-09-30: the last D1 bar dated STRICTLY before the signal day (the signal day's own bar closes after it)
+        day0 = t - t % 86400
+        jd = max((k for k, b in enumerate(d1) if b[0] < day0), default=None)
         if jd is None or jd < 30: print(f"  {key} {sym}: no D1 history - skipped"); continue
         e, s = float(r["orig_entry"]), float(r["orig_sl"])
         lv = {"entry": e, "sl": s, "tp1": float(r["orig_tp1"] or 0), "tp2": float(r["orig_tp2"] or 0)}

@@ -331,3 +331,12 @@ Check after any account change: the heartbeat's `ftmo` block must show the NOMIN
   update `data/study/broker_sessions.md`. If BTCUSD quotes weekends there, §10.1's weekend-flat rule comes off rather
   than persisting by inertia (coach, 2026-09-17). The shadow venue (OANDA demo) is Mon-Fri; FTMO says crypto hours vary
   by platform.
+
+## Reading the live bank record (coach 2026-09-30)
+
+From **2026-09-30 20:31 UTC** live TrendCont (and, from its deploy, DeepFib) banks **25%** at +1R
+(`live.json trendcont_bank_frac` / `deepfib_bank_frac`); SweepMSS and EMArevQ stay 50%. The live record is **not a
+clean 25%**: at the 0.1% ladder rung the broker's lot step floors the bank - 25% of 0.05 or 0.10 lots is 0.01 / 0.02
+(= 20%), and a 0.01-lot position cannot split at all (stop to entry, nothing banked). Since 20:37 UTC the journal's
+`partial_frac` holds the share ACTUALLY banked (0 for a no-split trade); read it per trade, never assume 25%.
+`web/shadow_bank.csv` (download on the home page) prices every closed TrendCont at 50 / 25 / 0% on the same path.

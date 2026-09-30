@@ -160,7 +160,7 @@ def verdict_card(p: dict, other: dict | None = None) -> str:
         bits = [f'<span class="chip {cls}">{E(lbl)}</span>']
         if p.get("d1_ext") is not None:
             bits.append(f'<span class="chip">D1 {p["d1_ext"]:+.2f} ATR (obs)</span>')
-        for m in re.findall(r"(grade [ABC-])|(spread [0-9.]+R)|(\b\d{2}:\d{2} bar[^·]*)", p.get("mech_detail") or ""):
+        for m in re.findall(r"(spread [0-9.]+R)|(signal bar \d{2}:\d{2} UTC)|(\b\d{2}:\d{2} bar[^·]*)", p.get("mech_detail") or ""):
             t = next((x for x in m if x), "").strip(" ·")
             if t: bits.append(f'<span class="chip">{E(t)}</span>')
         mech = '<div class="chips">' + "".join(bits) + "</div>"

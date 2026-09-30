@@ -174,7 +174,7 @@ def render_signal(sig: dict, out_dir: str, fresh: bool = False) -> tuple[str, st
     sig_t = _epoch(sig.get("signal_time"))
     lv = sig.get("levels") or {}
     render(signal_bars(sig, "h4"), title="H4  " + head, levels=lv, overlay=sig.get("overlay"), n_show=H4_BARS, signal_t=sig_t, digits=digits, strategy=sig.get("strategy", ""), imbal=True).save(p_h4 + ".tmp", "PNG"); os.replace(p_h4 + ".tmp", p_h4)
-    render(signal_bars(sig, "d1"), title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
+    render(signal_bars(sig, "d1"), title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}   (last candle = today, STILL FORMING)", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
     return p_h4, p_d1
 
 def d1_ext_of(sig: dict) -> float | None:

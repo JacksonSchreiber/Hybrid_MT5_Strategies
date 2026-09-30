@@ -14,7 +14,7 @@ bank counts as hit when mfe_r >= 1.0), same reporting (mean R +- SE, bank hit-ra
 Bars: a cell <= -0.10R against its best neighbour is a veto candidate; otherwise it is a quality mark.
 """
 from __future__ import annotations
-import csv, glob, os, statistics as st, sys
+import datetime as _dt, csv, glob, os, statistics as st, sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -37,6 +37,9 @@ def load(sym: str, tf: str) -> list[list]:
     out = []
     with open(p, newline="") as f:
         for r in csv.DictReader(f):
+            # coach 2026-09-30: no weekend D1 bars - the .dk store has Sunday stubs (and BTC weekends) that live OANDA
+            # does not; the files were stripped, and this keeps any re-dump consistent
+            if tf == "d1" and _dt.date(int(r["time"][:4]), int(r["time"][5:7]), int(r["time"][8:10])).weekday() >= 5: continue
             out.append([r["time"], float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])])
     return out
 
