@@ -676,7 +676,8 @@ def pending_card(o: dict, link: bool = False) -> str:
                 rr_now = (abs(float(tp) - float(mkt)) / now_stop) if (tp and now_stop) else None
                 rr_pl = (abs(float(tp) - float(px)) / plan_stop) if (tp and plan_stop) else None
                 better = pct < 100
-                note = (f'<div class="k">at the market now: stop {now_stop:.5f} ({pct:.0f}% of planned)'
+                dg = len(str(px).split(".")[1]) if "." in str(px) else 0      # the order's own precision (5 for FX, 2 for BTC)
+                note = (f'<div class="k">at the market now: stop {now_stop:.{dg}f} ({pct:.0f}% of planned)'
                         + (f' · R:R {rr_pl:.2f} → <b class="{"ok" if better else "warn"}">{rr_now:.2f}</b>' if rr_now and rr_pl else "")
                         + (' · nearer the stop, so a smaller loss if it fails' if better else ' · further from the stop, so a bigger one') + '</div>')
         except (TypeError, ValueError): pass
