@@ -482,6 +482,9 @@ string   g_ladder_rung="";       // the rung the last sized signal was priced at
 double   g_ladder_pct=0.0;       // ...and the risk fraction that rung applied, journaled as risk_pct_gate
 double   g_cfg_d1_ext_min=0.0;    // live.json trendcont_d1_ext_min: TrendCont needs this much D1 extension, in D1 ATR (0 = off)
 double   g_cfg_tc_bank=0.5;       // live.json trendcont_bank_frac: share banked at +1R on TrendCont (coach 2026-09-30: 0.25; tester stays 0.5)
+double   g_cfg_df_bank=0.5;       // live.json deepfib_bank_frac: the same for DeepFib (coach 2026-09-30 late: 0.25)
+//--- the live bank share per detector (SweepMSS / EMArevQ stay 50%); 0 = not a configurable detector
+double LiveBankFrac(string strat){ return strat=="TrendCont" ? g_cfg_tc_bank : (strat=="DeepFib" ? g_cfg_df_bank : 0.0); }
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
 void LiveRecomputeParked(){ g_live_parked=(ParkCount()>0); }
@@ -784,6 +787,8 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_d1_ext_min=StringToDouble(JGet(k,v,"trendcont_d1_ext_min",DoubleToString(InpD1ExtMin,3)));   // coach 2026-09-24: D1-extension gate for TrendCont
       g_cfg_tc_bank=StringToDouble(JGet(k,v,"trendcont_bank_frac","0.5"));   // coach 2026-09-30: doctrine v2 bank for TrendCont
       if(g_cfg_tc_bank<0.05 || g_cfg_tc_bank>0.95) g_cfg_tc_bank=0.5;
+      g_cfg_df_bank=StringToDouble(JGet(k,v,"deepfib_bank_frac","0.5"));      // coach 2026-09-30 late: DeepFib same sign, same mechanism
+      if(g_cfg_df_bank<0.05 || g_cfg_df_bank>0.95) g_cfg_df_bank=0.5;
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
@@ -3163,7 +3168,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    g_rows[n].orig_tp1=orig_tp1; g_rows[n].orig_tp2=orig_tp2;
    g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=order_tp;
    g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=(two_target?cand.partial_fraction:0.0);
-   if(InpLiveMode && two_target && cand.strategy=="TrendCont") g_rows[n].partial_frac=g_cfg_tc_bank;   // coach 2026-09-30
+   if(InpLiveMode && two_target && LiveBankFrac(cand.strategy)>0.0) g_rows[n].partial_frac=LiveBankFrac(cand.strategy);   // coach 2026-09-30
    g_rows[n].lots=lots; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
    g_rows[n].tp1_done=(!two_target); g_rows[n].banked=false; g_rows[n].closed_vol=0.0;
    //--- ArrayResize does NOT zero new struct elements: init the item-1/2 fields explicitly so a
@@ -3408,8 +3413,8 @@ void ManageOpenPositions()
       //--- the bank share: 50% everywhere, except live TrendCont, which takes live.json trendcont_bank_frac (coach
       //--- 2026-09-30: 25%) - read at the moment of the bank, so it applies from the first TrendCont to reach +1R after
       //--- a config change, and journaled in partial_frac so the record shows which bank each trade ran under.
-      bool   tc  =(g_rows[i].strategy=="TrendCont");
-      double bf  =(tc ? (InpLiveMode ? g_cfg_tc_bank : InpTcBankFrac) : 0.5);
+      bool   tc  =(InpLiveMode ? LiveBankFrac(g_rows[i].strategy)>0.0 : g_rows[i].strategy=="TrendCont");
+      double bf  =(tc ? (InpLiveMode ? LiveBankFrac(g_rows[i].strategy) : InpTcBankFrac) : 0.5);
       double pv  =MathFloor((bf*lots)/step)*step;           // mechanical bank
       //--- live: journal the share ACTUALLY banked (the lot step rounds 25% of 0.05 lots down to 0.01 = 20%; a 0.01-lot
       //--- position cannot split at all -> 0), so the record shows exactly what each trade ran under
