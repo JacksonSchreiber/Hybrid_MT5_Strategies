@@ -10,6 +10,7 @@ from pipeline import m5_study as M5                                   # noqa: E4
 import bisect
 
 V = [("current: bank 50%, stop to entry", "doc", 0.50, 0.0), ("bank 25%, stop to entry", "doc", 0.25, 0.0),
+     ("bank 20%, stop to entry", "doc", 0.20, 0.0), ("bank 15%, stop to entry", "doc", 0.15, 0.0),
      ("bank 25%, stop to +0.25R", "doc", 0.25, 0.25), ("bank 33%, stop to entry", "doc", 0.33, 0.0),
      ("no bank, stop to +0.25R", None, 0.0, 0.25), ("no bank, stop to entry", None, 0.0, 0.0)]
 
