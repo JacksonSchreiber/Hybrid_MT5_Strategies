@@ -480,6 +480,7 @@ double   g_risk_mult_ruled=1.0;   // coach 2026-09-29: the ruled per-symbol mult
 string   g_ladder_rung="";       // the rung the last sized signal was priced at (published on the card and the row)
 double   g_ladder_pct=0.0;       // ...and the risk fraction that rung applied, journaled as risk_pct_gate
 double   g_cfg_d1_ext_min=0.0;    // live.json trendcont_d1_ext_min: TrendCont needs this much D1 extension, in D1 ATR (0 = off)
+double   g_cfg_tc_bank=0.5;       // live.json trendcont_bank_frac: share banked at +1R on TrendCont (coach 2026-09-30: 0.25; tester stays 0.5)
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
 void LiveRecomputeParked(){ g_live_parked=(ParkCount()>0); }
@@ -780,6 +781,8 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_wf_symbols=JGet(k,v,"weekend_flat_symbols","");   // §10.1 live (coach 2026-09-21): e.g. "BTCUSD"
       g_cfg_max_spread_r=StringToDouble(JGet(k,v,"max_spread_r",DoubleToString(InpMaxSpreadR,3)));   // trader 2026-09-23: spread gate, in R
       g_cfg_d1_ext_min=StringToDouble(JGet(k,v,"trendcont_d1_ext_min",DoubleToString(InpD1ExtMin,3)));   // coach 2026-09-24: D1-extension gate for TrendCont
+      g_cfg_tc_bank=StringToDouble(JGet(k,v,"trendcont_bank_frac","0.5"));   // coach 2026-09-30: doctrine v2 bank for TrendCont
+      if(g_cfg_tc_bank<0.05 || g_cfg_tc_bank>0.95) g_cfg_tc_bank=0.5;
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
@@ -3159,6 +3162,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    g_rows[n].orig_tp1=orig_tp1; g_rows[n].orig_tp2=orig_tp2;
    g_rows[n].entry=cand.entry; g_rows[n].sl=cand.sl; g_rows[n].tp=order_tp;
    g_rows[n].tp1=cand.tp1; g_rows[n].tp2=cand.tp2; g_rows[n].partial_frac=(two_target?cand.partial_fraction:0.0);
+   if(InpLiveMode && two_target && cand.strategy=="TrendCont") g_rows[n].partial_frac=g_cfg_tc_bank;   // coach 2026-09-30
    g_rows[n].lots=lots; g_rows[n].risk_px=MathAbs(cand.entry-cand.sl);
    g_rows[n].tp1_done=(!two_target); g_rows[n].banked=false; g_rows[n].closed_vol=0.0;
    //--- ArrayResize does NOT zero new struct elements: init the item-1/2 fields explicitly so a
@@ -3400,13 +3404,18 @@ void ManageOpenPositions()
       double rtp =PositionGetDouble(POSITION_TP);           // preserve the runner's TP
       double px  =(dir>0 ? bid : ask);
       double orr =OpenR(i);                                 // R at trigger (full vol, ~+1.0R)
-      double pv  =MathFloor((0.5*lots)/step)*step;          // mechanical 50%
+      //--- the bank share: 50% everywhere, except live TrendCont, which takes live.json trendcont_bank_frac (coach
+      //--- 2026-09-30: 25%) - read at the moment of the bank, so it applies from the first TrendCont to reach +1R after
+      //--- a config change, and journaled in partial_frac so the record shows which bank each trade ran under.
+      double bf  =((InpLiveMode && g_rows[i].strategy=="TrendCont") ? g_cfg_tc_bank : 0.5);
+      if(InpLiveMode && g_rows[i].strategy=="TrendCont") g_rows[i].partial_frac=bf;
+      double pv  =MathFloor((bf*lots)/step)*step;           // mechanical bank
       string tag =(via_tp1 ? "AUTO_TP1" : "AUTO_1R");
       if(pv>=vmin && (lots-pv)>=vmin)
         {
          if(g_trade.PositionClosePartial((ulong)g_rows[i].posid,pv))
             Print("Signal #",g_rows[i].id," ",tag," -> banked ",DoubleToString(pv,2),
-                  " lots (50%), SL -> BE, runner to TP");
+                  " lots (",DoubleToString(bf*100,0),"%), SL -> BE, runner to TP");
          else
             Print("Signal #",g_rows[i].id," ",tag," partial close FAILED: ",g_trade.ResultRetcode());
          g_trade.PositionModify((ulong)g_rows[i].posid,be,rtp);

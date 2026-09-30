@@ -350,7 +350,7 @@ class Monitor:
     # Coach 2026-09-24: the opinion layer is now the thing being graded, so count it live. One line per TrendCont
     # verdict since the deploy, its OPINION verdict joined to the journal's outcome; flag once at n=50.
     OPINION_N = 50
-    OPINION_FROM = "2026-09-24"
+    OPINION_FROM = "2026-09-30T20:22"                       # coach 2026-09-30: restarts at the D1-withdrawal redeploy (UTC)
 
     def opinion_watch(self):
         p = os.path.join(self.cfg["root"], "advisor", "opinion_watch.json")
@@ -361,7 +361,7 @@ class Monitor:
             with open(lg, encoding="utf-8", errors="replace") as f:
                 for ln in f:
                     parts = [x.strip() for x in ln.split("|")]
-                    if len(parts) < 8 or parts[0][:10] < self.OPINION_FROM: continue
+                    if len(parts) < 8 or parts[0][:16] < self.OPINION_FROM: continue
                     if "TrendCont" not in parts[4] or "reply" in ln: continue
                     op = next((x[8:] for x in parts if x.startswith("opinion:")), "")
                     w = op.split("(")[0].strip()

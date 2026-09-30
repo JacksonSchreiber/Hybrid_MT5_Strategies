@@ -159,7 +159,7 @@ def verdict_card(p: dict, other: dict | None = None) -> str:
         lbl = "VETO" + (f' · {p["mech_rule"]}' if p.get("mech_rule") else "") if p["mech"] == "VETO" else "mechanical PASS"
         bits = [f'<span class="chip {cls}">{E(lbl)}</span>']
         if p.get("d1_ext") is not None:
-            bits.append(f'<span class="chip {"ok" if p["d1_ext"] >= 0.5 else "maybe"}">D1 {p["d1_ext"]:+.2f} ATR</span>')
+            bits.append(f'<span class="chip">D1 {p["d1_ext"]:+.2f} ATR (obs)</span>')
         for m in re.findall(r"(grade [ABC-])|(spread [0-9.]+R)|(\b\d{2}:\d{2} bar[^·]*)", p.get("mech_detail") or ""):
             t = next((x for x in m if x), "").strip(" ·")
             if t: bits.append(f'<span class="chip">{E(t)}</span>')
@@ -437,7 +437,7 @@ def dashboard(q: dict) -> str:
     out.append(tc_watch_line())
     ow = C.load_json(os.path.join(CFG["root"], "advisor", "opinion_watch.json")) or {}
     if ow.get("n"):
-        out.append(f'<div class="k">advisor opinions logged since the 2026-09-24 deploy: {int(ow["n"])}/50'
+        out.append(f'<div class="k">advisor opinions logged since the 2026-09-30 20:22 UTC redeploy (counter restarted, coach ruling): {int(ow["n"])}/50'
                    f' ({int(ow.get("paired") or 0)} with a closed outcome){" — due for the coach\'s read" if ow.get("flagged") else ""}</div>')
     # backup + telegram test (trader rulings 2026-09-16: manual 30-day zip instead of a nightly pull)
     from live import backup
@@ -452,19 +452,19 @@ def dashboard(q: dict) -> str:
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{C.now_utc().strftime("%Y%m")}.zip">this month so far</a></div></div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
-    # Load filter, coach ruling 2026-09-24: a SORT, not a cut - every card stays visible, ranked by D1 extension
-    # descending (the one feature that separates outcomes on the blind record). Hard drops are the EA's, unchanged.
+    # coach 2026-09-30: sorted by signal time (oldest first - nearest deadline); the D1-extension sort was withdrawn with
+    # its look-ahead study. The D1 number stays on each card as an observation.
     ext = {}
     for s_ in opn:
         try: ext[s_["signal_key"]] = charts.d1_ext_of(s_)
         except Exception: ext[s_["signal_key"]] = None
-    opn.sort(key=lambda x: (ext.get(x["signal_key"]) is None, -(ext.get(x["signal_key"]) or 0)))
+    opn.sort(key=lambda x: str(x.get("signal_time") or ""))
     out.append("<h2>Pending signals</h2>")
     if not opn: out.append('<div class="card k">none</div>')
     for s in opn:
         out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{cls_pill(s.get("decision_class"))}<span class="k">#{s["signal_id"]}</span></div>'
                    f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span>'
-                   + (f'<span class="pill {"take" if (ext.get(s["signal_key"]) or 0) >= 0.5 else ""}">D1 {ext[s["signal_key"]]:+.2f} ATR</span>' if ext.get(s["signal_key"]) is not None else '<span class="k">D1 ext n/a</span>')
+                   + (f'<span class="k">D1 {ext[s["signal_key"]]:+.2f} ATR (obs)</span>' if ext.get(s["signal_key"]) is not None else '<span class="k">D1 ext n/a</span>')
                    + '</div>'
                    + advisor_rows(s["signal_key"], s) + '</div></a>')
     # pending orders (approved with "pending at the original entry"; resting on the broker until price comes back)

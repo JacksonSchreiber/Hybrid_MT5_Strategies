@@ -152,13 +152,14 @@ def d1_ext_line(sig: dict) -> str:
     """D1's distance from its own EMA20, in D1 ATR(14), signed by the trade's direction (coach 2026-09-24). The
     driver study found this is the only measured feature that explains the trader's selection edge, and the blind
     record backs it: above +0.5 ATR the graded TrendCont population returns +0.18R against -0.08R below it."""
+    # coach 2026-09-30: WITHDRAWN as evidence - the +0.18R/-0.08R split was look-ahead (d <= day). The number stays on
+    # the card as an observation only; no band, no grade, no gate.
     ext = charts.d1_ext_of(sig)
-    if ext is None: return "- **D1 extension:** (unavailable — not enough D1 history on this card)"
+    if ext is None: return "- **D1 extension (observation):** unavailable — not enough D1 history on this card"
     where = ("stretched well away from the mean" if ext > 1.5 else
              ("extended with the trade" if ext >= 0.5 else ("near its mean" if ext > -0.5 else "extended AGAINST this trade")))
-    band = "inside the studied band (>= +0.5 ATR)" if ext >= 0.5 else "below the studied band (< +0.5 ATR)"
-    return (f"- **D1 extension:** last D1 close sits **{ext:+.2f} ATR** from its own EMA20, signed in the trade's "
-            f"direction — {where}, {band}.")
+    return (f"- **D1 extension (observation only — no measured edge; the earlier study was withdrawn):** last closed D1 "
+            f"sits {ext:+.2f} ATR from its own EMA20, signed in the trade's direction — {where}.")
 
 
 def quality_line(sig: dict) -> str:
@@ -202,7 +203,6 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 {swing_block(sig)}
 {slam_block(sig)}
 {d1_ext_line(sig)}
-{quality_line(sig)}
 - **Sizing:** {sz.get('lots_line', '')} · risk multiplier in effect {sz.get('risk_mult_applied', 1.0)} → effective {float(sz.get('risk_pct_effective', 0.01))*100:.2f}%{(' · recovery rung: ' + str(sz.get('ladder_rung'))) if sz.get('ladder_rung') else ''}
 - **Entry cost (spread) right now:** {sz.get('spread')} = **{float(sz.get('spread_r') or 0):.3f}R** of the stop{f" (gate: refused above {float(sz.get('max_spread_r') or 0):.2f}R)" if sz.get('max_spread_r') else ""} — you pay this the moment the trade opens
 {EXP.build(sig, cfg)}
