@@ -537,6 +537,10 @@ bool LiveWeekendWindow(datetime t)
 //--- live wall clock. TimeCurrent() is the last TICK time: it freezes over weekends and on a dead feed, which would
 //--- silence the heartbeat and the task poll. The tester keeps sim time (self-test / parity unchanged).
 datetime LiveNow(){ return ((bool)MQLInfoInteger(MQL_TESTER) ? TimeCurrent() : TimeGMT()); }
+//--- decision latency: published_at is stamped on the SERVER clock (TimeCurrent), so measure against the server clock
+//--- too. Measuring against LiveNow() (UTC) made every live decision_ms ~3h negative (fixed 2026-09-30; rows before the
+//--- fix are recoverable by adding the broker offset: +10,800,000 ms in EEST, +7,200,000 in EET).
+long DecisionMs(){ return (long)(TimeTradeServer()-g_park.published_at)*1000; }
 string IsoTime(datetime t)
   { MqlDateTime d; TimeToStruct(t,d);
     return StringFormat("%04d-%02d-%02dT%02d:%02d:%02dZ",d.year,d.mon,d.day,d.hour,d.min,d.sec); }
@@ -2456,7 +2460,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
          if(rc<1 || rc>6){ reason="bad_params"; return "rejected"; }
          WriteSignalJson("skipped",StringFormat("skip:%d",rc));
          CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
-                        false,rc,(long)(now-g_park.published_at)*1000,false,false,"skip");
+                        false,rc,DecisionMs(),false,false,"skip");
          LiveUnpark(); row_idx=RowIdxBySid(sid); reason="ok"; return "accepted";
         }
       //--- approve: every doctrine gate the popup relied on, re-checked HERE (S7)
@@ -2501,14 +2505,14 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
          Print("Signal #",sid," AUTO-REJECTED by the EA (code 10, ",ftag,"): ",fwhy);
          g_live_auto=1;
          CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
-                        false,10,(long)(now-g_park.published_at)*1000,false,false,"auto_skip");
+                        false,10,DecisionMs(),false,false,"auto_skip");
          g_live_auto=0;
          LiveUnpark(); row_idx=RowIdxBySid(sid);
          reason=fwhy; return "rejected";
         }
       //--- commit exactly as the tester would after an Accept click
       CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
-                     true,0,(long)(now-g_park.published_at)*1000,false,false,entry_mode);
+                     true,0,DecisionMs(),false,false,entry_mode);
       row_idx=RowIdxBySid(sid);
       if(row_idx>=0 && g_rows[row_idx].decision=="approved" && g_rows[row_idx].posid==0 && g_rows[row_idx].order_ticket==0)
         { WriteSignalJson("approved","order_failed"); LiveUnpark(); reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
