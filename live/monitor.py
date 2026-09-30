@@ -109,15 +109,21 @@ class Monitor:
         seen = self.st["positions"]
         for p in C.list_positions(self.cfg):
             k = f"{p['symbol']}-{p['posid']}"; prev = seen.get(k) or {}
-            if not prev and self.st.get("positions_initialised"):
+            if not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 2:
+                self.send(f"STAGED ADD: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots added at {p.get('entry')} "
+                          f"(bar-{self.cfg.get('staged_add_bar', 6)} close) · SL {p.get('sl_live')}\n{self.base}/position/{k}")
+            elif not prev and self.st.get("positions_initialised"):
                 self.send(f"FILLED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} at {p.get('entry')} · {p.get('lots_live')} lots · SL {p.get('sl_live')} (pending order or market fill)\n{self.base}/position/{k}")
             if p.get("banked") and not prev.get("banked"):
                 self.send(f"+1R BANKED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · banked {C.r_fmt(p.get('banked_r'))}, {p.get('lots_live')} lots run · SL now {p.get('sl_live')}")
             if p.get("ratcheted") and not prev.get("ratcheted"): self.send(f"SL ratcheted to TP1: pos {p['posid']} {p['symbol']}")
+            if int(p.get("staged_state") or 0) == 3 and prev and prev.get("staged", 0) != 3:
+                self.send(f"STAGED ADD SKIPPED: pos {p['posid']} {p['symbol']} {p['strategy']} - {p.get('staged_note')}")
             xe = p.get("last_external_edit") or ""
             if xe and xe != prev.get("xedit", "") and prev:          # an SL/TP moved in the trader's own MT5 (journaled EXTERNAL_*)
                 self.send(f"EDITED IN MT5 (outside the app): pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {xe.split(' ', 1)[-1]} · open {C.r_fmt(p.get('open_r'))} - journaled for the coach")
-            seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": True, "xedit": xe}
+            seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": True, "xedit": xe,
+                       "staged": int(p.get("staged_state") or 0)}
         self.st["positions_initialised"] = True
         for p in C.list_positions(self.cfg, closed=True):
             k = f"{p['symbol']}-{p['posid']}"; prev = seen.get(k) or {}
@@ -413,6 +419,14 @@ class Monitor:
         if now - self.st.get("shadow_last", 0) < self.SHADOW_EVERY_S: return
         from live import shadow_bank
         n, be, ok = shadow_bank.write(self.cfg)
+        sn, s_rdd, c_rdd = shadow_bank.write_staged(self.cfg)          # coach item 18: early read at 20, grading at 40
+        for mark in (20, 40):
+            if sn >= mark and not self.st.get(f"staged_flag_{mark}"):
+                self.st[f"staged_flag_{mark}"] = True
+                f_ = lambda v: "n/a (no drawdown yet)" if v is None else f"{v:.2f}"
+                self.send(f"COACH {'EARLY READ' if mark == 20 else 'GRADING POINT'} - staged entry: {sn} closed staged signals. "
+                          f"R per unit of worst drawdown: staged {f_(s_rdd)} vs all-at-signal {f_(c_rdd)}"
+                          + (" (the mode needs >= 1.0x)" if mark == 40 else " (no ruling at 20)") + ". web/staged_entry.csv has the rows.")
         self.st["shadow_last"] = now; self.st["shadow"] = [n, be, ok]
         if ok >= 30 and not self.st.get("shadow_flagged"):
             self.st["shadow_flagged"] = True

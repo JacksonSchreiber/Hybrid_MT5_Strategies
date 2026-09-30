@@ -98,3 +98,54 @@ def write(cfg: dict) -> tuple[int, int, int]:
     be = [x for x in rows if x["runner_exit"] == "BE" and not x["manual"]]
     ok = [x for x in be if abs(float(x["runner_gap_R"])) <= 0.05]
     return len(rows), len(be), len(ok)
+
+
+# ----------------------------------------------------------------------------- coach item 18: staged entry log
+STAGED_COLS = ["symbol", "signal_id", "strategy", "signal_time", "full_lots", "first_lots", "add_lots", "add_state", "add_fill",
+               "add_time", "R_first_per_lot", "R_add_per_lot", "staged_R", "counterfactual_full_R", "closed"]
+
+
+def staged(cfg: dict) -> list[dict]:
+    """Per staged signal: the realised R in units of the FULL ruled position (sum of lots x R per lot / full lots) and the
+    counterfactual 'all 100% at the signal' R. Both tranches ride one price path and bank/move to entry at the first
+    tranche's levels, so the full-at-signal position would have earned the first tranche's R per lot (the lot step's
+    rounding of the bank aside)."""
+    by: dict = {}
+    for r in C.journal_rows(cfg):
+        t = int(_f(r.get("tranche")) or 0)
+        if t: by.setdefault((r.get("symbol"), r.get("signal_id")), {})[t] = r
+    out = []
+    for (sym, sid), d in sorted(by.items(), key=lambda kv: (kv[1].get(1) or kv[1].get(2) or {}).get("signal_time", "")):
+        a, b = d.get(1), d.get(2)
+        if not a: continue
+        full = _f(a.get("full_lots")) or _f(a.get("lots")) or 0.0
+        l1, l2 = _f(a.get("lots")) or 0.0, (_f(b.get("lots")) or 0.0) if b else 0.0
+        r1 = _f(a.get("r_multiple")) if a.get("exit_time") else None
+        r2 = (_f(b.get("r_multiple")) if b.get("exit_time") else None) if b else None
+        closed = r1 is not None and (b is None or r2 is not None)
+        st_R = ((l1 * r1 + (l2 * r2 if b else 0.0)) / full) if (closed and full) else None
+        out.append({"symbol": sym, "signal_id": sid, "strategy": a.get("strategy"), "signal_time": a.get("signal_time"),
+                    "full_lots": full, "first_lots": l1, "add_lots": l2 or "",
+                    "add_state": "added" if b else ("skipped: " + (a.get("reject_reason") or "") if a.get("reject_reason") else "pending"),
+                    "add_fill": b.get("entry") if b else "", "add_time": b.get("fill_time") if b else "",
+                    "R_first_per_lot": "" if r1 is None else round(r1, 3), "R_add_per_lot": "" if r2 is None else round(r2, 3),
+                    "staged_R": "" if st_R is None else round(st_R, 3),
+                    "counterfactual_full_R": "" if r1 is None else round(r1, 3), "closed": int(closed)})
+    return out
+
+
+def write_staged(cfg: dict) -> tuple[int, float | None, float | None]:
+    """-> (closed staged signals, staged R per unit of worst drawdown, counterfactual R per unit of worst drawdown)"""
+    rows = staged(cfg)
+    p = os.path.join(cfg["root"], "web", "staged_entry.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p + ".tmp", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=STAGED_COLS); w.writeheader()
+        for x in rows: w.writerow(x)
+    os.replace(p + ".tmp", p)
+    done = [x for x in rows if x["closed"]]
+
+    def r_per_dd(vals):
+        cur = peak = dd = 0.0
+        for v in vals: cur += v; peak = max(peak, cur); dd = max(dd, peak - cur)
+        return (sum(vals) / dd) if dd > 0 else None
+    return len(done), r_per_dd([x["staged_R"] for x in done]), r_per_dd([x["counterfactual_full_R"] for x in done])

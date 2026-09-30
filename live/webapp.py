@@ -129,6 +129,23 @@ def ftmo_room_block(s: dict) -> str:
             f'spare {spare:,.0f} above the tighter floor + buffer)</div><div class="big {cls}">room for {n} more at {per * 100:.2f}%</div>'
             f'<div class="k">this signal sizes at {this * 100:.2f}%{note}</div></div>')
 
+def staged_block(p: dict) -> str:
+    """coach item 18: the two tranches of a staged entry - the first at the signal, the add at the close of H4 bar N."""
+    tr = int(p.get("tranche") or 0)
+    if not tr: return ""
+    full = p.get("full_lots"); stt = int(p.get("staged_state") or 0)
+    if tr == 1:
+        due = C._srv_to_utc(p.get("add_due"), CFG) if p.get("add_due") else None
+        state = {1: f'add of {max(0.0, float(full or 0) - float(p.get("lots_init") or 0)):.2f} lots due at the close of the bar ending '
+                    f'{due.strftime("%a %d %b %H:%M UTC") if due else "?"} (if still open; weekends push it out)',
+                 2: "add placed - see the other position of this signal",
+                 3: f'add skipped - {p.get("staged_note") or ""}'}.get(stt, "")
+        return (f'<div class="card"><div class="k">Staged entry · tranche 1 of 2</div><div class="big">{p.get("lots_init")} of {full} lots at the signal</div>'
+                f'<div class="k">{E(state)}</div></div>')
+    return (f'<div class="card"><div class="k">Staged entry · tranche 2 of 2 (the add)</div><div class="big">{p.get("lots_init")} lots added at {p.get("entry")}</div>'
+            f'<div class="k">banks and moves to entry at the FIRST tranche\'s +1R and entry, as one position</div></div>')
+
+
 def corr_block(s: dict) -> str:
     """item 9 (coach 2026-09-30 late): measured 60d correlation with every open position, weighted 1.0 / 0.5 / 0, and the
     effective correlated risk against the 1.5% cap (over it = a correlation veto, code 5)."""
@@ -468,7 +485,8 @@ def dashboard(q: dict) -> str:
                f'<div class="row" style="margin-top:8px"><span class="k">Monthly export for the coach (journals + expired-TAKE blind outcomes):</span>'
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{(C.now_utc().replace(day=1) - timedelta(days=1)).strftime("%Y%m")}.zip">last month</a>'
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{C.now_utc().strftime("%Y%m")}.zip">this month so far</a>'
-               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/shadow_bank.csv">bank shadow log</a></div></div>')
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/shadow_bank.csv">bank shadow log</a>'
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/staged_entry.csv">staged entry log</a></div></div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
     # coach 2026-09-30: sorted by signal time (oldest first - nearest deadline); the D1-extension sort was withdrawn with
@@ -728,6 +746,7 @@ def position_page(key: str, q: dict) -> str:
                f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b id="p-tp_live" class="v">{p.get("tp_live") or "-"}</b></div>'
                f'<div><span class="k">lots</span> <b id="p-lots_live" class="v">{p.get("lots_live")}</b> <span class="k">of {p.get("lots_init")}</span></div><div><span class="k">bars open</span> <b id="p-bars_open" class="v">{p.get("bars_open")}</b></div></div>'
                f'<div class="k" id="p-flags">{E(pos_flags(p, closed))}</div></div>')
+    out.append(staged_block(p))
     src = C.signal(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
     plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
     if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None))
@@ -1115,11 +1134,11 @@ class H(BaseHTTPRequestHandler):
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backup|{name}|{len(data)}B|{man['files']} files|by=web")
                 self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Disposition", f'attachment; filename="{name}"')
                 self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
-            if parts[0] == "shadow_bank.csv":                                # coach 2026-09-30 item 8
+            if parts[0] in ("shadow_bank.csv", "staged_entry.csv"):          # coach 2026-09-30 items 8 and 18
                 try:
-                    with open(os.path.join(CFG["root"], "web", "shadow_bank.csv"), "rb") as f: data = f.read()
+                    with open(os.path.join(CFG["root"], "web", parts[0]), "rb") as f: data = f.read()
                 except OSError: data = b"not built yet - the monitor writes it hourly\n"
-                self.send_response(200); self.send_header("Content-Type", "text/csv"); self.send_header("Content-Disposition", 'attachment; filename="shadow_bank.csv"')
+                self.send_response(200); self.send_header("Content-Type", "text/csv"); self.send_header("Content-Disposition", f'attachment; filename="{parts[0]}"')
                 self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
             if parts[0] == "health": return self._send(json.dumps({"ok": True, "ts": C.now_iso()}), "application/json")
             if parts[0] == "signal" and len(parts) == 2: return self._send(signal_page(parts[1], q))

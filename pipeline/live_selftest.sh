@@ -35,6 +35,9 @@ mkdir -p "$SETDIR"
   echo "InpRiskPct=0.01"; echo "InpMagic=990217"
   echo "InpUseColoredDialog=false"; echo "InpAutoApprove=0"
   echo "InpLiveMode=true"; echo "InpLiveSelfTest=$SELFTEST"; echo "InpLiveRoot=$ROOT"
+  [[ -n "${STAGED:-}" ]] && echo "InpSelfTestStaged=true"   # coach item 18: exercise the staged entry
+  [[ -n "${STAGED_N:-}" ]] && echo "InpSelfTestStagedN=${STAGED_N}"
+  [[ -n "${PYR:-}" ]] && echo "InpPyramid=true"             # coach item 20: exercise the +1.5R pyramid
   echo "InpTaskPollSec=$POLL"; echo "InpHeartbeatSec=$BEAT"; echo "InpLiveMaxAgeBars=$MAXAGE"
   echo "InpUseSMC=true"; echo "InpUseFib=true"; echo "InpUseEMA=false"; echo "InpUseEMArevQ=true"; echo "InpUseTrendCont=true"
   echo "InpUseShock=false"; echo "InpUseEmaRevInv=false"

@@ -131,6 +131,11 @@ input ENUM_AUTO_APPROVE InpAutoApprove = AA_NONE; // NONE=interactive; ALL/SKIP=
 //--- popup with the local file queue under Common\Files\<InpLiveRoot>\ ; detectors/exits/journal
 //--- logic are untouched (E1). Never combine with InpAutoApprove (never auto-trade live).
 input bool   InpLiveMode         = false;  // LIVE: file-queue decision path instead of the popup (-live build only)
+input bool   InpPyramid          = false;  // TESTER study (coach item 20): add InpPyramidFrac of the full size at +InpPyramidR after the bank
+input double InpPyramidR         = 1.5;
+input double InpPyramidFrac      = 0.5;
+input bool   InpSelfTestStaged   = false;
+input int    InpSelfTestStagedN  = 6;      // TESTER ONLY: the add bar for the staged self-test (1 = add at the first bar close, so the path is exercised)  // TESTER ONLY: run the live self-test with staged entry on (coach item 18 check)
 input bool   InpLiveSelfTest     = false;  // LIVE self-test (TESTER ONLY): in-EA scripted task driver + assertions
 input string InpLiveRoot         = "live"; // queue root under Common\Files (self-test uses live_selftest)
 input int    InpTaskPollSec      = 5;      // poll tasks/ at least this often (Q5: <=5s)
@@ -319,7 +324,17 @@ struct JournalRow
    int      weekend_candle;     // §10.7: 1 = the signal candle is a Sat/Sun bar (decided on the Monday bar)
    string   reject_why;         // live only: why a 'rejected' row was refused (spread gate, degenerate stop, SL-through).
                                 //   The coach computes the held-setup counterfactual from these rows, so they carry full levels + lots.
+   //--- coach item 18 (2026-09-30, trader override): STAGED ENTRY, live only. First tranche at the signal, the rest added
+   //--- at the close of the Nth H4 bar after the signal if the trade is still open. One row per tranche.
+   int      st_state;           // 0 not staged, 1 first tranche waiting for the add, 2 add placed, 3 add skipped (reason in reject_why)
+   int      st_tranche;         // 0 not staged, 1 first tranche, 2 the add
+   double   st_full_lots;       // the ruled full position (both tranches), lots
+   double   st_anchor_entry;    // the FIRST tranche's fill: the +1R trigger and the stop-to-entry level for every tranche
+   double   st_anchor_risk;     // |first fill - original stop|: 1R for every tranche
+   datetime st_fill_time;       // this tranche's fill time (server clock)
+   int      st_pyr;             // coach item 20: 0 no pyramid yet, 1 pyramid added, 2 pyramid refused (reason in the audit)
   };
+void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0; r.st_anchor_entry=0.0; r.st_anchor_risk=0.0; r.st_fill_time=0; r.st_pyr=0; }
 JournalRow g_rows[];
 
 //--- mid-trade management panel state
@@ -484,6 +499,12 @@ double   g_cfg_d1_ext_min=0.0;    // live.json trendcont_d1_ext_min: TrendCont n
 double   g_cfg_tc_bank=0.5;       // live.json trendcont_bank_frac: share banked at +1R on TrendCont (coach 2026-09-30: 0.25; tester stays 0.5)
 double   g_cfg_df_bank=0.5;       // live.json deepfib_bank_frac: the same for DeepFib (coach 2026-09-30 late: 0.25)
 //--- the live bank share per detector (SweepMSS / EMArevQ stay 50%); 0 = not a configurable detector
+bool     g_cfg_staged=false;      // live.json staged_entry: coach item 18 (trader override 2026-09-30)
+double   g_cfg_st_f0=0.25;        // live.json staged_first_frac: first tranche share of the ruled lots
+int      g_cfg_st_n=6;            // live.json staged_add_bar: add at the close of this H4 bar after the signal
+bool     g_cfg_pyr=false;         // live.json pyramid_add: coach item 20 - add at +1.5R after the bank
+double   g_cfg_pyr_r=1.5;         // live.json pyramid_trigger_r
+double   g_cfg_pyr_f=0.5;         // live.json pyramid_frac: share of the ORIGINAL full size added
 double LiveBankFrac(string strat){ return strat=="TrendCont" ? g_cfg_tc_bank : (strat=="DeepFib" ? g_cfg_df_bank : 0.0); }
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
@@ -793,9 +814,17 @@ void LiveLoadConfig(bool bootstrap=true)
       if(g_cfg_tc_bank<0.05 || g_cfg_tc_bank>0.95) g_cfg_tc_bank=0.5;
       g_cfg_df_bank=StringToDouble(JGet(k,v,"deepfib_bank_frac","0.5"));      // coach 2026-09-30 late: DeepFib same sign, same mechanism
       if(g_cfg_df_bank<0.05 || g_cfg_df_bank>0.95) g_cfg_df_bank=0.5;
+      g_cfg_staged=(StringToInteger(JGet(k,v,"staged_entry","0"))!=0);
+      g_cfg_st_f0=StringToDouble(JGet(k,v,"staged_first_frac","0.25")); if(g_cfg_st_f0<0.05 || g_cfg_st_f0>0.95) g_cfg_st_f0=0.25;
+      g_cfg_st_n=(int)StringToInteger(JGet(k,v,"staged_add_bar","6")); if(g_cfg_st_n<1 || g_cfg_st_n>60) g_cfg_st_n=6;
+      g_cfg_pyr=(StringToInteger(JGet(k,v,"pyramid_add","0"))!=0);
+      g_cfg_pyr_r=StringToDouble(JGet(k,v,"pyramid_trigger_r","1.5")); if(g_cfg_pyr_r<1.05 || g_cfg_pyr_r>5.0) g_cfg_pyr_r=1.5;
+      g_cfg_pyr_f=StringToDouble(JGet(k,v,"pyramid_frac","0.5"));     if(g_cfg_pyr_f<0.05 || g_cfg_pyr_f>1.0) g_cfg_pyr_f=0.5;
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
+   if(InpLiveSelfTest && InpSelfTestStaged && (bool)MQLInfoInteger(MQL_TESTER)) { g_cfg_staged=true; g_cfg_st_n=MathMax(1,InpSelfTestStagedN); }   // coach item 18 self-test
+   if(InpLiveSelfTest && InpPyramid && (bool)MQLInfoInteger(MQL_TESTER)) g_cfg_pyr=true;                 // coach item 20 self-test
    LiveLoadRiskMult();
   }
 
@@ -963,6 +992,7 @@ void OnTimer()
       LiveLoadRiskMult();
       LiveFtmoDayReset();      // no file I/O unless the FTMO day key changed
       LiveProcessTasks();
+      StagedAddTick();         // coach item 18: add the second tranche at the close of H4 bar N (live, staged rows only)
       if(LiveWeekendFlatOn() && LiveWeekendWindow(TimeCurrent())) LiveWeekendFlatten();   // §10.1 live: retries a refused close
      }
    //--- positions/ view: refreshed on every state change (journal hook) and at the heartbeat cadence
@@ -1593,7 +1623,7 @@ double SpreadR(double entry,double sl)
 //--- and the underlying bug is never silently hidden.
 void JournalReject(int id,SignalCandidate &cand,string why)
   {
-   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1); StagedInit(g_rows[n]);
    g_rows[n].id=id; g_rows[n].time=cand.zone_to; g_rows[n].symbol=_Symbol;
    g_rows[n].strategy=cand.strategy; g_rows[n].direction=cand.direction;
    g_rows[n].orig_entry=cand.entry; g_rows[n].orig_sl=cand.sl; g_rows[n].orig_tp=cand.tp;
@@ -2007,6 +2037,7 @@ void LivePresent(int id,SignalCandidate &cand,double lots,bool is_replay,
 string g_live_alerts[];            // persistent heartbeat alerts (adopt_orphan, restore mismatch, ...)
 void LiveAlert(string a){ int n=ArraySize(g_live_alerts); for(int i=0;i<n;i++) if(g_live_alerts[i]==a) return; ArrayResize(g_live_alerts,n+1); g_live_alerts[n]=a; }
 string RowStatePath(int id){ return LivePath(StringFormat("state\\%s\\%d.json",_Symbol,id)); }
+string RowStatePathOf(JournalRow &r){ return (r.st_tranche>=2 ? LivePath(StringFormat("state\\%s\\%d_t%d.json",_Symbol,r.id,r.st_tranche)) : RowStatePath(r.id)); }
 
 //--- one row -> flat JSON (the parser supports one nested level: actions live under "actions")
 void LiveSaveRowState(int i)
@@ -2033,11 +2064,14 @@ void LiveSaveRowState(int i)
    j.KInt("rt_redip1",r.rt_redip1); j.KNum("rt_bankr",r.rt_bankr,4);
    j.KBool("live",r.live); j.KInt("account_id",r.account_id); j.KNum("risk_pct_gate",r.risk_pct_gate,4); j.KNum("risk_mult_applied",r.risk_mult_applied,3);
    j.KInt("auto_skip",r.auto_skip); j.KStr("entry_mode",r.entry_mode); j.KStr("reject_why",r.reject_why);
+   j.KInt("st_state",r.st_state); j.KInt("st_tranche",r.st_tranche); j.KNum("st_full_lots",r.st_full_lots,2);
+   j.KNum("st_anchor_entry",r.st_anchor_entry,_Digits); j.KNum("st_anchor_risk",r.st_anchor_risk,_Digits); j.KInt("st_fill_time",(long)r.st_fill_time); j.KInt("st_pyr",r.st_pyr);
    j.Key("actions"); j.BeginObj();
    int na=0;
    for(int a=0;a<ArraySize(g_actions);a++)
      {
       if(g_actions[a].id!=r.id) continue;
+      if(r.st_tranche>0 && g_actions[a].posid!=0 && g_actions[a].posid!=r.posid) continue;   // staged: each tranche keeps its own actions
       string px=StringFormat("%d_",na);
       j.KInt(px+"posid",g_actions[a].posid); j.KInt(px+"bar_time",(long)g_actions[a].bar_time); j.KStr(px+"action",g_actions[a].action);
       j.KNum(px+"price",g_actions[a].price,_Digits); j.KNum(px+"lots_before",g_actions[a].lots_before,2); j.KNum(px+"lots_after",g_actions[a].lots_after,2);
@@ -2047,7 +2081,7 @@ void LiveSaveRowState(int i)
    j.KInt("n",na);
    j.EndObj();
    j.EndObj();
-   AtomicWriteText(RowStatePath(r.id),j.Text());
+   AtomicWriteText(RowStatePathOf(r),j.Text());
   }
 //--- write every open row + any row whose state file does not exist yet (closed rows freeze after one write)
 void LiveSaveAllState()
@@ -2055,10 +2089,10 @@ void LiveSaveAllState()
    for(int i=0;i<ArraySize(g_rows);i++)
      {
       if(g_rows[i].symbol!=_Symbol) continue;
-      if(!g_rows[i].closed || !FileIsExist(RowStatePath(g_rows[i].id),FILE_COMMON)) LiveSaveRowState(i);
+      if(!g_rows[i].closed || !FileIsExist(RowStatePathOf(g_rows[i]),FILE_COMMON)) LiveSaveRowState(i);
       else if(g_rows[i].closed)
         {   // closed row (filled OR a pending that expired / was invalidated / cancelled unfilled): final state on disk once, then freeze
-         string k[],v[],e; string t=ReadTextFile(RowStatePath(g_rows[i].id));
+         string k[],v[],e; string t=ReadTextFile(RowStatePathOf(g_rows[i]));
          if(JsonFlatParse(t,k,v,e) && JGet(k,v,"closed","false")!="true") LiveSaveRowState(i);
         }
      }
@@ -2093,6 +2127,10 @@ void LiveWritePositions()
       j.KNum("risk_pct_effective",rpe,5);
       j.KNum("open_r",oR,3); j.KNum("banked_r",g_rows[i].r_multiple,3); j.KNum("closenow_r",oR+g_rows[i].r_multiple,3);
       j.KBool("banked",g_rows[i].banked); j.KBool("tp1_done",g_rows[i].tp1_done); j.KBool("ratcheted",g_rows[i].ratcheted);
+      //--- coach item 18: staged entry (tranche 1 = first, 2 = the add); add_due = the bar close that triggers the add
+      j.KInt("tranche",g_rows[i].st_tranche); j.KInt("staged_state",g_rows[i].st_state); j.KNum("full_lots",g_rows[i].st_full_lots,2);
+      if(g_rows[i].st_tranche==1) j.KTime("add_due",g_rows[i].time+(datetime)((g_cfg_st_n+1)*PeriodSeconds(PERIOD_H4)));
+      j.KStr("staged_note",g_rows[i].reject_why);
       bool beok=BEPlaceable(i); PositionSelectByTicket((ulong)g_rows[i].posid);
       double csl0=PositionGetDouble(POSITION_SL), bep0=BEPrice(i);
       if(csl0>0.0 && (g_rows[i].direction>0 ? csl0>=bep0 : csl0<=bep0)) beok=false;   // BE would LOOSEN the live stop: not offered
@@ -2111,7 +2149,7 @@ bool LiveLoadRowState(string rel)
    if(!JsonFlatParse(t,k,v,e)) { Print("state: parse failed ",rel," ",e); return false; }
    if(JGet(k,v,"symbol","")!=_Symbol) return false;
    int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
-   JournalRow r;
+   JournalRow r; StagedInit(r);
    r.id=(int)StringToInteger(JGet(k,v,"id","0")); r.time=(datetime)StringToInteger(JGet(k,v,"time","0")); r.symbol=_Symbol;
    r.strategy=JGet(k,v,"strategy",""); r.direction=(int)StringToInteger(JGet(k,v,"direction","0"));
    r.orig_entry=StringToDouble(JGet(k,v,"orig_entry")); r.orig_sl=StringToDouble(JGet(k,v,"orig_sl")); r.orig_tp=StringToDouble(JGet(k,v,"orig_tp"));
@@ -2136,6 +2174,10 @@ bool LiveLoadRowState(string rel)
    r.rt_reached2=(int)StringToInteger(JGet(k,v,"rt_reached2","0")); r.rt_redip1=(int)StringToInteger(JGet(k,v,"rt_redip1","0")); r.rt_bankr=StringToDouble(JGet(k,v,"rt_bankr","-99"));
    r.live=(JGet(k,v,"live")=="true"); r.account_id=StringToInteger(JGet(k,v,"account_id","0")); r.risk_pct_gate=StringToDouble(JGet(k,v,"risk_pct_gate","0.01"));
    r.risk_mult_applied=StringToDouble(JGet(k,v,"risk_mult_applied","1")); r.auto_skip=(int)StringToInteger(JGet(k,v,"auto_skip","0")); r.entry_mode=JGet(k,v,"entry_mode",""); r.reject_why=JGet(k,v,"reject_why","");
+   r.st_state=(int)StringToInteger(JGet(k,v,"st_state","0")); r.st_tranche=(int)StringToInteger(JGet(k,v,"st_tranche","0"));
+   r.st_full_lots=StringToDouble(JGet(k,v,"st_full_lots","0")); r.st_anchor_entry=StringToDouble(JGet(k,v,"st_anchor_entry","0"));
+   r.st_anchor_risk=StringToDouble(JGet(k,v,"st_anchor_risk","0")); r.st_fill_time=(datetime)StringToInteger(JGet(k,v,"st_fill_time","0"));
+   r.st_pyr=(int)StringToInteger(JGet(k,v,"st_pyr","0"));
    g_rows[n]=r;
    int na=(int)StringToInteger(JGet(k,v,"actions.n","0"));
    for(int a=0;a<na;a++)
@@ -2215,7 +2257,7 @@ void AdoptOrphans()
          continue;
         }
       int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
-      JournalRow r;
+      JournalRow r; StagedInit(r);
       g_sig_seq++; LiveSaveSeq(); r.id=g_sig_seq; r.time=(datetime)PositionGetInteger(POSITION_TIME); r.symbol=_Symbol; r.strategy="ADOPTED";
       r.direction=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY ? 1 : -1);
       r.entry=PositionGetDouble(POSITION_PRICE_OPEN); r.sl=PositionGetDouble(POSITION_SL); r.tp=PositionGetDouble(POSITION_TP);
@@ -3169,7 +3211,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                         : MathAbs(cand.tp-orig_tp)>etol));
    double order_tp=(two_target? cand.tp2 : cand.tp);
 
-   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1); StagedInit(g_rows[n]);
    g_rows[n].id=id; g_rows[n].time=cand.zone_to; g_rows[n].symbol=_Symbol;
    g_rows[n].strategy=cand.strategy; g_rows[n].direction=cand.direction;
    g_rows[n].orig_entry=orig_entry; g_rows[n].orig_sl=orig_sl; g_rows[n].orig_tp=orig_tp;
@@ -3262,6 +3304,18 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
          if(!want_pending)
            {
             //--- MARKET fill (unchanged behaviour)
+            //--- coach item 18 (live only): STAGED ENTRY - send the first tranche now, the rest at the close of H4 bar N.
+            //--- The ruled risk is the FULL position's at the original stop; a position that cannot split (under 0.05 lots,
+            //--- or either tranche under the minimum lot) enters in full as before.
+            bool staged=false; double full_lots=lots;
+            if(InpLiveMode && g_cfg_staged && (entry_mode=="market" || entry_mode=="market_now"))
+              {
+               double stp=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(stp<=0) stp=0.01;
+               double vmn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmn<=0) vmn=0.01;
+               double first=MathFloor(lots*g_cfg_st_f0/stp+1e-9)*stp;
+               if(lots>=0.05-1e-9 && first>=vmn-1e-9 && (lots-first)>=vmn-1e-9)
+                 { staged=true; lots=NormalizeDouble(first,2); g_rows[n].lots=lots; }
+              }
             bool ok=(cand.direction>0)
                     ? g_trade.Buy(lots,_Symbol,0.0,cand.sl,order_tp,caption)
                     : g_trade.Sell(lots,_Symbol,0.0,cand.sl,order_tp,caption);
@@ -3292,6 +3346,15 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                      double fill=PositionGetDouble(POSITION_PRICE_OPEN);
                      if(fill>0.0) { g_rows[n].entry=fill; g_rows[n].risk_px=MathAbs(fill-cand.sl); }
                      bound=true; AuditLine("fill_bound","","",StringFormat("sig:%d",id),"ok","by_comment",StringFormat("posid=%I64d",g_rows[n].posid));
+                    }
+                 }
+               if(InpLiveMode)
+                 {   // every live row carries its own anchor (identical to entry/1R unless it is a staged add)
+                  g_rows[n].st_anchor_entry=g_rows[n].entry; g_rows[n].st_anchor_risk=g_rows[n].risk_px; g_rows[n].st_fill_time=TimeCurrent();
+                  if(staged)
+                    {
+                     g_rows[n].st_state=1; g_rows[n].st_tranche=1; g_rows[n].st_full_lots=full_lots; g_rows[n].entry_mode="staged";
+                     AuditLine("staged_first","","",StringFormat("sig:%d",id),"ok","",StringFormat("first=%.2f full=%.2f add_after_bar=%d",lots,full_lots,g_cfg_st_n));
                     }
                  }
                if(two_target) MinLotSplitGuard(n);
@@ -3395,13 +3458,14 @@ void ManageOpenPositions()
          continue;
         }
 
+      if(g_rows[i].banked && !g_rows[i].closed) { PyramidCheck(i,bid,ask,step,vmin); continue; }   // coach item 20
       if(g_rows[i].closed || g_rows[i].banked) continue;      // one-time; NOT gated on tp1_done
       if(g_rows[i].risk_px<=0.0) continue;
       if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;   // already gone
 
       int dir=g_rows[i].direction;
       //--- the +1R price, and (for scale-out setups) tp1 if it is the nearer level.
-      double r1  =(dir>0 ? g_rows[i].entry+g_rows[i].risk_px : g_rows[i].entry-g_rows[i].risk_px);
+      double r1  =(dir>0 ? AnchorEntry(i)+AnchorRisk(i) : AnchorEntry(i)-AnchorRisk(i));
       double trig=r1; bool via_tp1=false;
       if(g_rows[i].partial_frac>0.0 && g_rows[i].tp1>0.0)
         {
@@ -3473,10 +3537,15 @@ double PipSize() { return ((_Digits==3 || _Digits==5) ? 10.0*_Point : _Point); }
 
 //--- BE stop price for a row's open position: the ACTUAL fill (row.entry) +
 //--- pad in the PROFIT direction (pad covers the spread so a hit is ~flat).
+//--- staged entry: every tranche banks at the FIRST tranche's +1R and moves its stop to the first tranche's entry
+//--- (the coach's study: one price path, one 1R). Rows that were never staged have no anchor -> their own entry/1R.
+double AnchorEntry(int idx){ return (g_rows[idx].st_anchor_risk>0.0 ? g_rows[idx].st_anchor_entry : g_rows[idx].entry); }
+double AnchorRisk(int idx) { return (g_rows[idx].st_anchor_risk>0.0 ? g_rows[idx].st_anchor_risk  : g_rows[idx].risk_px); }
 double BEPrice(int idx)
   {
    double pad=InpBEPadPips*PipSize();
-   return (g_rows[idx].direction>0 ? g_rows[idx].entry+pad : g_rows[idx].entry-pad);
+   double e=AnchorEntry(idx);
+   return (g_rows[idx].direction>0 ? e+pad : e-pad);
   }
 
 //--- +0.5R BE floor is a LIVE HARDWARE GATE (coach 2026-09-10, on trader's word): the SL->BE
@@ -3702,7 +3771,7 @@ void PlaceInverse(int id,SignalCandidate &cand)
    long posid=0; double fill=entry; ulong deal=g_trade.ResultDeal();
    if(deal>0 && HistoryDealSelect(deal)){ posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
        double f=HistoryDealGetDouble(deal,DEAL_PRICE); if(f>0) fill=f; }
-   int n=ArraySize(g_inv_rows); ArrayResize(g_inv_rows,n+1);
+   int n=ArraySize(g_inv_rows); ArrayResize(g_inv_rows,n+1); StagedInit(g_inv_rows[n]);
    g_inv_rows[n].id=id; g_inv_rows[n].time=cand.zone_to; g_inv_rows[n].symbol=_Symbol;
    g_inv_rows[n].strategy="EMArevINV"; g_inv_rows[n].direction=inv_dir;
    g_inv_rows[n].orig_entry=entry; g_inv_rows[n].orig_sl=sl; g_inv_rows[n].orig_tp=0;
@@ -5571,11 +5640,13 @@ void WriteLiveJournals()
        if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
    for(int q=0;q<nm;q++)
      {
-      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason\n";
+      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason,entry_mode,tranche,full_lots,fill_time\n";
       for(int i=0;i<ArraySize(g_rows);i++)
         {
          if(StampMonth(g_rows[i].time)!=months[q]) continue;
-         body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+","+CsvSafe(g_rows[i].reject_why)+"\n";
+         body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+","+CsvSafe(g_rows[i].reject_why)
+              +StringFormat(",%s,%d,%s,%s",CsvSafe(g_rows[i].entry_mode),g_rows[i].st_tranche,(g_rows[i].st_full_lots>0.0?DoubleToString(g_rows[i].st_full_lots,2):""),
+                            (g_rows[i].st_fill_time>0?TimeToString(g_rows[i].st_fill_time,TIME_DATE|TIME_SECONDS):""))+"\n";
         }
       AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }
@@ -5685,3 +5756,154 @@ void OnDeinit(const int reason)
    g_ndet=0;
   }
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| STAGED ENTRY - the add (coach item 18, trader override 2026-09-30)|
+//+------------------------------------------------------------------+
+//--- A first-tranche row (st_state 1) gets the rest of the ruled lots at the close of the Nth H4 bar after the signal bar
+//--- if its position is still open - banked or not - at the market, with the position's CURRENT stop and target (the
+//--- coach's study: the add joins the live price path; after a bank that stop is the entry). Kill switch, spread gate and
+//--- FTMO headroom apply to the add exactly as to an approve; a refusal is final (st_state 3, reason on the row, audited).
+//--- The add is its own row (st_tranche 2, entry_mode staged_add) anchored to the first tranche's entry and 1R, so both
+//--- bank at the same +1R and move their stops to the same entry.
+void StagedSkip(int i,string why)
+  {
+   g_rows[i].st_state=3; g_rows[i].reject_why="staged add skipped: "+why;
+   AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"skipped",why,StringFormat("posid=%I64d",g_rows[i].posid));
+   Print("Signal #",g_rows[i].id," STAGED ADD SKIPPED: ",why);
+  }
+void StagedAddTick()
+  {
+   if(!InpLiveMode) return;
+   bool changed=false;
+   int nrows=ArraySize(g_rows);
+   for(int i=0;i<nrows;i++)
+     {
+      if(g_rows[i].st_state!=1 || g_rows[i].st_tranche!=1 || g_rows[i].symbol!=_Symbol) continue;
+      int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
+      if(sh<0 || sh<g_cfg_st_n+1) continue;                  // bar N after the signal bar has not closed yet
+      changed=true;
+      if(g_rows[i].closed || !PositionSelectByTicket((ulong)g_rows[i].posid)) { StagedSkip(i,"position_closed"); continue; }
+      double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
+      double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0) vmin=0.01;
+      double add=NormalizeDouble(MathFloor((g_rows[i].st_full_lots-g_rows[i].lots)/step+1e-9)*step,2);
+      if(add<vmin-1e-9) { StagedSkip(i,StringFormat("add_below_min_lot:%.2f",add)); continue; }
+      int dir=g_rows[i].direction;
+      double csl=PositionGetDouble(POSITION_SL), ctp=PositionGetDouble(POSITION_TP);
+      double px=(dir>0 ? SymbolInfoDouble(_Symbol,SYMBOL_ASK) : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+      if(!g_trading_enabled) { StagedSkip(i,"trading_disabled"); continue; }
+      double spr=(g_rows[i].st_anchor_risk>0.0 ? (SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID))/g_rows[i].st_anchor_risk : 0.0);
+      if(g_cfg_max_spread_r>0.0 && spr>g_cfg_max_spread_r) { StagedSkip(i,StringFormat("spread_too_wide:%.3fR (max %.3fR)",spr,g_cfg_max_spread_r)); continue; }
+      if(csl<=0.0) { StagedSkip(i,"first_tranche_has_no_stop"); continue; }
+      if(dir>0 ? px<=csl : px>=csl) { StagedSkip(i,"price_through_stop"); continue; }
+      string why="";
+      if(!FtmoHeadroomOK(add,px,csl,why,"staged_add")) { StagedSkip(i,why); continue; }
+      string cap=StringFormat("Signal #%d add",g_rows[i].id);
+      bool ok=(dir>0 ? g_trade.Buy(add,_Symbol,0.0,csl,ctp,cap) : g_trade.Sell(add,_Symbol,0.0,csl,ctp,cap));
+      if(!ok) { StagedSkip(i,StringFormat("order_failed:%d",(int)g_trade.ResultRetcode())); continue; }
+      long pid=0; double fill=px;
+      ulong deal=g_trade.ResultDeal();
+      for(int t=0;t<10 && pid<=0;t++)
+        {
+         if(deal>0 && HistoryDealSelect(deal))
+           { pid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID); double f=HistoryDealGetDouble(deal,DEAL_PRICE); if(f>0.0) fill=f; }
+         if(pid<=0 && !(bool)MQLInfoInteger(MQL_TESTER)) Sleep(200); else break;
+        }
+      if(pid<=0)
+        for(int q=PositionsTotal()-1;q>=0 && pid<=0;q--)
+          {
+           ulong tk=PositionGetTicket(q); if(tk==0) continue;
+           if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+           if(PositionGetString(POSITION_COMMENT)!=cap) continue;
+           pid=(long)PositionGetInteger(POSITION_IDENTIFIER); fill=PositionGetDouble(POSITION_PRICE_OPEN);
+          }
+      int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+      g_rows[n]=g_rows[i];                                   // the signal's levels, decision and provenance
+      g_rows[n].posid=pid; g_rows[n].lots=add; g_rows[n].entry=fill;
+      g_rows[n].risk_px=g_rows[i].st_anchor_risk;            // R in the first tranche's 1R, so the two rows add up
+      g_rows[n].sl=g_rows[i].sl;                             // the ORIGINAL stop stays the risk basis (the live SL is csl)
+      g_rows[n].st_state=2; g_rows[n].st_tranche=2; g_rows[n].st_fill_time=TimeCurrent();
+      g_rows[n].entry_mode="staged_add"; g_rows[n].reject_why="";
+      g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=TimeCurrent();
+      g_rows[n].closed=false; g_rows[n].closed_vol=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
+      g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].terminal=""; g_rows[n].ratcheted=false;
+      g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0;
+      g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0; g_rows[n].rt_bankr=-99.0;
+      //--- banked already: the add joins the runner - nothing more to bank, its stop is already the entry
+      if(g_rows[i].banked) { g_rows[n].banked=true; g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0; }
+      else { g_rows[n].banked=false; g_rows[n].tp1_done=false; }
+      g_rows[i].st_state=2;
+      AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"ok","",
+                StringFormat("add=%.2f fill=%s sl=%s posid=%I64d first_posid=%I64d banked=%d",add,DoubleToString(fill,_Digits),DoubleToString(csl,_Digits),pid,g_rows[i].posid,(int)g_rows[i].banked));
+      Print("Signal #",g_rows[i].id," STAGED ADD -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
+     }
+   if(changed) { WriteJournal(g_journal_part); LiveWritePositions(); }
+  }
+
+//+------------------------------------------------------------------+
+//| PYRAMID at +1.5R (coach item 20, trader-driven)                   |
+//+------------------------------------------------------------------+
+//--- After the bank, the first time price reaches +InpPyramidR (the FIRST tranche's R) the EA adds InpPyramidFrac of
+//--- the ORIGINAL full size at market; the add's stop is the entry (BE), its target is TP2, the runner's stop is not
+//--- touched. Once per signal, from the signal's first row only (tranche 0 or 1). Live: kill switch, spread and FTMO
+//--- headroom gate it and a refusal is final. Tester: InpPyramid switches it on (the reproduction check).
+void PyramidCheck(int i,double bid,double ask,double step,double vmin)
+  {
+   bool on=(InpLiveMode ? g_cfg_pyr : InpPyramid);
+   if(!on || g_rows[i].st_pyr!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) return;
+   double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR), frac=(InpLiveMode ? g_cfg_pyr_f : InpPyramidFrac);
+   int dir=g_rows[i].direction;
+   double ae=AnchorEntry(i), ar=AnchorRisk(i);
+   if(ar<=0.0) return;
+   double trig=(dir>0 ? ae+trigR*ar : ae-trigR*ar);
+   if(!(dir>0 ? bid>=trig : ask<=trig)) return;
+   if(!PositionSelectByTicket((ulong)g_rows[i].posid)) return;
+   double full=(g_rows[i].st_full_lots>0.0 ? g_rows[i].st_full_lots : g_rows[i].lots);
+   double add=NormalizeDouble(MathFloor(frac*full/step+1e-9)*step,2);
+   string sid=StringFormat("sig:%d",g_rows[i].id);
+   if(add<vmin-1e-9) { g_rows[i].st_pyr=2; AuditLine("pyramid","","",sid,"skipped",StringFormat("add_below_min_lot:%.2f",add),""); return; }
+   double be=NormPrice(BEPrice(i)), tp=PositionGetDouble(POSITION_TP);
+   double px=(dir>0 ? ask : bid);
+   if(InpLiveMode)
+     {
+      string why="";
+      if(!g_trading_enabled) why="trading_disabled";
+      else if(g_cfg_max_spread_r>0.0 && (ask-bid)/ar>g_cfg_max_spread_r) why=StringFormat("spread_too_wide:%.3fR",(ask-bid)/ar);
+      else if(!FtmoHeadroomOK(add,px,be,why,"pyramid")) {}
+      if(why!="") { g_rows[i].st_pyr=2; AuditLine("pyramid","","",sid,"skipped",why,""); WriteJournal(g_journal_part); return; }
+     }
+   string cap=StringFormat("Signal #%d pyr",g_rows[i].id);
+   bool ok=(dir>0 ? g_trade.Buy(add,_Symbol,0.0,be,tp,cap) : g_trade.Sell(add,_Symbol,0.0,be,tp,cap));
+   g_rows[i].st_pyr=(ok ? 1 : 2);
+   if(!ok) { AuditLine("pyramid","","",sid,"skipped",StringFormat("order_failed:%d",(int)g_trade.ResultRetcode()),""); WriteJournal(g_journal_part); return; }
+   long pid=0; double fill=px; ulong deal=g_trade.ResultDeal();
+   for(int t=0;t<10 && pid<=0;t++)
+     {
+      if(deal>0 && HistoryDealSelect(deal)) { pid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID); double f=HistoryDealGetDouble(deal,DEAL_PRICE); if(f>0.0) fill=f; }
+      if(pid<=0 && InpLiveMode && !(bool)MQLInfoInteger(MQL_TESTER)) Sleep(200); else break;
+     }
+   if(pid<=0)
+     for(int q=PositionsTotal()-1;q>=0 && pid<=0;q--)
+       {
+        ulong tk=PositionGetTicket(q); if(tk==0) continue;
+        if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+        if(PositionGetString(POSITION_COMMENT)!=cap) continue;
+        pid=(long)PositionGetInteger(POSITION_IDENTIFIER); fill=PositionGetDouble(POSITION_PRICE_OPEN);
+       }
+   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+   g_rows[n]=g_rows[i];
+   g_rows[n].posid=pid; g_rows[n].lots=add; g_rows[n].entry=fill;
+   g_rows[n].st_anchor_entry=ae; g_rows[n].st_anchor_risk=ar; g_rows[n].risk_px=ar;
+   g_rows[n].st_tranche=3; g_rows[n].st_state=0; g_rows[n].st_pyr=1; g_rows[n].st_full_lots=full; g_rows[n].st_fill_time=TimeCurrent();
+   g_rows[n].entry_mode="pyramid"; g_rows[n].reject_why="";
+   g_rows[n].banked=true; g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0;
+   g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=TimeCurrent();
+   g_rows[n].closed=false; g_rows[n].closed_vol=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
+   g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].terminal=""; g_rows[n].ratcheted=false;
+   g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0;
+   g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0; g_rows[n].rt_bankr=-99.0;
+   AuditLine("pyramid","","",sid,"ok","",StringFormat("add=%.2f fill=%s sl=%s posid=%I64d",add,DoubleToString(fill,_Digits),DoubleToString(be,_Digits),pid));
+   Print("Signal #",g_rows[i].id," PYRAMID +",DoubleToString(trigR,2),"R -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
+   WriteJournal(g_journal_part);
+   if(InpLiveMode) LiveWritePositions();
+  }
