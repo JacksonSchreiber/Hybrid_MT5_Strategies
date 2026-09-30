@@ -665,12 +665,20 @@ string JGet(string &keys[],string &vals[],string key,string def="")
 bool AtomicWriteText(string rel,string body)
   {
    string tmp=rel+".tmp";
-   int h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   // err=5004 = a reader (web app / advisor / another instance) holds the file open for a moment: retry briefly instead
+   // of dropping the write (2026-09-30: a lost move left USDCAD's signal at status=open after its approve executed)
+   int h=INVALID_HANDLE;
+   for(int a=0;a<6 && h==INVALID_HANDLE;a++)
+     { if(a>0) Sleep(50*a); ResetLastError(); h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON); }
    if(h==INVALID_HANDLE){ Print("AtomicWrite: open failed ",tmp," err=",GetLastError()); return false; }
    FileWriteString(h,body); FileFlush(h); FileClose(h);
-   if(!FileMove(tmp,FILE_COMMON,rel,FILE_COMMON|FILE_REWRITE))
-     { Print("AtomicWrite: move failed ",rel," err=",GetLastError()); FileDelete(tmp,FILE_COMMON); return false; }
-   return true;
+   for(int a=0;a<6;a++)
+     {
+      if(a>0) Sleep(50*a);
+      ResetLastError();
+      if(FileMove(tmp,FILE_COMMON,rel,FILE_COMMON|FILE_REWRITE)) return true;
+     }
+   Print("AtomicWrite: move failed ",rel," err=",GetLastError()); FileDelete(tmp,FILE_COMMON); return false;
   }
 string ReadTextFile(string rel)
   {
