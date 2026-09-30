@@ -15,6 +15,7 @@ at the signal bar's close), under the current doctrine and under each variant:
   D2    at the bank the stop stays where it is; to entry only after an H4 bar CLOSES at or beyond +1R
   D3    no stop-to-entry at all: the runner keeps the original stop (-1R) to TP2
   (time stop - trades that go nowhere)
+  F     no 50% bank: at the bank point (+1R or TP1 if nearer) the stop goes to entry, the FULL position runs to TP2
   E6/E12/E18  not yet banked and never reached +0.5R after 6 / 12 / 18 H4 bars -> exit at that bar's close
 
 --trader: the same rules on the trader's OWN approved trades from his interactive windows (take/skip only - his
@@ -73,7 +74,9 @@ def replay(bars, i0, up, entry, sl, tp1, tp2, rule):
             term = ("BE" if abs(stop_R) < 1e-9 else ("TRAIL" if stop_R > 0 else "SL")) if banked else ("SL" if stop_R <= -0.999 else "CAP")
             return res, term, worst_after[0.25], worst_after[0.5], (stop_R if banked and stop_R > 0 else None)
         # 2) bank, then the runner's target
-        if not banked and hi_R >= bank_R:
+        if rule == "F" and hi_R >= bank_R:
+            stop_R = max(stop_R, 0.0)                                   # stop to entry, nothing banked - NEXT bar
+        elif not banked and hi_R >= bank_R:
             banked, locked = True, 0.5 * bank_R
             if rule == "D1": stop_R = max(stop_R, -0.5)
             elif rule in ("D2", "D3"): pass
@@ -211,7 +214,7 @@ def maxdd(rs):
     return dd
 
 
-RULES = ("A1", "A2", "A3", "B", "C", "D1", "D2", "D3", "E6", "E12", "E18")
+RULES = ("A1", "A2", "A3", "B", "C", "D1", "D2", "D3", "E6", "E12", "E18", "F")
 
 
 def paired_t(a, b):

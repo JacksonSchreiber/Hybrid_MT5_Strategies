@@ -17,6 +17,7 @@ D3      +0.0799  +0.0628  +0.0157    +1.26             0          637      55.3 
 E6      +0.0346  +0.0175  -0.0296    -2.47           322          249      42.1  EURUSD:+0.066 GBPUSD:-0.060 US100:+0.021 US500:-0.046 USDJPY:+0.069 USOIL:+0.017 XAUUSD:+0.099
 E12     +0.0450  +0.0278  -0.0192    -2.39           131          115      48.8  EURUSD:+0.072 GBPUSD:-0.055 US100:+0.081 US500:-0.031 USDJPY:+0.015 USOIL:+0.025 XAUUSD:+0.089
 E18     +0.0537  +0.0366  -0.0104    -1.82            67           57      47.6  EURUSD:+0.069 GBPUSD:-0.045 US100:+0.085 US500:-0.014 USDJPY:+0.024 USOIL:+0.043 XAUUSD:+0.089
+F       +0.1200  +0.1028  +0.0558    +4.13             0          819      41.6  EURUSD:+0.089 GBPUSD:+0.000 US100:+0.205 US500:+0.037 USDJPY:+0.085 USOIL:+0.084 XAUUSD:+0.259
 
 BAR: mean R above the base AND better in a majority of the 7 symbols individually
   A1: costed +0.0362 vs base +0.0470 (not above), better in 3/7 symbols -> FAIL
@@ -30,6 +31,7 @@ BAR: mean R above the base AND better in a majority of the 7 symbols individuall
   E6: costed +0.0175 vs base +0.0470 (not above), better in 1/7 symbols -> FAIL
   E12: costed +0.0278 vs base +0.0470 (not above), better in 1/7 symbols -> FAIL
   E18: costed +0.0366 vs base +0.0470 (not above), better in 2/7 symbols -> FAIL
+  F: costed +0.1028 vs base +0.0470 (above), better in 7/7 symbols -> PASS
 
 C runner: trail exits before TP2 on 695 of 2346 trades (29.6%), runner stop at a mean of +1.06R
 
