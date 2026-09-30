@@ -22,6 +22,12 @@ from pipeline.trendcont_step_study import atr14                             # no
 from pipeline.trendcont_step13_study import load, ema                       # noqa: E402
 from pipeline.trader_selection_study import CJ, WINDOWS, wilder             # noqa: E402
 
+# D1 BAR-INDEX RULE (fixed 2026-09-30, pipeline/d1_lookahead_check.py): a daily feature for an H4 signal uses the last
+# D1 bar dated STRICTLY BEFORE the signal's day (d < day) - the previous CLOSED day, what the EA sees. The published
+# report used d <= day (the signal day's own, still-forming D1 bar = look-ahead). D1_STRICT = False reproduces it;
+# pipeline/d1_rerun_studies.py prints both side by side.
+D1_STRICT = True
+
 
 def adx14(bars: list[list], i: int, n: int = 14) -> float | None:
     lo = max(1, i - 200)
@@ -132,7 +138,8 @@ def main():
             except (TypeError, ValueError): continue
             up = r["direction"].upper().startswith("B")
             day = r["signal_time"][:10]
-            jd = max((k for k, b2 in enumerate(d1) if b2[0][:10] <= day), default=0)
+            jd = max((k for k, b2 in enumerate(d1) if (b2[0][:10] < day if D1_STRICT else b2[0][:10] <= day)), default=-1)
+            if jd < 0: continue
             a = atr14([[0] + x[1:] for x in h4], i)
             f = features(h4, d1, i, jd, up, a, ms)
             if f is None: continue

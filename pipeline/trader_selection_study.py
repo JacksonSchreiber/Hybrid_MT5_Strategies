@@ -21,6 +21,12 @@ from live import overlays as OV                                             # no
 from pipeline.trendcont_step_study import atr14, CLUSTER_R                  # noqa: E402
 from pipeline.trendcont_step13_study import load, ema, step3                # noqa: E402
 
+# D1 BAR-INDEX RULE (fixed 2026-09-30, pipeline/d1_lookahead_check.py): a daily feature for an H4 signal uses the last
+# D1 bar dated STRICTLY BEFORE the signal's day (d < day) - the previous CLOSED day, what the EA sees. The published
+# report used d <= day (the signal day's own, still-forming D1 bar = look-ahead). D1_STRICT = False reproduces it;
+# pipeline/d1_rerun_studies.py prints both side by side.
+D1_STRICT = True
+
 CJ = "/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/Common/Files/journal"
 WINDOWS = [                                       # (label, decision journal, blind baseline for the SAME window)
     ("W11 US100 2017",  "US100.dk_20170103_20171229.csv",  "AA_US100.dk_20170103_20171229.csv"),
@@ -141,7 +147,8 @@ def main():
             mx = max(((h4[j][2] - h4[j][3]) / a) for j in range(max(0, j0), i + 1)) if a > 0 else 0.0
             s3 = step3(h4, i, up) or ("?", "?")
             day = r["signal_time"][:10]
-            jd = max((k for k, b2 in enumerate(d1) if b2[0][:10] <= day), default=0)
+            jd = max((k for k, b2 in enumerate(d1) if (b2[0][:10] < day if D1_STRICT else b2[0][:10] <= day)), default=-1)
+            if jd < 0: miss[label + " (no prior D1 bar)"] += 1; continue
             rows.append({"took": took, "base_r": base_r, "own_r": own_r, "win": label, "sym": sym,
                          "slam": "<1.5" if mx < 1.5 else ("1.5-2" if mx < 2 else ">=2"),
                          "road": road_class(h4, i, e, R, up), "depth": s3[1], "run": s3[0],
