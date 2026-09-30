@@ -441,3 +441,13 @@ def tv_symbol(cfg: dict, symbol: str) -> str:
 def r_fmt(x) -> str:
     try: return f"{float(x):+.2f}R"
     except (TypeError, ValueError): return "-"
+
+
+def lots_line(sz: dict) -> str:
+    """The EA's lots_line prints the input risk (1.0%) even though the lots are sized at the ladder rung; show the risk
+    the lots were actually sized at (trader 2026-09-30)."""
+    import re as _re
+    ln = str((sz or {}).get("lots_line") or "")
+    eff = (sz or {}).get("risk_pct_effective")
+    try: return _re.sub(r"\([0-9.]+% risk", f"({float(eff) * 100:.2f}% risk", ln, count=1) if eff else ln
+    except (TypeError, ValueError): return ln
