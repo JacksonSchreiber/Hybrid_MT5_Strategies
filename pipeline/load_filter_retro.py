@@ -39,7 +39,7 @@ def rows():
             if not took and (d != "skipped" or r.get("skip_reason") in ("8", "9", "0")): continue
             b = bl.get(r["signal_time"])
             if not b: continue
-            jd = max((k for k, x in enumerate(days) if x <= r["signal_time"][:10]), default=-1)
+            jd = max((k for k, x in enumerate(days) if x < r["signal_time"][:10]), default=-1)   # 2026-09-30: previous CLOSED day (was <=)
             if jd < 40: continue
             a = atr14([[0] + x[1:] for x in d1], jd)
             if a <= 0: continue

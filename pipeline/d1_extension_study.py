@@ -37,7 +37,7 @@ def main():
             try: rm, mfe = float(r["r_multiple"]), float(r.get("mfe_r") or 0)
             except (TypeError, ValueError): excl[f"{sym}: unusable row"] += 1; continue
             day = r["signal_time"][:10]
-            jd = max((k for k, d in enumerate(days) if d <= day), default=-1)
+            jd = max((k for k, d in enumerate(days) if d < day), default=-1)   # 2026-09-30: previous CLOSED day (was <= : look-ahead)
             if jd < 40: excl[f"{sym}: no D1 history at the signal"] += 1; continue
             a = atr14([[0] + b[1:] for b in d1], jd)
             if a <= 0: excl[f"{sym}: D1 ATR zero"] += 1; continue

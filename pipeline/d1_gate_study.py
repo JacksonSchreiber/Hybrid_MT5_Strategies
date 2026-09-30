@@ -46,7 +46,7 @@ def record_rows():
             if r.get("strategy") != "TrendCont" or r.get("decision") != "approved": continue
             try: rm, mfe = float(r["r_multiple"]), float(r.get("mfe_r") or 0)
             except (TypeError, ValueError): continue
-            jd = max((k for k, d in enumerate(days) if d <= r["signal_time"][:10]), default=-1)
+            jd = max((k for k, d in enumerate(days) if d < r["signal_time"][:10]), default=-1)   # 2026-09-30: previous CLOSED day (was <=)
             if jd < 40: continue
             a = atr14([[0] + b[1:] for b in d1], jd)
             if a <= 0: continue
@@ -119,7 +119,7 @@ def main():
             if r.get("strategy") != "TrendCont" or not r.get("decision", "").startswith("approved"): continue
             try: own = float(r["r_multiple"])
             except (TypeError, ValueError): continue
-            jd = max((k for k, d in enumerate(days) if d <= r["signal_time"][:10]), default=-1)
+            jd = max((k for k, d in enumerate(days) if d < r["signal_time"][:10]), default=-1)   # 2026-09-30: previous CLOSED day (was <=)
             if jd < 40: continue
             a = atr14([[0] + b[1:] for b in d1], jd)
             if a <= 0: continue
