@@ -116,6 +116,7 @@ input ENUM_DELAY_MODE InpDelayMode = DM_FREEZE;  // delay reopen: FREEZE detecto
 //--- observer reconstructs the doctrine-v2 R per signal + an impulse feature into a
 //--- separate sidecar (journal\v2study_*.csv). Live default TRUE = current v2 exit,
 //--- live journal + schema untouched. Set false only via V2_EXIT=false in mt5_verify.
+input double InpTcBankFrac = 0.5;         // TESTER study: share banked at +1R on TrendCont (coach 2026-09-30 reproduction check; live reads live.json)
 input bool   InpV2Exit = true;           // true: live v2 exit; false: study re-run (old exit + v2 observer sidecar)
 input long   InpInverseMagic  = 990218;  // SEPARATE magic for inverse trades (isolates them)
 input bool   InpTestInverse   = false;   // TEST-ONLY: under AA_ALL, auto-take INVERSE on EMArev (headless lifecycle check)
@@ -3407,9 +3408,12 @@ void ManageOpenPositions()
       //--- the bank share: 50% everywhere, except live TrendCont, which takes live.json trendcont_bank_frac (coach
       //--- 2026-09-30: 25%) - read at the moment of the bank, so it applies from the first TrendCont to reach +1R after
       //--- a config change, and journaled in partial_frac so the record shows which bank each trade ran under.
-      double bf  =((InpLiveMode && g_rows[i].strategy=="TrendCont") ? g_cfg_tc_bank : 0.5);
-      if(InpLiveMode && g_rows[i].strategy=="TrendCont") g_rows[i].partial_frac=bf;
+      bool   tc  =(g_rows[i].strategy=="TrendCont");
+      double bf  =(tc ? (InpLiveMode ? g_cfg_tc_bank : InpTcBankFrac) : 0.5);
       double pv  =MathFloor((bf*lots)/step)*step;           // mechanical bank
+      //--- live: journal the share ACTUALLY banked (the lot step rounds 25% of 0.05 lots down to 0.01 = 20%; a 0.01-lot
+      //--- position cannot split at all -> 0), so the record shows exactly what each trade ran under
+      if(InpLiveMode && tc) g_rows[i].partial_frac=((pv>=vmin && (lots-pv)>=vmin) ? pv/lots : 0.0);
       string tag =(via_tp1 ? "AUTO_TP1" : "AUTO_1R");
       if(pv>=vmin && (lots-pv)>=vmin)
         {
