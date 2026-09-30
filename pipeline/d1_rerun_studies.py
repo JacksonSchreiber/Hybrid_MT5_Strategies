@@ -44,7 +44,12 @@ READING = """READING (written after the run; numbers above are the evidence)
     record the D1-extension split itself collapses once the index is fixed (d1_lookahead_check: +0.269R -> -0.044R).
   Other pipeline scripts that still join D1 with d <= day (NOT rerun here): d1_extension_study.py (l.40),
     d1_gate_study.py (l.49, l.122), load_filter_retro.py (l.42), and archive_bundles.py (l.124: b[0] <= t on the
-    signal TIMESTAMP, so the rendered D1 chart in the blind archive bundles includes the signal day's forming bar)."""
+    signal bar's OPEN epoch; the D1 bar of the signal day opens 00:00 <= t, so the D1 chart in every blind archive
+    bundle showed the signal day's COMPLETE D1 bar - look-ahead in the 2026-09-24 advisor/veto discrimination inputs.
+    Its H4 slice h4[:i+1] ends at the signal bar and is fine). Reported, not fixed.
+  CAVEAT (all D1 work): the .dk D1 files are UTC-midnight days INCLUDING Sunday stubs (EURUSD.dk: 520 Sundays, no
+    Saturdays), as the tester EA saw them - a Monday signal's "previous closed day" is the Sunday stub, and ATR14 runs
+    low over stubs. Live OANDA D1 has no Sunday bar and a ~21:00 UTC day boundary: part of the pending reconciliation."""
 
 
 def capture(mod, strict: bool) -> list[str]:

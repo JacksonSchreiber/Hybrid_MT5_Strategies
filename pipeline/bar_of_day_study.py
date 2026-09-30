@@ -37,10 +37,12 @@ READING = """READING (written after the run)
     -0.053 / -0.067, 2025+ -0.071), and it is not the rollover bar.
   * ROLLOVER: identified as the signal bar OPENING 20:00 UTC (contains 21:00/22:00 UTC; enters 00:00 UTC). On the blind
     record it is +0.060R (n=453, both halves positive: +0.151 / +0.029, 2025+ +0.035) - NOT negative. The pre-rollover
-    bar (16:00 UTC open, enters 20:00 UTC) is -0.003R (n=651). The claim '-0.06R on n=204' is not reproduced by any
-    population here; the nearest is FX all detectors, 16:00 UTC open: n=202, -0.098R (halves +0.115 / -0.157, i.e. not
-    stable), or FX TrendCont 16:00: n=145, -0.064R. If the claim meant the live broker-midnight bar, that bar is on the
-    broker's grid and cannot be isolated in .dk data.
+    bar (16:00 UTC open, enters 20:00 UTC) is -0.003R (n=651).
+  * THE n=204 CELL: TrendCont record, dev 2012-2024, signal bar opening 00:00 UTC is exactly n=204 - but it is
+    POSITIVE on every measure (journal +0.089 raw / +0.072 minus drag; replay +0.073), not -0.06. On the .dk UTC grid
+    that bar opens 03:00 broker (EEST) / 02:00 (EET) - it is NOT the rollover bar; reading the .dk 00:00 label as
+    "broker midnight" would misplace it by 2-3 h. The only dev TrendCont bar near -0.06 is 04:00 UTC (n=241, journal
+    -0.050 minus drag, replay -0.057). The claim is not reproduced as stated.
   * These are PRICE-behaviour numbers under a flat spread charge. The live penalty for the broker-midnight bar is about
     the rollover SPREAD (0.5-1R on exotics, docs/live-runbook.md) - a cost this table cannot see, and does not refute."""
 
@@ -73,14 +75,15 @@ def main():
     for x in all_rows():
         r = run(x, 0.5)
         if r is None: continue
-        rows.append({"t": x["t"], "sym": root(x["sym"]), "strat": x["strat"], "cr": r - x["cost"]})
+        rows.append({"t": x["t"], "sym": root(x["sym"]), "strat": x["strat"], "cr": r - x["cost"],
+                     "jr": x.get("journal_r"), "cost": x["cost"]})
     table("ALL CLASSES, ALL DETECTORS", rows)
     for cls in ("FX", "indices", "commodities", "crypto"):
         table(f"{cls.upper()}  ({', '.join(k for k, v in ASSET.items() if v == cls)}), all detectors",
               [x for x in rows if ASSET[x["sym"]] == cls])
     print("\n" + "=" * 110)
-    print("ROLLOVER-BAR LOCATOR: where could 'the rollover bar is -0.06R on n=204' come from? n and mean costed R of the")
-    print("20:00 and 16:00 UTC signal bars in candidate populations (locator only - no population was chosen on it):")
+    print("ROLLOVER-BAR LOCATOR: where could 'the rollover bar is -0.06R on n=204' come from? n and mean costed R (50%")
+    print("replay) per UTC signal-bar open hour in candidate populations (locator only - no population was chosen on it):")
     pops = {"all detectors, all": rows,
             "all detectors, dev 2012-24": [x for x in rows if x["t"][:4] < HOLDOUT],
             "TrendCont record, all": [x for x in rows if x["strat"] == "TrendCont"],
@@ -89,12 +92,19 @@ def main():
     for cls in ("FX", "indices", "commodities", "crypto"):
         pops[f"{cls}, all detectors"] = [x for x in rows if ASSET[x["sym"]] == cls]
         pops[f"{cls}, TrendCont"] = [x for x in rows if ASSET[x["sym"]] == cls and x["strat"] == "TrendCont"]
+    print(f"  {'population':30} " + " ".join(f"{h + ':00':>14}" for h in HOURS))
     for name, p in pops.items():
         s = []
-        for h in ("16", "20"):
+        for h in HOURS:
             v = [x["cr"] for x in p if x["t"][11:13] == h]
-            s.append(f"{h}:00 n={len(v):4d} {st.mean(v) if v else 0:+.3f}")
-        print(f"  {name:32} {s[0]}   {s[1]}")
+            s.append(f"{len(v):4d} {st.mean(v) if v else 0:+.3f}".rjust(14))
+        print(f"  {name:30} " + " ".join(s))
+    tc = [x for x in rows if x["strat"] == "TrendCont" and x["t"][:4] < HOLDOUT]
+    print("\n  TrendCont record, dev 2012-24, on the JOURNAL r_multiple (raw / minus drag) vs the 50% replay (costed):")
+    for h in HOURS:
+        c = [x for x in tc if x["t"][11:13] == h]
+        print(f"    {h}:00 UTC  n={len(c):4d}  journal {st.mean(x['jr'] for x in c):+.3f} / {st.mean(x['jr'] - x['cost'] for x in c):+.3f}"
+              f"   replay {st.mean(x['cr'] for x in c):+.3f}")
     for det in ("TrendCont", "SweepMSS", "DeepFib", "EMArevQ"):
         table(f"per detector: {det}", [x for x in rows if x["strat"] == det])
     print("\n" + READING)
