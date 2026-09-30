@@ -23,7 +23,7 @@ ok()  { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 no()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
 
 wg_is_up()  { ip link show "$IFACE" >/dev/null 2>&1; }
-tun_pid()   { [[ -f $PIDF ]] && kill -0 "$(cat "$PIDF")" 2>/dev/null && cat "$PIDF"; }
+tun_pid()   { [[ -f $PIDF ]] && kill -0 "$(cat "$PIDF")" 2>/dev/null && cat "$PIDF"; }   # the SUPERVISOR pid (= its process group)
 
 wg_up() {
   wg_is_up && { ok "WireGuard $IFACE already up"; return 0; }
@@ -42,17 +42,26 @@ tun_up() {
   local p; p=$(tun_pid) && { ok "tunnel already up (pid $p) → http://localhost:$PORT"; return 0; }
   rm -f "$PIDF"
   if ss -ltn 2>/dev/null | grep -q ":$PORT "; then no "port $PORT is already in use on this machine"; return 1; fi
-  ssh -i "$KEY" -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-      -N -L "$PORT:$REMOTE" "$HOST" >/dev/null 2>&1 &
+  # Supervised: an SSH forward dies whenever the box restarts (MT5 deploys, reboots), and a dead tunnel quietly
+  # locks the browser out of the dashboard. So the forward runs inside a reconnect loop in its own process group,
+  # and `hybrid down` kills the whole group. ExitOnForwardFailure makes a half-open forward exit and retry.
+  setsid bash -c "while :; do
+      ssh -i '$KEY' -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+          -o ConnectTimeout=15 -N -L '$PORT:$REMOTE' '$HOST'
+      sleep 5
+    done" >/dev/null 2>&1 < /dev/null &
   local pid=$!
-  sleep 2
-  if kill -0 "$pid" 2>/dev/null; then echo "$pid" > "$PIDF"; ok "tunnel up (pid $pid) → http://localhost:$PORT"
-  else no "tunnel failed to start - is WireGuard up? try: ssh -i $KEY $HOST"; return 1; fi
+  echo "$pid" > "$PIDF"
+  local i; for i in 1 2 3 4 5 6 7 8; do
+    sleep 1; ss -ltn 2>/dev/null | grep -q ":$PORT " && { ok "tunnel up (supervised, pid $pid) → http://localhost:$PORT"; return 0; }
+  done
+  ok "tunnel supervisor running (pid $pid) - it will keep retrying until the box answers"
 }
 
 tun_down() {
   local p; p=$(tun_pid) || { ok "tunnel already down"; rm -f "$PIDF"; return 0; }
-  kill "$p" 2>/dev/null; rm -f "$PIDF"; ok "tunnel down"
+  kill -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null      # the whole group: the loop AND its ssh child
+  rm -f "$PIDF"; ok "tunnel down"
 }
 
 status() {
