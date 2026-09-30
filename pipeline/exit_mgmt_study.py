@@ -10,6 +10,16 @@ at the signal bar's close), under the current doctrine and under each variant:
   B     step trail lagging 1R in 0.25R steps up to +1R (+0.25 -> -0.75 ... +1R -> entry), then base doctrine
   C     the same trail carried past +1R (+1.25 -> +0.25, +1.5 -> +0.5 ...); 50% still banked at +1R, the runner
         leaves at TP2 or the trail, whichever first
+  (2026-09-30 follow-up, same replay - is the base's own stop-to-entry at +1R too tight for the runner?)
+  D1    at the bank the runner's stop goes to -0.50R, not entry; to entry once +1.5R is reached
+  D2    at the bank the stop stays where it is; to entry only after an H4 bar CLOSES at or beyond +1R
+  D3    no stop-to-entry at all: the runner keeps the original stop (-1R) to TP2
+  (time stop - trades that go nowhere)
+  E6/E12/E18  not yet banked and never reached +0.5R after 6 / 12 / 18 H4 bars -> exit at that bar's close
+
+--trader: the same rules on the trader's OWN approved trades from his interactive windows (take/skip only - his
+exits, edits and early closes are ignored; each trade is replayed from its levels under every rule). Delayed
+approvals start after the delay bars; resting (pending) orders start at the bar that fills them.
 
 Bar rules, conservative and identical for every variant, so the comparison is fair:
   * inside a bar the STOP is checked first, at the level set by PREVIOUS bars only - a stop is never raised and hit
@@ -65,7 +75,9 @@ def replay(bars, i0, up, entry, sl, tp1, tp2, rule):
         # 2) bank, then the runner's target
         if not banked and hi_R >= bank_R:
             banked, locked = True, 0.5 * bank_R
-            if stop_R < 0.0: stop_R = 0.0                                # stop to entry (base doctrine) - takes effect NEXT bar
+            if rule == "D1": stop_R = max(stop_R, -0.5)
+            elif rule in ("D2", "D3"): pass
+            elif stop_R < 0.0: stop_R = 0.0                              # stop to entry (base doctrine) - takes effect NEXT bar
         if banked and tp2_R is not None and hi_R >= tp2_R:
             return locked + 0.5 * tp2_R, "TP", worst_after[0.25], worst_after[0.5], None
         if not banked and tp2_R is not None and hi_R >= tp2_R:          # single-target rows: TP straight through
@@ -81,7 +93,11 @@ def replay(bars, i0, up, entry, sl, tp1, tp2, rule):
         if rule in ("B", "C"):
             t = trail_stop(hwm, uncapped=(rule == "C"))
             if t is not None: new = max(new, t)
+        if rule == "D1" and banked and hwm >= 1.5: new = max(new, 0.0)
+        if rule == "D2" and banked and toR(b[4]) >= 1.0: new = max(new, 0.0)
         stop_R = new                                                    # ratchets: never loosens
+        if rule[0] == "E" and not banked and j - i0 + 1 == int(rule[1:]) and hwm < 0.5:
+            return toR(b[4]), "TIME", worst_after[0.25], worst_after[0.5], None
     last = bars[min(len(bars), i0 + MAX_BARS) - 1]
     mark = toR(last[4])
     return (locked + 0.5 * mark if banked else mark), "end", worst_after[0.25], worst_after[0.5], None
@@ -108,6 +124,63 @@ def load_rows():
     return out
 
 
+TJ = "/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/Common/Files/journal"
+
+
+def trader_files():
+    """His interactive decision journals: plain-named window files with real skips and human decision times. Auto runs
+    (no skips, zero decision time), the v2study replays and the DummyMondayH4 plumbing test are excluded."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(TJ, "*.dk_*.csv"))):
+        b = os.path.basename(p)
+        if b.startswith(("AA_", "v2study_")) or any(x in b for x in (".actions", ".delays", ".inv", ".part", ".costed")): continue
+        rows = list(csv.DictReader(open(p, newline="", encoding="ascii", errors="replace")))
+        ms = [float(r["decision_ms"]) for r in rows if r.get("decision_ms") not in (None, "")]
+        if not any(r.get("decision") == "skipped" for r in rows) or not ms or st.median(ms) <= 0: continue
+        if any(r.get("strategy") == "DummyMondayH4" for r in rows): continue
+        out.append((p, rows))
+    return out
+
+
+def load_trader_rows():
+    out, seen = [], set()
+    for p, rows in trader_files():
+        sym = os.path.basename(p).split("_")[0]
+        h4 = load(sym, "h4")
+        if not h4: print(f"  no H4 bars for {sym}, skipping {os.path.basename(p)}"); continue
+        idx = {b[0][:16]: k for k, b in enumerate(h4)}
+        last_bar = {}                                                          # signal_id -> latest delay-log bar
+        dp = "_".join(p.split("_")[:-1]) + ".delays.csv"                       # SYM_<start>.delays.csv
+        if os.path.exists(dp):
+            for r in csv.DictReader(open(dp, newline="", encoding="ascii", errors="replace")):
+                k = idx.get((r.get("bar_time") or "")[:16])
+                if k is not None: last_bar[r.get("signal_id")] = max(last_bar.get(r.get("signal_id"), -1), k)
+        for r in rows:
+            if r.get("decision") != "approved": continue
+            try:
+                e, s_ = float(r["entry"]), float(r["sl"]); posid = int(float(r.get("posid") or 0))
+            except (TypeError, ValueError): continue
+            if posid <= 0 or not r.get("exit_time"): continue                  # never filled
+            i = idx.get(r["signal_time"][:16])
+            if i is None: continue
+            key = (sym, r["signal_time"], r["strategy"])
+            if key in seen: continue                                           # overlapping window files
+            seen.add(key)
+            i0 = max(i, last_bar.get(r["signal_id"], i)) + 1
+            up = r["direction"].upper().startswith("B")
+            if r.get("is_pending") == "1":                                     # resting order: start at the fill bar
+                j = i0
+                while j < len(h4) and not (h4[j][3] <= e <= h4[j][2]): j += 1
+                if j >= len(h4): continue
+                i0 = j + 1
+            tp1 = float(r["tp1"]) if r.get("tp1") else None
+            tp2 = float(r["tp2"]) if r.get("tp2") else (float(r["tp"]) if r.get("tp") else None)
+            out.append({"sym": sym, "t": r["signal_time"], "up": up, "e": e, "s": s_, "tp1": tp1, "tp2": tp2, "i0": i0,
+                        "journal_r": float(r.get("r_multiple") or 0), "journal_term": r.get("terminal"), "strat": r["strategy"],
+                        "bars": h4, "cost": DRAG.get(sym.split(".")[0], 0.007)})
+    return out
+
+
 def run(rows, rule):
     res = []
     for x in rows:
@@ -124,20 +197,32 @@ def maxdd(rs):
     return dd
 
 
+RULES = ("A1", "A2", "A3", "B", "C", "D1", "D2", "D3", "E6", "E12", "E18")
+
+
+def paired_t(a, b):
+    d = [y - x for x, y in zip(a, b)]
+    sd = st.pstdev(d) if len(d) > 1 else 0
+    return (st.mean(d) / (sd / math.sqrt(len(d)))) if sd > 0 else 0.0
+
+
 def main():
-    rows = load_rows()
-    print(f"replaying {len(rows)} approved TrendCont rows over H4\n")
+    trader = "--trader" in sys.argv
+    rows = load_trader_rows() if trader else load_rows()
+    from collections import Counter
+    print(f"replaying {len(rows)} " + ("of the TRADER's own approved trades (all strategies)" if trader else "approved TrendCont rows") + " over H4")
+    if trader: print("  by strategy:", dict(Counter(x["strat"] for x in rows)), " by symbol:", dict(Counter(x["sym"].split(".")[0] for x in rows)))
+    print()
     base = run(rows, "base")
     bm = st.mean(x["r"] for x in base); bj = st.mean(x["journal_r"] for x in base)
-    from collections import Counter
     print(f"CALIBRATION  replay base {bm:+.4f}R vs journal {bj:+.4f}R (n={len(base)})")
     print(f"             exits replay {dict(Counter(x['term'] for x in base))}  journal {dict(Counter(x['journal_term'] for x in base))}\n")
     order = sorted(range(len(base)), key=lambda k: base[k]["t"])
     syms = sorted({x["sym"] for x in base})
-    hdr = f"{'rule':6} {'mean R':>8} {'costed':>8} {'vs base':>8} {'losers saved':>13} {'winners cut':>12} {'worst DD':>9}  per-symbol mean R (costed)"
+    hdr = f"{'rule':6} {'mean R':>8} {'costed':>8} {'vs base':>8} {'paired t':>8} {'losers saved':>13} {'winners cut':>12} {'worst DD':>9}  per-symbol mean R (costed)"
     print(hdr); print("-" * len(hdr))
     out_rows = {}
-    for rule in ("base", "A1", "A2", "A3", "B", "C"):
+    for rule in ("base",) + RULES:
         v = base if rule == "base" else run(rows, rule)
         out_rows[rule] = v
         m = st.mean(x["r"] for x in v); mc = st.mean(x["r"] - x["cost"] for x in v)
@@ -147,12 +232,13 @@ def main():
         ps = defaultdict(list)
         for x in v: ps[x["sym"]].append(x["r"] - x["cost"])
         per = " ".join(f"{s.split('.')[0]}:{st.mean(ps[s]):+.3f}" for s in syms)
-        print(f"{rule:6} {m:+8.4f} {mc:+8.4f} {m - bm:+8.4f} {saved:13d} {cut:12d} {dd:9.1f}  {per}")
+        pt = paired_t([x["r"] for x in base], [x["r"] for x in v]) if rule != "base" else 0.0
+        print(f"{rule:6} {m:+8.4f} {mc:+8.4f} {m - bm:+8.4f} {pt:+8.2f} {saved:13d} {cut:12d} {dd:9.1f}  {per}")
     # per-symbol majority test (the coach's bar)
-    print("\nBAR: mean R above the base AND better in a majority of the 7 symbols individually")
+    print(f"\nBAR: mean R above the base AND better in a majority of the {len(syms)} symbols individually")
     bs = defaultdict(list)
     for x in base: bs[x["sym"]].append(x["r"] - x["cost"])
-    for rule in ("A1", "A2", "A3", "B", "C"):
+    for rule in RULES:
         v = out_rows[rule]; ps = defaultdict(list)
         for x in v: ps[x["sym"]].append(x["r"] - x["cost"])
         wins = sum(1 for s in syms if st.mean(ps[s]) > st.mean(bs[s]) + 1e-9)
@@ -163,15 +249,15 @@ def main():
     print(f"\nC runner: trail exits before TP2 on {len(te)} of {len(c)} trades ({len(te)/len(c)*100:.1f}%), "
           f"runner stop at a mean of +{st.mean(x['trail_exit'] for x in te):.2f}R" if te else "\nC runner: no trail exits")
     # the logging item: MAE after +0.25R / +0.50R on the base replay, written out as study rows
-    p = os.path.join(ROOT, "data", "study", "exit_mgmt_rows.csv")
+    p = os.path.join(ROOT, "data", "study", "exit_mgmt_trader_rows.csv" if trader else "exit_mgmt_rows.csv")
     with open(p, "w", newline="") as f:
         w = csv.writer(f); w.writerow(["symbol", "signal_time", "journal_r", "base_r", "base_exit", "mae_after_025", "mae_after_050"]
-                                      + [f"{k}_r" for k in ("A1", "A2", "A3", "B", "C")])
+                                      + [f"{k}_r" for k in RULES])
         for k in range(len(base)):
             w.writerow([base[k]["sym"], base[k]["t"], base[k]["journal_r"], round(base[k]["r"], 4), base[k]["term"],
                         "" if base[k]["mae025"] is None else round(base[k]["mae025"], 4),
                         "" if base[k]["mae050"] is None else round(base[k]["mae050"], 4)]
-                       + [round(out_rows[r][k]["r"], 4) for r in ("A1", "A2", "A3", "B", "C")])
+                       + [round(out_rows[r][k]["r"], 4) for r in RULES])
     print(f"\nper-trade rows (incl. mae_after_025 / mae_after_050) -> {p}")
 
 
