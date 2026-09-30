@@ -11,6 +11,8 @@ stop-to-entry is hit, and before +1R a full reversal to the original stop costs 
 P200avg1 / P200avg / P225avg (2026-09-30 follow-up): at +1R the stop goes to the position's AVERAGE entry instead of the
 original entry (a stop-out then nets 0 on the whole position); avg1 fixes it there, avg moves it up to the new average
 after every later add.
+P200s25 / P225s25: at +1R the stop goes to +0.25R above the ORIGINAL entry. S25 = the same stop at full size from the
+start, no scaling (the exit_s025_study candidate) - so P*s25 vs S25 isolates the scaling-in.
 References: base (doctrine v2: bank 50% at +1R, stop to entry) and F (no bank, stop to entry at +1R - full size from
 the start), so P vs F isolates the scaling-in itself.
 
@@ -38,7 +40,7 @@ def replay(bars, i0, up, entry, sl, tp1, tp2, mode, slip=0.0):
     if mode == "base":
         bank_R = trig if (tp2_R is None or trig < tp2_R - 1e-9) else None
         legs, adds = [[0.0, 1.0]], []
-    elif mode == "F":
+    elif mode in ("F", "S25"):
         bank_R, legs, adds = None, [[0.0, 1.0]], []
     else:
         cap = 2.25 if mode.startswith("P225") else 2.0
@@ -67,9 +69,11 @@ def replay(bars, i0, up, entry, sl, tp1, tp2, mode, slip=0.0):
         if hwm >= trig:
             avg = sum(sz * at for at, sz in legs) / sum(sz for _, sz in legs)
             if mode.endswith("avg"): stop_R = max(stop_R, avg)                      # follows the average after each add
+            elif mode == "S25": stop_R = max(stop_R, 0.25)
             elif mode.endswith("avg1"):                                              # the average at +1R, then fixed
                 if avg_fixed is None: avg_fixed = avg
                 stop_R = max(stop_R, avg_fixed)
+            elif mode.endswith("s25"): stop_R = max(stop_R, 0.25)                  # +0.25R above the original entry
             else: stop_R = max(stop_R, 0.0)
         peak_risk = max(peak_risk, sum(sz * (at - stop_R) for at, sz in legs))
     last = bars[min(len(bars), i0 + MAX_BARS) - 1]
@@ -86,14 +90,14 @@ def longest_dry(v):
 def table(label, rows, slip=0.0):
     rows = sorted(rows, key=lambda x: x["t"])
     out = {m: [replay(x["bars"], x["i0"], x["up"], x["e"], x["s"], x["tp1"], x["tp2"], m, slip) for x in rows]
-           for m in ("base", "F", "P200", "P200avg1", "P200avg", "P225avg")}
+           for m in ("base", "F", "S25", "P200", "P200s25", "P225s25")}
     keep = [k for k in range(len(rows)) if all(out[m][k] for m in out)]
     half = len(keep) // 2
     print(f"{label}  (n={len(keep)}{', add slippage ' + format(slip, '.2f') + 'R each' if slip else ''})")
     print(f"  {'rule':8} {'R/trade':>8} {'costed':>8} {'vs base':>8} {'t':>6} {'t 1st½':>7} {'t 2nd½':>7} {'worst DD':>9} "
           f"{'win%':>6} {'dry run':>8} {'avg units':>9} {'max open risk':>13}")
     bc = None
-    for m in ("base", "F", "P200", "P200avg1", "P200avg", "P225avg"):
+    for m in ("base", "F", "S25", "P200", "P200s25", "P225s25"):
         v = [out[m][k] for k in keep]
         r = [x[0] for x in v]; c = [x[0] - rows[k]["cost"] * x[1] for x, k in zip(v, keep)]
         if bc is None: bc, br = c, r
