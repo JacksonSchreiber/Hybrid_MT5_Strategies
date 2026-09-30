@@ -308,6 +308,23 @@ left both hedges alone (`pipeline/veto_cards.py`, `pipeline/veto_run.py`; transc
 
 Reverting is a config edit: put the other models back in `advisor.models` and redeploy.
 
+## Live account cutover (2026-09-30)
+
+Demo -> FTMO Challenge $25k (login 600078707, `OANDA-Prop Trader`). Credentials in `secrets\mt5.json` and
+`mt5\live.ini` only. The demo's journals, signals, positions, state, acks, tasks and advisor verdicts moved to
+`live\archive\demo-20260929`, and the watch counters were archived with them, so every count restarts on the live
+account.
+
+**`initial_balance` must be SET IN CONFIG, never captured, on a prop account that is already down.** The EA captures
+`ACCOUNT_BALANCE` on its first run when `config\account.json` has `initial_balance: 0`. This account was at
+22,945.29 when it connected, so the capture wrote 22,945.29 and computed a max-loss floor of 20,650 - **1,850 below
+FTMO's real kill line of 22,500**, which would have let the stack trade straight through a failed challenge. Config
+now pins `initial_balance: 25000`; `LiveFtmoLoad` gives config precedence over the captured value, so the floors
+corrected at the next heartbeat (max 22,500, daily = day-start minus 5% of 25,000).
+
+Check after any account change: the heartbeat's `ftmo` block must show the NOMINAL account size as
+`initial_balance`, and `max_floor` = nominal x (1 - max_loss_pct).
+
 ## Standing items (checked when the named condition occurs)
 
 - **FTMO server session check.** Re-run `pipeline/broker_sessions.py` against the FTMO account the day it exists and
