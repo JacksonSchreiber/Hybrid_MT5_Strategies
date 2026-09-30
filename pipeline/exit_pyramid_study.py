@@ -13,6 +13,8 @@ original entry (a stop-out then nets 0 on the whole position); avg1 fixes it the
 after every later add.
 P200s25 / P225s25: at +1R the stop goes to +0.25R above the ORIGINAL entry. S25 = the same stop at full size from the
 start, no scaling (the exit_s025_study candidate) - so P*s25 vs S25 isolates the scaling-in.
+P200step / P225step: the stop steps up with each add from +1R: +0.25R at +1R, +0.50R at +1.25R, +0.75R at +1.5R,
++1.00R at +1.75R (P225: +1.25R at +2R), then stays. Sstep = the same stop schedule at full size, no scaling.
 References: base (doctrine v2: bank 50% at +1R, stop to entry) and F (no bank, stop to entry at +1R - full size from
 the start), so P vs F isolates the scaling-in itself.
 
@@ -22,7 +24,7 @@ level and the stop is scored with the add filled first (the worse order). Spread
 unit traded (the per-symbol drag x units), so four adds cost more spread than one entry.
 """
 from __future__ import annotations
-import os, statistics as st, sys
+import math, os, statistics as st, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from pipeline.exit_mgmt_study import load_rows, maxdd, paired_t, MAX_BARS   # noqa: E402
@@ -40,7 +42,7 @@ def replay(bars, i0, up, entry, sl, tp1, tp2, mode, slip=0.0):
     if mode == "base":
         bank_R = trig if (tp2_R is None or trig < tp2_R - 1e-9) else None
         legs, adds = [[0.0, 1.0]], []
-    elif mode in ("F", "S25"):
+    elif mode in ("F", "S25", "Sstep"):
         bank_R, legs, adds = None, [[0.0, 1.0]], []
     else:
         cap = 2.25 if mode.startswith("P225") else 2.0
@@ -70,6 +72,10 @@ def replay(bars, i0, up, entry, sl, tp1, tp2, mode, slip=0.0):
             avg = sum(sz * at for at, sz in legs) / sum(sz for _, sz in legs)
             if mode.endswith("avg"): stop_R = max(stop_R, avg)                      # follows the average after each add
             elif mode == "S25": stop_R = max(stop_R, 0.25)
+            elif mode.endswith("step"):                                              # 0.75R under each add level from +1R
+                top = 1.75 if mode != "P225step" else 2.0
+                lvl = min(top, math.floor(hwm / 0.25 + 1e-9) * 0.25)
+                stop_R = max(stop_R, lvl - 0.75)
             elif mode.endswith("avg1"):                                              # the average at +1R, then fixed
                 if avg_fixed is None: avg_fixed = avg
                 stop_R = max(stop_R, avg_fixed)
@@ -90,14 +96,14 @@ def longest_dry(v):
 def table(label, rows, slip=0.0):
     rows = sorted(rows, key=lambda x: x["t"])
     out = {m: [replay(x["bars"], x["i0"], x["up"], x["e"], x["s"], x["tp1"], x["tp2"], m, slip) for x in rows]
-           for m in ("base", "F", "S25", "P200", "P200s25", "P225s25")}
+           for m in ("base", "S25", "Sstep", "P200s25", "P200step", "P225step")}
     keep = [k for k in range(len(rows)) if all(out[m][k] for m in out)]
     half = len(keep) // 2
     print(f"{label}  (n={len(keep)}{', add slippage ' + format(slip, '.2f') + 'R each' if slip else ''})")
     print(f"  {'rule':8} {'R/trade':>8} {'costed':>8} {'vs base':>8} {'t':>6} {'t 1st½':>7} {'t 2nd½':>7} {'worst DD':>9} "
           f"{'win%':>6} {'dry run':>8} {'avg units':>9} {'max open risk':>13}")
     bc = None
-    for m in ("base", "F", "S25", "P200", "P200s25", "P225s25"):
+    for m in ("base", "S25", "Sstep", "P200s25", "P200step", "P225step"):
         v = [out[m][k] for k in keep]
         r = [x[0] for x in v]; c = [x[0] - rows[k]["cost"] * x[1] for x, k in zip(v, keep)]
         if bc is None: bc, br = c, r
