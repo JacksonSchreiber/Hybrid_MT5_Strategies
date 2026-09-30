@@ -236,6 +236,10 @@ def status() -> dict:
         if not _ensure(): return {"available": available(), "connected": False}
         try:
             ti = _mt5.terminal_info(); ai = _mt5.account_info()
+            if ti is None:                                   # stale IPC link after a terminal restart: reattach once
+                _reset()
+                if not _ensure(): return {"available": available(), "connected": False}
+                ti = _mt5.terminal_info(); ai = _mt5.account_info()
             return {"available": True, "connected": bool(ti and ti.connected), "trade_allowed": bool(ti and ti.trade_allowed),
                     "login": ai.login if ai else None, "server": ai.server if ai else None, "equity": ai.equity if ai else None, "build": ti.build if ti else None}
         except Exception:
