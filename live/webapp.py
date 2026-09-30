@@ -774,6 +774,22 @@ def _equity_series(days: int | None) -> tuple[list, list, dict]:
     return bal, eq, {"balance": bal_now, "equity": h.get("equity")}
 
 
+def equity_json(rng: str) -> dict:
+    """The equity page's series for the interactive chart. Lightweight Charts rejects duplicate or out-of-order times,
+    and the balance rebuild emits two points per deal (before/after) for its step shape - so collapse each timestamp to
+    the value AFTER it; the chart's step line type draws the same staircase from that."""
+    bal, eq, _ = _equity_series(RANGES.get(rng, 30))
+    def uniq(pts):
+        out = {}
+        for t, v in pts: out[int(t)] = round(float(v), 2)
+        return [[t, out[t]] for t in sorted(out)]
+    hb = next((h for h in (C.heartbeat(CFG, x) for x in C.symbols(CFG)) if h and (h.get("ftmo") or {}).get("initial_balance")), None) or {}
+    f = hb.get("ftmo") or {}
+    return {"balance": uniq(bal), "equity": uniq([(t, e) for t, e, _, _ in eq]),
+            "daily_floor": uniq([(t, fd) for t, _, fd, _ in eq if fd]),
+            "max_floor": f.get("max_floor"), "initial": f.get("initial_balance")}
+
+
 def _svg_chart(bal, eq, floor_max, initial) -> str:
     W, H, L, R, T, B = 960, 380, 64, 16, 14, 30
     pts = [v for _, v in bal] + [e for _, e, _, _ in eq] + [x for x in (floor_max, initial) if x]
@@ -814,6 +830,48 @@ def _svg_chart(bal, eq, floor_max, initial) -> str:
             + "".join(g) + "".join(lines) + '</svg>')
 
 
+EQUITY_JS = r'''
+(function () {
+  var box = document.getElementById('eqchart');
+  if (!box || !window.LightweightCharts) return;
+  var fmt = function (v) { return v == null ? '-' : v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); };
+  fetch('/api/equity?range=' + encodeURIComponent(box.dataset.range)).then(function (r) { return r.json(); }).then(function (d) {
+    var chart = LightweightCharts.createChart(box, {
+      height: 420, layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
+      grid: { vertLines: { color: '#1e242e' }, horzLines: { color: '#1e242e' } }, crosshair: { mode: 0 },
+      rightPriceScale: { borderColor: '#30363d', scaleMargins: { top: 0.08, bottom: 0.08 } },
+      timeScale: { borderColor: '#30363d', timeVisible: true, secondsVisible: false, rightOffset: 4 },
+      localization: { priceFormatter: fmt }, handleScale: true, handleScroll: true });
+    // keep the FTMO max-loss floor inside the autoscale, so zooming in on recent bars never scrolls the kill line off
+    var keepFloor = function (orig) {
+      var r = orig(); if (!r || d.max_floor == null) return r;
+      return { priceRange: { minValue: Math.min(r.priceRange.minValue, d.max_floor), maxValue: Math.max(r.priceRange.maxValue, d.max_floor) } };
+    };
+    var toPts = function (a) { return a.map(function (p) { return { time: p[0], value: p[1] }; }); };
+    var bal = chart.addLineSeries({ color: '#58a6ff', lineWidth: 2, lineType: 1, title: 'balance', priceLineVisible: false, autoscaleInfoProvider: keepFloor });
+    bal.setData(toPts(d.balance));
+    var eq = null, df = null;
+    if (d.equity.length) { eq = chart.addLineSeries({ color: '#3fb950', lineWidth: 2, title: 'equity', priceLineVisible: false }); eq.setData(toPts(d.equity)); }
+    if (d.daily_floor.length) { df = chart.addLineSeries({ color: '#d29922', lineWidth: 1, lineStyle: 2, lineType: 1, title: 'daily floor', priceLineVisible: false, lastValueVisible: false }); df.setData(toPts(d.daily_floor)); }
+    if (d.max_floor != null) bal.createPriceLine({ price: d.max_floor, color: '#f85149', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'FTMO floor' });
+    if (d.initial != null) bal.createPriceLine({ price: d.initial, color: '#8b949e', lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: 'start' });
+    chart.timeScale().fitContent();
+    var read = document.getElementById('eqread'), idle = read.textContent;
+    chart.subscribeCrosshairMove(function (p) {
+      if (!p || !p.time || !p.seriesData) { read.textContent = idle; return; }
+      var t = new Date(p.time * 1000), parts = [t.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'];
+      var b = p.seriesData.get(bal); if (b) parts.push('balance ' + fmt(b.value));
+      if (eq) { var e = p.seriesData.get(eq); if (e) parts.push('equity ' + fmt(e.value)); }
+      if (d.max_floor != null) { var v = (eq && p.seriesData.get(eq)) || b; if (v) parts.push('room ' + fmt(v.value - d.max_floor)); }
+      read.textContent = parts.join(' · ');
+    });
+    document.getElementById('eqfit').onclick = function () { chart.timeScale().fitContent(); };
+    if (window.ResizeObserver) new ResizeObserver(function () { chart.applyOptions({ width: box.clientWidth }); }).observe(box);
+  }).catch(function () { box.innerHTML = '<div class="k" style="padding:12px">could not load the equity series - reload to retry</div>'; });
+})();
+'''
+
+
 def equity_page(q: dict) -> str:
     rng = q.get("range") if q.get("range") in RANGES else "30d"
     bal, eq, acct = _equity_series(RANGES[rng])
@@ -842,7 +900,12 @@ def equity_page(q: dict) -> str:
               '<span style="color:#d29922">┅ daily floor</span><span style="color:#f85149">┅ FTMO max-loss floor</span></div>')
     note = ('<div class="k">Balance comes from the broker\'s own deal history, so it covers the account from the start, '
             'including the hand-traded period. Equity is sampled from today onward.</div>')
-    return page("Equity", f'<h1>Equity</h1><div class="row">{sel}</div>{tiles}{legend}{_svg_chart(bal, eq, fmax, init)}{note}', "equity")
+    chart = (f'<div class="row" style="margin:4px 0"><button class="btn" id="eqfit" type="button" style="padding:6px 12px;font-size:14px">Fit all</button>'
+             f'<span class="k" id="eqread">drag to scroll · wheel or pinch to zoom · tap or hover for values</span></div>'
+             f'<div id="eqchart" data-range="{E(rng)}" style="height:420px;border:1px solid #30363d;border-radius:8px;overflow:hidden"></div>'
+             f'<noscript>{_svg_chart(bal, eq, fmax, init)}</noscript>'
+             f'<script src="/static/lw.js?v={STATIC_V}"></script><script>{EQUITY_JS}</script>')
+    return page("Equity", f'<h1>Equity</h1><div class="row">{sel}</div>{tiles}{legend}{chart}{note}', "equity")
 
 
 def journal_page(q: dict) -> str:
@@ -1013,6 +1076,8 @@ class H(BaseHTTPRequestHandler):
             if parts[0] == "api" and len(parts) == 3 and parts[1] in ("position", "signal"):
                 if not C.safe_key(parts[2]): return self._send("bad request", "text/plain", 400)
                 return self._send(json.dumps(position_live(parts[2]) if parts[1] == "position" else signal_live(parts[2])), "application/json")
+            if parts[0] == "api" and len(parts) == 2 and parts[1] == "equity":
+                return self._send(json.dumps(equity_json(q.get("range", "30d")), separators=(",", ":")), "application/json")
             if parts[0] == "api" and len(parts) == 3 and parts[1] == "advisor":
                 if not C.safe_key(parts[2]): return self._send("bad request", "text/plain", 400)
                 h, v = advisor_section(parts[2]); return self._send(json.dumps({"html": h, "v": v}), "application/json")
