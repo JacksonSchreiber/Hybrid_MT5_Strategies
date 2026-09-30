@@ -298,9 +298,16 @@ class Monitor:
                     t = C.parse_iso(x[0])
                     if not t or t < week or (since and t < since): continue
                     if x[6] == "rate_limited": rl_days.add(x[0][:10])
-                    per_day.setdefault(x[0][:10], {})[x[2]] = (x[4] == "ok")         # last attempt per signal wins
+                    # A TIMEOUT is a latency problem, not subscription strain - this ladder exists for the latter, and
+                    # counting timeouts escalated it twice on a single slow consult (2026-09-22 and 2026-09-28, when the
+                    # cap was 200 s against a 176 s mean). Only availability failures count.
+                    avail = (x[4] == "ok") or x[6] == "timeout"
+                    per_day.setdefault(x[0][:10], {})[x[2]] = avail                  # last attempt per signal wins
         except OSError: return
-        bad_days = {d: (sum(1 for ok in v.values() if not ok), len(v)) for d, v in per_day.items() if v and sum(1 for ok in v.values() if not ok) / len(v) > 0.20}
+        # ...and a percentage needs a denominator: 1 of 3 is not a trend. MIN_DAY signals before a day can trigger.
+        MIN_DAY = 8
+        bad_days = {d: (sum(1 for ok in v.values() if not ok), len(v)) for d, v in per_day.items()
+                    if len(v) >= MIN_DAY and sum(1 for ok in v.values() if not ok) / len(v) > 0.20}
         reason = None
         if len(rl_days) >= 2: reason = f"rate-limit errors on {len(rl_days)} days in the last 7 ({', '.join(sorted(rl_days))})"
         elif bad_days:

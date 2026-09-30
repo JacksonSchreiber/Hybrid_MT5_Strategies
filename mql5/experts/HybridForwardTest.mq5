@@ -476,6 +476,9 @@ ParkSlot g_slots[MAX_PARKS];
 int      g_cfg_max_parks=1;
 string   g_cfg_wf_symbols="";   // live.json weekend_flat_symbols: roots (comma list) held to §10.1 on the LIVE path
 double   g_cfg_max_spread_r=0.0;  // live.json max_spread_r: refuse a signal whose spread costs more than this in R (0 = off)
+double   g_risk_mult_ruled=1.0;   // coach 2026-09-29: the ruled per-symbol multiplier, used only on the ladder's top rung
+string   g_ladder_rung="";       // the rung the last sized signal was priced at (published on the card and the row)
+double   g_ladder_pct=0.0;       // ...and the risk fraction that rung applied, journaled as risk_pct_gate
 double   g_cfg_d1_ext_min=0.0;    // live.json trendcont_d1_ext_min: TrendCont needs this much D1 extension, in D1 ATR (0 = off)
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
@@ -717,6 +720,33 @@ void LiveLoadRiskMult()
    if(m==""){ if(!g_rm_warned){ AuditLine("config","","","","warn","risk_mult_missing",SymbolRoot()+" -> 1.0"); g_rm_warned=true; } g_risk_mult=1.0; return; }
    double nm=StringToDouble(m); if(nm<=0.0) nm=1.0;
    g_risk_mult=nm;
+   LiveLoadRiskMultRuled();                 // same cadence: the ladder's top rung must not go stale
+  }
+
+//--- the RULED multiplier (0.5 untested / 1.0 tested) is the ladder's top rung, kept in its own file so the live
+//--- risk_mult.json can hold the recovery-ladder base without losing what the coach actually ruled per symbol.
+void LiveLoadRiskMultRuled()
+  {
+   string t=ReadTextFile(LivePath("config\\risk_mult_ruled.json"));
+   string k[],v[],err;
+   if(t=="" || !JsonFlatParse(t,k,v,err)){ g_risk_mult_ruled=g_risk_mult; return; }
+   string m=JGet(k,v,SymbolRoot(),"");
+   double nm=(m=="" ? 0.0 : StringToDouble(m));
+   g_risk_mult_ruled=(nm>0.0 ? nm : g_risk_mult);
+  }
+
+//--- HEADROOM LADDER (coach 2026-09-29, live recovery): the risk a signal is sized at is re-evaluated from the
+//--- max-loss headroom at the moment it is presented. Step-down is immediate because the headroom is read fresh;
+//--- step-up only happens on a signal that arrives with the headroom already there, which is the same thing.
+double LadderRiskPct(string &rung)
+  {
+   if(!InpLiveMode || g_ftmo_initial<=0.0){ rung=""; return(InpRiskPct*g_risk_mult); }
+   int unprot=0;
+   double hm=AccountInfoDouble(ACCOUNT_EQUITY)-AggregateRiskToStop(unprot)-FtmoMaxFloor();
+   if(hm<1000.0)      { rung=StringFormat("0.10%% (max-loss headroom %.0f < 1,000)",hm); return(0.001); }
+   if(hm<=1500.0)     { rung=StringFormat("0.25%% (max-loss headroom %.0f in 1,000-1,500)",hm); return(0.0025); }
+   rung=StringFormat("ruled x%.2f (max-loss headroom %.0f > 1,500)",g_risk_mult_ruled,hm);
+   return(InpRiskPct*g_risk_mult_ruled);
   }
 //--- config: live.json (G1/G2 knobs); written with defaults from the inputs when missing
 //--- bootstrap=true (OnInit) writes the default file when none parses; a periodic reload (heartbeat cadence, so a
@@ -1555,7 +1585,7 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    //--- these columns on a rejected row.
    g_rows[n].banked=false; g_rows[n].closed_vol=0.0; g_rows[n].ratcheted=false; g_rows[n].rt_bankr=-99.0;
    g_rows[n].rt_tp1R=0.0; g_rows[n].rt_tp2R=0.0; g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0;
-   g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct; g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=0; g_rows[n].entry_mode="rejected";
+   g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=(InpLiveMode && g_ladder_pct>0.0 ? g_ladder_pct : InpRiskPct); g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=0; g_rows[n].entry_mode="rejected";
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
    g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time);
    g_rows[n].reject_why=why;
@@ -1767,8 +1797,9 @@ void WriteSignalJson(string status,string auto_reason)
      j.KNum("detector",c.rr,2); j.KNum("runner",rr_runner,2); j.KNum("tp1",rr_tp1,2); j.KNum("floor",StratMinRR(c.strategy),2);
    j.EndObj();
    j.Key("sizing"); j.BeginObj();
-     j.KNum("lots",g_park.lots,2); j.KNum("risk_pct_gate",InpRiskPct,4); j.KNum("risk_mult_applied",g_risk_mult,3);
-     j.KNum("risk_pct_effective",InpRiskPct*g_risk_mult,4); j.KStr("lots_line",LotsLine(g_park.lots,c.entry,c.sl,atr));
+     j.KNum("lots",g_park.lots,2); j.KNum("risk_pct_gate",(g_ladder_pct>0.0?g_ladder_pct:InpRiskPct),4); j.KNum("risk_mult_applied",g_risk_mult,3);
+     if(g_ladder_rung!="") j.KStr("ladder_rung",g_ladder_rung);   // the recovery rung this card was sized at
+     j.KNum("risk_pct_effective",(g_ladder_pct>0.0?g_ladder_pct:InpRiskPct*g_risk_mult),4); j.KStr("lots_line",LotsLine(g_park.lots,c.entry,c.sl,atr));
      j.KNum("spread",SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID),_Digits);
      j.KNum("spread_r",SpreadR(c.entry,c.sl),4); j.KNum("max_spread_r",g_cfg_max_spread_r,3);   // entry cost in R (trader 2026-09-23)
      j.KNum("sl_atr",(atr>0.0? risk/atr : 0.0),2); j.KNum("atr14",atr,_Digits);
@@ -3028,7 +3059,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    if(!InpV2Exit){ ComputeImpulse(n); g_rows[n].cal_lab=CalLabeled(g_rows[n].time); }   // STUDY-ONLY features (no live footprint)
    g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
    //--- PHASE 3 LIVE columns (never written in the tester; see WriteJournal)
-   g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=InpRiskPct;
+   g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=(InpLiveMode && g_ladder_pct>0.0 ? g_ladder_pct : InpRiskPct);
    g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=(g_live_auto?1:0); g_rows[n].entry_mode=entry_mode;
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
    g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time); g_rows[n].reject_why="";
@@ -4387,7 +4418,9 @@ double MarginCapLots(double entry,double sl,double lots)
 
 double SizeByRisk(double entry,double sl)
   {
-   double lots=LotsForRisk(_Symbol,entry,sl,InpRiskPct*g_risk_mult);   // shared math (floored, no clamp); g_risk_mult=1.0 unless LIVE (C2: sizing only, detectors untouched)
+   //--- the ladder decides the risk in live; the tester keeps InpRiskPct*g_risk_mult exactly as before (parity)
+   string rung=""; double rpct=LadderRiskPct(rung); g_ladder_rung=rung; g_ladder_pct=rpct;
+   double lots=LotsForRisk(_Symbol,entry,sl,rpct);                     // shared math (floored, no clamp)
    double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
    if(lots<=0.0)
      {

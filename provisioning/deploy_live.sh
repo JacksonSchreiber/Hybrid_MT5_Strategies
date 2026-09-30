@@ -20,7 +20,7 @@ QCFG='C:/Users/hybridops/AppData/Roaming/MetaQuotes/Terminal/Common/Files/live/c
 if [[ "$MODE" == "--config" || "$MODE" == "--ea" ]]; then
   # queue config (single source: provisioning/). risk_mult.json is re-read at the poll cadence and live.json at the
   # heartbeat cadence, so a --config deploy lands within a minute without restarting MT5.
-  $SCP "$REPO"/provisioning/lineup.txt "$REPO"/provisioning/risk_mult.json "$REPO"/provisioning/live.json "$REPO"/provisioning/lineup_history.json "$HOST:$QCFG/"
+  $SCP "$REPO"/provisioning/lineup.txt "$REPO"/provisioning/risk_mult.json "$REPO"/provisioning/risk_mult_ruled.json "$REPO"/provisioning/live.json "$REPO"/provisioning/lineup_history.json "$HOST:$QCFG/"
   log "queue config copied (lineup.txt, risk_mult.json, live.json, lineup_history.json)"
 fi
 if [[ "$MODE" == "--ea" ]]; then
@@ -42,7 +42,8 @@ $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
 $SCP "$REPO"/config/symbol_rules.json "$HOST:$APP/symbol_rules.json"      # per-symbol doctrine flags (class + suspended session rules) for the advisor card
 $SCP "$REPO"/provisioning/live_tasks.ps1 "$HOST:C:/ProgramData/hybrid/live_tasks.ps1"
 $SCP "$REPO"/provisioning/maintenance.ps1 "$HOST:C:/ProgramData/hybrid/maintenance.ps1"
-$SCP "$REPO"/provisioning/load_check.ps1 "$HOST:C:/ProgramData/hybrid/load_check.ps1"   # capacity check: terminal64 CPU/RAM + heartbeat ages
+$SCP "$REPO"/provisioning/load_check.ps1 "$HOST:C:/ProgramData/hybrid/load_check.ps1"
+$SCP "$REPO"/provisioning/sshd-keeper.ps1 "$HOST:C:/ProgramData/hybrid/sshd-keeper.ps1"   # probes for a real SSH banner (2026-09-30 lockout)   # capacity check: terminal64 CPU/RAM + heartbeat ages
 log "code + config copied"
 if [[ "$MODE" == "full" || "$MODE" == "--calendar" ]]; then
   # calendar pipeline: normalizer + classifier + coverage test + rules + history (3 MB) - the box rebuilds econ_events.csv daily

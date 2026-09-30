@@ -95,7 +95,8 @@ sc.exe config sshd start= delayed-auto | Out-Null
 sc.exe failure sshd reset= 0 actions= restart/5000/restart/15000/restart/60000 | Out-Null
 sc.exe failureflag sshd 1 | Out-Null
 $keeperPs1 = 'C:\ProgramData\hybrid\sshd-keeper.ps1'
-Set-Content -Path $keeperPs1 -Encoding ascii -Value 'if ((Get-Service sshd).Status -ne "Running") { Start-Service sshd }'
+# the keeper probes for an actual SSH banner, not the service state - a wedged sshd reports Running (see the file)
+Copy-Item -Path (Join-Path $PSScriptRoot 'sshd-keeper.ps1') -Destination $keeperPs1 -Force
 $kAct = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $keeperPs1"
 $kT1 = New-ScheduledTaskTrigger -AtStartup; $kT1.Delay = 'PT1M'
 $kT2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
