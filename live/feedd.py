@@ -35,6 +35,11 @@ class H(BaseHTTPRequestHandler):
                 except ValueError: return self._j({"error": "bad request"}, 400)
                 if not C.safe_key(sym) or tf not in mt5feed.TF or b_ <= a_ or b_ - a_ > 120 * 86400: return self._j({"error": "bad request"}, 400)
                 return self._j({"bars": mt5feed.bars_range(sym, tf, a_, b_)})
+            if u.path == "/balance_history":
+                try: a_, b_ = int(q.get("from", "0")), int(q.get("to", "0"))
+                except ValueError: return self._j({"error": "bad request"}, 400)
+                if b_ <= a_: return self._j({"error": "bad request"}, 400)
+                return self._j(mt5feed.balance_history(a_, b_) or {"deals": [], "balance": None})
             if u.path == "/deals":
                 try: pid = int(q.get("position", "0"))
                 except ValueError: return self._j({"error": "bad request"}, 400)

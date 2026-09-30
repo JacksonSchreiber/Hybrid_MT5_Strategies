@@ -7,12 +7,11 @@ Every task written and every ack received is appended to <root>/web/web_audit.lo
 the boundary (trader ruling 2026-09-15); HTTP inside WireGuard.
 """
 from __future__ import annotations
-import hashlib, html, json, os, re, sys, urllib.parse, threading
+import csv, hashlib, html, json, os, re, sys, time, urllib.parse, threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
-import re
 from live import charts
 from live import advisor_runner as AR
 from live import verdict_fmt as VF
@@ -85,7 +84,7 @@ var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.que
 """
 
 def page(title: str, body: str, active: str = "", refresh: int | None = None) -> str:
-    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
+    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
     nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs) + '<span id="utc" class="k" style="margin-left:auto;align-self:center;white-space:nowrap;font-variant-numeric:tabular-nums"></span>'
     m = f'<meta name="autorefresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -663,8 +662,29 @@ def pending_card(o: dict, link: bool = False) -> str:
     body += (f'<div><span class="k">SL / TP</span> <b class="v bad">{o["sl"]}</b> / <b class="v">{o["tp"]}</b></div>'
              f'<div><span class="k">lots</span> <b class="v">{o["volume"]}</b></div><div><span class="k">EA cancels if unfilled</span> <b class="v">{cancel_txt(o)}</b></div></div>'
              f'<div class="k">fills when the {"ask" if o["buy"] else "bid"} reaches {o["price"]}; it then becomes an open position with the +1R bank and BE rules</div>')
+    # Enter now at the market instead of waiting for the price to come back (trader ruling 2026-09-30). Shown with what
+    # the move does to the trade: price nearer the stop shortens it, which RAISES R:R and cuts the loss if it fails -
+    # that is often the better entry, not a concession, so the numbers are on the button rather than a warning.
+    fill = ""
+    if o.get("signal_key"):
+        mkt, sl, tp, px = o.get("market"), o.get("sl"), o.get("tp"), o.get("price")
+        note = ""
+        try:
+            if mkt and sl and px:
+                now_stop, plan_stop = abs(float(mkt) - float(sl)), abs(float(px) - float(sl))
+                pct = (now_stop / plan_stop * 100) if plan_stop else 0
+                rr_now = (abs(float(tp) - float(mkt)) / now_stop) if (tp and now_stop) else None
+                rr_pl = (abs(float(tp) - float(px)) / plan_stop) if (tp and plan_stop) else None
+                better = pct < 100
+                note = (f'<div class="k">at the market now: stop {now_stop:.5f} ({pct:.0f}% of planned)'
+                        + (f' · R:R {rr_pl:.2f} → <b class="{"ok" if better else "warn"}">{rr_now:.2f}</b>' if rr_now and rr_pl else "")
+                        + (' · nearer the stop, so a smaller loss if it fails' if better else ' · further from the stop, so a bigger one') + '</div>')
+        except (TypeError, ValueError): pass
+        fill = (note + f'<form method="post" action="/task" style="margin-top:6px"><input type="hidden" name="key" value="{E(o["signal_key"])}"><input type="hidden" name="verb" value="fill_now">'
+                f'<button class="btn go" onclick="return confirm(\'Enter {E(o["symbol"])} at the market now instead of waiting for {o["price"]}?\')">Enter at market now</button></form>')
     cancel = (f'<form method="post" action="/task" style="margin-top:8px"><input type="hidden" name="key" value="{E(o["signal_key"])}"><input type="hidden" name="verb" value="cancel_pending">'
               f'<button class="btn no" onclick="return confirm(\'Cancel the resting order for {E(o["signal_key"])}?\')">Cancel order</button></form>') if o.get("signal_key") else ""
+    cancel = fill + cancel
     inner = body[len('<div class="card">'):] if body.startswith('<div class="card">') else body
     if link and o.get("signal_key"):
         return f'<div class="card"><a href="/signal/{E(o["signal_key"])}" style="color:inherit">' + inner + '</a>' + cancel + '</div>'
@@ -710,6 +730,119 @@ def position_page(key: str, q: dict) -> str:
             out.append(f'<tr><td class="k">{E(a.get("executed_at", ""))}</td><td>{E(a.get("verb", ""))}</td><td class="{"ok" if a.get("result") == "accepted" else "bad"}">{E(a.get("result", ""))}</td><td>{E(a.get("reason", ""))}</td></tr>')
         out.append("</table></div>")
     return page(f"pos {p['posid']}", "".join(out), "home")        # no full-page refresh: the live fields poll /api/position (the chart keeps its view)
+
+# ----------------------------------------------------------------------------- equity history (trader 2026-09-30)
+RANGES = {"7d": 7, "30d": 30, "90d": 90, "all": None}
+
+def _equity_series(days: int | None) -> tuple[list, list, dict]:
+    """(balance points, equity samples, account) in TRUE UTC epochs. Balance comes from the broker's own deal history,
+    rebuilt BACKWARDS from today's balance so it is anchored even if the window misses the first deposit; deal times
+    are broker clock and are converted. Equity comes from the monitor's 5-minute samples."""
+    from live import mt5feed
+    now = time.time()
+    t0 = now - days * 86400 if days else datetime(2015, 1, 1, tzinfo=timezone.utc).timestamp()
+    h = mt5feed.balance_history(int(t0), int(now) + 86400) or {}
+    deals = h.get("deals") or []
+    off = lambda t: t - C.server_offset_h(datetime.fromtimestamp(t, timezone.utc), CFG) * 3600
+    bal_now = h.get("balance")
+    bal: list[tuple[float, float]] = []
+    if bal_now is not None:
+        b = float(bal_now); bal.append((now, b))
+        start_t = t0
+        for t, d, kind, sym in reversed(deals):
+            tu = off(t)
+            if tu < t0: break
+            bal.append((tu, b))
+            if kind == "funding":           # the curve begins AT the funding - before it the account did not exist, and
+                start_t = None; break       # plotting its zero drags the axis to 0 and flattens the real curve to a sliver
+            b -= d; bal.append((tu, b))
+        if start_t is not None: bal.append((max(t0, off(deals[0][0]) - 3600) if deals else t0, b))
+        bal.reverse()
+    eq: list[tuple[float, float, float | None, float | None]] = []
+    p = os.path.join(CFG["root"], "web", "equity.csv")
+    if os.path.exists(p):
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for r in csv.DictReader(f):
+                t = C.parse_iso(r.get("ts"))
+                try: e = float(r["equity"])
+                except (TypeError, ValueError, KeyError): continue
+                if not t or t.timestamp() < t0: continue
+                fd = float(r["daily_floor"]) if r.get("daily_floor") else None
+                fm = float(r["max_floor"]) if r.get("max_floor") else None
+                eq.append((t.timestamp(), e, fd, fm))
+    return bal, eq, {"balance": bal_now, "equity": h.get("equity")}
+
+
+def _svg_chart(bal, eq, floor_max, initial) -> str:
+    W, H, L, R, T, B = 960, 380, 64, 16, 14, 30
+    pts = [v for _, v in bal] + [e for _, e, _, _ in eq] + [x for x in (floor_max, initial) if x]
+    ts = [t for t, _ in bal] + [t for t, *_ in eq]
+    if len(ts) < 2 or not pts: return '<div class="card k">not enough history yet - equity is sampled every 5 minutes from today</div>'
+    lo, hi = min(pts), max(pts); pad = (hi - lo) * 0.06 or 50; lo -= pad; hi += pad
+    t0, t1 = min(ts), max(ts)
+    if t1 <= t0: t1 = t0 + 1
+    X = lambda t: L + (t - t0) / (t1 - t0) * (W - L - R)
+    Y = lambda v: T + (hi - v) / (hi - lo) * (H - T - B)
+    g = []
+    for i in range(6):                                            # horizontal grid + y labels
+        v = lo + (hi - lo) * i / 5; y = Y(v)
+        g.append(f'<line x1="{L}" y1="{y:.1f}" x2="{W - R}" y2="{y:.1f}" stroke="#30363d" stroke-width="1"/>'
+                 f'<text x="{L - 6}" y="{y + 4:.1f}" text-anchor="end" font-size="11" fill="#8b949e">{v:,.0f}</text>')
+    for i in range(6):                                            # x labels
+        t = t0 + (t1 - t0) * i / 5
+        g.append(f'<text x="{X(t):.1f}" y="{H - 8}" text-anchor="middle" font-size="11" fill="#8b949e">'
+                 f'{datetime.fromtimestamp(t, timezone.utc):%d %b}</text>')
+    def hline(v, color, label, dash):
+        if v is None or not (lo <= v <= hi): return ""
+        y = Y(v)
+        return (f'<line x1="{L}" y1="{y:.1f}" x2="{W - R}" y2="{y:.1f}" stroke="{color}" stroke-width="1.5" stroke-dasharray="{dash}"/>'
+                f'<text x="{W - R - 4}" y="{y - 5:.1f}" text-anchor="end" font-size="11" fill="{color}">{E(label)}</text>')
+    lines = [hline(initial, "#8b949e", f"start {initial:,.0f}" if initial else "", "2 4"),
+             hline(floor_max, "#f85149", f"FTMO max-loss floor {floor_max:,.0f}" if floor_max else "", "6 4")]
+    if len(bal) >= 2:                                             # balance as a step line - it only moves on a closed deal
+        d = f"M{X(bal[0][0]):.1f},{Y(bal[0][1]):.1f}" + "".join(f" L{X(t):.1f},{Y(v):.1f}" for t, v in bal[1:])
+        lines.append(f'<path d="{d}" fill="none" stroke="#58a6ff" stroke-width="2"/>')
+    dfl = [(t, fd) for t, _, fd, _ in eq if fd]
+    if len(dfl) >= 2:
+        d = f"M{X(dfl[0][0]):.1f},{Y(dfl[0][1]):.1f}" + "".join(f" L{X(t):.1f},{Y(v):.1f}" for t, v in dfl[1:])
+        lines.append(f'<path d="{d}" fill="none" stroke="#d29922" stroke-width="1.2" stroke-dasharray="3 3"/>')
+    if len(eq) >= 2:
+        d = f"M{X(eq[0][0]):.1f},{Y(eq[0][1]):.1f}" + "".join(f" L{X(t):.1f},{Y(e):.1f}" for t, e, _, _ in eq[1:])
+        lines.append(f'<path d="{d}" fill="none" stroke="#3fb950" stroke-width="1.6"/>')
+    return (f'<svg viewBox="0 0 {W} {H}" style="width:100%;height:auto;background:#0b0f14;border:1px solid #30363d;border-radius:8px">'
+            + "".join(g) + "".join(lines) + '</svg>')
+
+
+def equity_page(q: dict) -> str:
+    rng = q.get("range") if q.get("range") in RANGES else "30d"
+    bal, eq, acct = _equity_series(RANGES[rng])
+    hb = next((h for h in (C.heartbeat(CFG, s) for s in C.symbols(CFG)) if h and (h.get("ftmo") or {}).get("initial_balance")), None) or {}
+    f = hb.get("ftmo") or {}
+    fmax, init = f.get("max_floor"), f.get("initial_balance")
+    cur = float(acct.get("equity") or hb.get("equity") or 0)
+    series = [v for _, v in bal] + [e for _, e, _, _ in eq]
+    start = (bal[0][1] if bal else (eq[0][1] if eq else cur))
+    peak, dd, run = start, 0.0, start
+    for v in [v for _, v in sorted([(t, v) for t, v in bal] + [(t, e) for t, e, _, _ in eq])]:
+        run = v; peak = max(peak, v); dd = max(dd, peak - v)
+    chg = cur - start
+    sel = " ".join(f'<a href="/equity?range={k}" class="pill{" take" if k == rng else ""}">{k}</a>' for k in RANGES)
+    tiles = (f'<div class="grid2">'
+             f'<div class="card"><div class="k">equity now</div><div class="big">{cur:,.2f}</div>'
+             f'<div class="k {"ok" if chg >= 0 else "bad"}">{chg:+,.2f} ({(chg / start * 100) if start else 0:+.2f}%) over {rng}</div></div>'
+             f'<div class="card"><div class="k">room to the max-loss floor</div><div class="big {"bad" if fmax and cur - fmax < 500 else ""}">'
+             f'{(cur - fmax) if fmax else 0:,.2f}</div><div class="k">floor {fmax:,.0f}</div></div>' if fmax else
+             f'<div class="grid2"><div class="card"><div class="k">equity now</div><div class="big">{cur:,.2f}</div></div>')
+    tiles += (f'<div class="card"><div class="k">peak in range</div><div class="big">{peak:,.2f}</div></div>'
+              f'<div class="card"><div class="k">largest drop from a peak</div><div class="big bad">{dd:,.2f}</div>'
+              f'<div class="k">{(dd / peak * 100) if peak else 0:.2f}% of the peak</div></div></div>')
+    legend = ('<div class="row k" style="margin:6px 0"><span style="color:#58a6ff">━ balance (closed trades)</span>'
+              '<span style="color:#3fb950">━ equity (sampled every 5 min)</span>'
+              '<span style="color:#d29922">┅ daily floor</span><span style="color:#f85149">┅ FTMO max-loss floor</span></div>')
+    note = ('<div class="k">Balance comes from the broker\'s own deal history, so it covers the account from the start, '
+            'including the hand-traded period. Equity is sampled from today onward.</div>')
+    return page("Equity", f'<h1>Equity</h1><div class="row">{sel}</div>{tiles}{legend}{_svg_chart(bal, eq, fmax, init)}{note}', "equity")
+
 
 def journal_page(q: dict) -> str:
     sym = q.get("symbol") or None; rows = C.journal_rows(CFG, sym)
@@ -831,8 +964,9 @@ def do_task(form: dict) -> tuple[str, bool, str]:
         if s.get("status") != "approved_pending": return f"/signal/{key}", False, f"signal is {s.get('status')}, no resting order"
         tid = C.write_task(CFG, s["symbol"], verb, {}, signal_id=s["signal_id"])
         a = C.wait_ack(CFG, tid, 12.0)
-        if not a: return f"/signal/{key}", False, "cancel: task written, no ack within 12 s - check again shortly"
-        return f"/signal/{key}", a.get("result") == "accepted", f"cancel pending order: {a.get('result')} - {C.reason_text(a.get('reason'))}"
+        what = "enter at market" if verb == "fill_now" else "cancel pending order"
+        if not a: return f"/signal/{key}", False, f"{what}: task written, no ack within 12 s - check again shortly"
+        return f"/signal/{key}", a.get("result") == "accepted", f"{what}: {a.get('result')} - {C.reason_text(a.get('reason'))}"
     elif verb in C.VERBS_ADMIN:
         sym = form.get("symbol", "")
         if sym not in C.symbols(CFG): return "/settings", False, "unknown symbol"
@@ -898,6 +1032,7 @@ class H(BaseHTTPRequestHandler):
             if parts[0] == "position" and len(parts) == 2: return self._send(position_page(parts[1], q))
             if parts[0] == "context": return self._send(context_page(q))
             if parts[0] == "journal": return self._send(journal_page(q))
+            if parts[0] == "equity": return self._send(equity_page(q))
             if parts[0] == "events": return self._send(events_page(q))
             if parts[0] == "settings": return self._send(settings_page(q))
             if parts[0] == "chart" and len(parts) == 3 and parts[2] in ("h4.png", "d1.png"):

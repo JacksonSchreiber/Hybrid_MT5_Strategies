@@ -152,6 +152,20 @@ def main():
     info.append(f"journal totals: {len(all_rows)} rows, skip8={skip8}, skip2(auto)={skip2auto}")
     if st.get("expired",0) and skip8==0: fail("signals expired but no skip_reason=8 journal row")
     if a.expect_live_cols and st.get("auto_skipped",0) and not any(r.get("auto","0")=="1" and r.get("skip_reason") in ("2","10") for r in all_rows): fail("signals auto_skipped but no journal row with skip_reason 2|10 & auto=1")
+    # --- fill_now (trader ruling 2026-09-30): an ACCEPTED fill must have produced a position on the same row ---
+    if a.expect_selftest:
+        fn = [p_ for p_ in glob.glob(os.path.join(R, "acks", "st-*-fill-now.json"))]
+        if not fn: fail("selftest: no fill_now task was issued (the stage never found a resting pending order)")
+        for p_ in fn:
+            ak = json.load(open(p_)); sid = str(ak.get("signal_id") or re.search(r"st-(\d+)-fill", p_).group(1))
+            if ak.get("result") == "accepted":
+                row = next((r for r in all_rows if r.get("signal_id") == sid), None)
+                if not row: fail(f"selftest: fill_now accepted for #{sid} but no journal row")
+                elif not row.get("posid") or row.get("posid") == "0": fail(f"selftest: fill_now accepted for #{sid} but the row has no position")
+                else: info.append(f"fill_now #{sid}: accepted -> position {row.get('posid')} at {row.get('entry')} ({row.get('lots')} lots)")
+            else: info.append(f"fill_now #{sid}: {ak.get('result')} - {ak.get('reason')} (a refusal is legal; it must name a reason)")
+            if ak.get("result") != "accepted" and not ak.get("reason"): fail(f"selftest: fill_now #{sid} refused without a reason")
+
     # --- delays (torn last line tolerated) ---
     for p in glob.glob(os.path.join(R,"journal",f"{S}_*.delays.csv")):
         lines=open(p,encoding="ascii",errors="replace").read().split("\n")

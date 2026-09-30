@@ -178,6 +178,29 @@ def position_costs(posid: int) -> dict | None:
         return {"n": len(ds), "symbol": sym, **tot, "net": sum(tot.values()),
                 "tick_value": float(si.trade_tick_value) if si else None, "tick_size": float(si.trade_tick_size) if si else None}
 
+def balance_history(t_from: int, t_to: int) -> dict | None:
+    """Every deal that moved the balance between two epochs, oldest first, plus the balance NOW - so the caller can
+    rebuild the curve backwards from a known anchor even if the window misses the account's first deposit.
+    {"balance": float, "deals": [[t, delta, kind, symbol], ...]}; delta = profit + swap + commission + fee."""
+    if FEED_URL:
+        r = _remote(f"/balance_history?from={int(t_from)}&to={int(t_to)}", 15.0); return r
+    from datetime import datetime as _dt, timezone as _tz
+    with _lock:
+        if not _ensure(): return None
+        try:
+            ds = _mt5.history_deals_get(_dt.fromtimestamp(t_from, _tz.utc), _dt.fromtimestamp(t_to, _tz.utc))
+            ai = _mt5.account_info()
+        except Exception:
+            _reset(); return None
+        out = []
+        for d in (ds or []):
+            delta = float((d.profit or 0.0) + (d.swap or 0.0) + (d.commission or 0.0) + (getattr(d, "fee", 0.0) or 0.0))
+            if abs(delta) < 1e-9: continue                      # entry deals and zero-cost fills do not move the balance
+            kind = "funding" if d.type == getattr(_mt5, "DEAL_TYPE_BALANCE", 2) else "trade"
+            out.append([int(d.time), round(delta, 2), kind, d.symbol or ""])
+        out.sort(key=lambda x: x[0])
+        return {"balance": float(ai.balance) if ai else None, "equity": float(ai.equity) if ai else None, "deals": out}
+
 def spreads(symbol: str, n: int = 10000) -> dict | None:
     """per-M1-bar spread history: {point, rows:[[t_epoch, spread_points]]}. MT5 records the spread on every bar, so the
     spread profile by hour is measurable from history instead of sampled live (trader 2026-09-23)."""

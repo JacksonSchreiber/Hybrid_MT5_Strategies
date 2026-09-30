@@ -1514,6 +1514,20 @@ double SignalATR()
 //--- floor screens reward, not risk). A stop tighter than this is rejected so a
 //--- degenerate signal can't feed the 1%-risk sizer a near-zero distance and
 //--- produce a monster position.
+//--- The floor that still binds when the TRADER picks the entry price. MinStopDist's ATR term is a SIGNAL-quality
+//--- rule - it stops a detector drawing a 1.9-pip stop - and has no business vetoing a trader who waited for price to
+//--- consolidate next to the stop. That entry is usually the better one: same targets, shorter stop, so a higher R:R
+//--- and a smaller loss if it fails (trader ruling 2026-09-30). What remains is what the broker itself enforces.
+double MinStopDistHard()
+  {
+   double spread=SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   if(spread<0.0) spread=0.0;
+   double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   double m=InpMinStopSpreads*spread;
+   if(stops>m) m=stops;
+   return m;
+  }
+
 double MinStopDist(double atr)
   {
    double spread=SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID);
@@ -2509,6 +2523,86 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       WriteJournal(g_journal_part);
       row_idx=idx; reason="ok"; return "accepted";
      }
+   //--- FILL NOW (trader ruling 2026-09-30): take a resting pending order at the market instead of waiting for the
+   //--- price to come back. The trader asked explicitly to be able to do this even when the market has moved PAST the
+   //--- planned entry, so the R:R floor and the "price past a level" geometry test do NOT apply here - a worse entry
+   //--- is the thing being chosen. What still binds is what makes a trade impossible or breaks an account rule:
+   //--- price already through the stop or past the final target, a degenerate stop, the spread gate, and FTMO
+   //--- headroom. Lots are re-sized from the ACTUAL market price so the risk stays on the ladder's rung.
+   if(verb=="fill_now")
+     {
+      int sid=(int)StringToInteger(JGet(k,v,"signal_id","0"));
+      int idx=RowIdxBySid(sid);
+      if(sid<=0 || idx<0){ reason="unknown_signal"; return "rejected"; }
+      row_idx=idx;
+      if(!g_rows[idx].is_pending || g_rows[idx].posid>0 || g_rows[idx].closed || g_rows[idx].order_ticket<=0)
+        { reason=(g_rows[idx].posid>0 ? "already_filled" : "not_pending"); return "rejected"; }
+      if(!g_trading_enabled){ reason="trading_disabled"; return "rejected"; }
+      int dir=g_rows[idx].direction;
+      double sl=g_rows[idx].sl, tp=g_rows[idx].tp;
+      double mk=NormPrice(dir>0 ? SymbolInfoDouble(_Symbol,SYMBOL_ASK) : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+      if(mk<=0.0){ reason="no_price"; return "rejected"; }
+      if(dir>0 ? (mk<=sl) : (mk>=sl)){ reason="price_through_sl"; return "rejected"; }
+      if(tp>0.0 && (dir>0 ? (mk>=tp) : (mk<=tp))){ reason="price_past_target"; return "rejected"; }
+      double minstop=MinStopDistHard();          // broker stops level / spread only - NOT the 0.5-ATR signal floor
+      if(MathAbs(mk-sl)<minstop)
+        { reason=StringFormat("stop_too_tight:%s to SL, broker minimum %s",DoubleToString(MathAbs(mk-sl),_Digits),DoubleToString(minstop,_Digits)); return "rejected"; }
+      double spr=SpreadR(mk,sl);
+      if(g_cfg_max_spread_r>0.0 && spr>g_cfg_max_spread_r)
+        { reason=StringFormat("spread_too_wide:%.3fR of the stop (max %.3fR)",spr,g_cfg_max_spread_r); return "rejected"; }
+      double lots=SizeByRisk(mk,sl);
+      if(lots<=0.0){ reason="lots_zero"; return "rejected"; }
+      string fwhy="";
+      if(!FtmoHeadroomOK(lots,mk,sl,fwhy,task_id)){ reason=fwhy; return "rejected"; }
+      double rr=(dir>0 ? (tp-mk)/(mk-sl) : (mk-tp)/(sl-mk));
+      double planned=g_rows[idx].entry;
+      if(!OrderSelect((ulong)g_rows[idx].order_ticket)){ reason="order_not_found"; return "rejected"; }
+      if(!g_trade.OrderDelete((ulong)g_rows[idx].order_ticket) && !LiveDone())
+        { reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+      string caption=StringFormat("Signal #%d %s %s",sid,g_rows[idx].strategy,DirStr(dir));
+      bool ok=(dir>0 ? g_trade.Buy(lots,_Symbol,0.0,sl,tp,caption) : g_trade.Sell(lots,_Symbol,0.0,sl,tp,caption));
+      if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); g_rows[idx].order_ticket=0; g_rows[idx].is_pending=false;
+               g_rows[idx].decision="cancelled"; g_rows[idx].terminal="cancelled"; g_rows[idx].closed=true; WriteJournal(g_journal_part); return "rejected"; }
+      g_rows[idx].is_pending=false; g_rows[idx].order_ticket=0; g_rows[idx].lots=lots; g_rows[idx].entry_mode="market_now_from_pending";
+      ulong deal=g_trade.ResultDeal(); bool bound=false;
+      for(int tries=0;tries<10 && !bound;tries++)
+        {
+         if(deal>0 && HistoryDealSelect(deal))
+           {
+            g_rows[idx].posid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID);
+            double fill=HistoryDealGetDouble(deal,DEAL_PRICE);
+            if(fill>0.0){ g_rows[idx].entry=fill; g_rows[idx].risk_px=MathAbs(fill-sl); }
+            bound=(g_rows[idx].posid>0);
+           }
+         if(!bound && InpLiveMode && !(bool)MQLInfoInteger(MQL_TESTER)) Sleep(200);
+         else break;
+        }
+      if(!bound)
+        {
+         for(int pz=PositionsTotal()-1;pz>=0 && !bound;pz--)
+           {
+            ulong tk=PositionGetTicket(pz); if(tk==0) continue;
+            if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+            if(StringFind(PositionGetString(POSITION_COMMENT),StringFormat("Signal #%d ",sid))!=0) continue;
+            g_rows[idx].posid=(long)PositionGetInteger(POSITION_IDENTIFIER);
+            double fill=PositionGetDouble(POSITION_PRICE_OPEN);
+            if(fill>0.0){ g_rows[idx].entry=fill; g_rows[idx].risk_px=MathAbs(fill-sl); }
+            bound=true;
+           }
+        }
+      string sp=LivePath(StringFormat("signals\\%s-%d.json",_Symbol,sid)); string js=ReadTextFile(sp);
+      if(js!=""){ StringReplace(js,"\"status\":\"approved_pending\"","\"status\":\"approved\""); AtomicWriteText(sp,js); }
+      double plan_stop=MathAbs(planned-sl), now_stop=MathAbs(mk-sl);
+      double rr_plan=(plan_stop>0.0 ? (dir>0 ? (tp-planned)/plan_stop : (planned-tp)/plan_stop) : 0.0);
+      AuditLine("fill_now",task_id,"fill_now",StringFormat("sig:%d",sid),"accepted","ok",
+                StringFormat("planned %s -> market %s · stop %s -> %s (%.0f%% of planned) · R:R %.2f -> %.2f · lots %.2f · spread %.3fR",
+                             DoubleToString(planned,_Digits),DoubleToString(mk,_Digits),
+                             DoubleToString(plan_stop,_Digits),DoubleToString(now_stop,_Digits),
+                             (plan_stop>0.0 ? now_stop/plan_stop*100.0 : 0.0),rr_plan,rr,lots,spr));
+      WriteJournal(g_journal_part);
+      reason="ok"; return "accepted";
+     }
+
    //--- trader-issued TEST signal (live only, never in the tester): a synthetic setup at the current price with an
    //--- ATR-sized stop, published and parked exactly like a detector signal so the whole chain (ping, verdict, approve,
    //--- fill, position verbs) is exercised on the demo. Journal/signal strategy = "TEST" - graders filter it out.
@@ -2644,7 +2738,7 @@ void LiveProcessTasks()
       long target_id=StringToInteger(JGet(k,v,target_key,"0"));
       if(JGet(k,v,"schema_version","")!=(string)LIVE_SCHEMA_VERSION){ result="rejected"; reason="schema_version_unsupported"; }
       else if(tsym!=_Symbol){ result="rejected"; reason="symbol_mismatch"; }
-      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"&&verb!="cancel_pending"){ result="rejected"; reason="unknown_verb"; }
+      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"&&verb!="cancel_pending"&&verb!="fill_now"){ result="rejected"; reason="unknown_verb"; }
       else
         {
          datetime issued=IsoToTime(JGet(k,v,"issued_at",""));
@@ -2746,6 +2840,21 @@ void SelfTestTick()
    //--- risk_mult cleanup: after the halved approve is acked, restore 1.0 (the multiplier is sizing-only, C2)
    if(ack_poll && !st_mult_restored && FileIsExist(LivePath("acks\\st-13-approve-half.json"),FILE_COMMON))
      { st_mult_restored=true; AtomicWriteText(LivePath("config\\risk_mult.json"),StringFormat("{\"%s\":1.0}",SymbolRoot())); }
+   //--- FILL NOW (trader ruling 2026-09-30): once a pending approve has been acked and the order is still resting,
+   //--- take it at the market. Expect an accepted ack, the row turned into a position (posid set, entry_mode
+   //--- market_now_from_pending) and a fill_now audit line carrying the planned-vs-market stop and R:R.
+   static bool st_fill_done=false;
+   if(ack_poll && !st_fill_done)
+     {
+      for(int rr=0;rr<ArraySize(g_rows);rr++)
+        {
+         if(!g_rows[rr].is_pending || g_rows[rr].posid>0 || g_rows[rr].closed || g_rows[rr].order_ticket<=0) continue;
+         if(!FileIsExist(LivePath(StringFormat("acks\\st-%d-approve-pending.json",g_rows[rr].id)),FILE_COMMON)) continue;
+         st_fill_done=true;
+         SelfTestWriteTask(StringFormat("st-%d-fill-now",g_rows[rr].id),"signal_id",g_rows[rr].id,"fill_now","{}");
+         break;
+        }
+     }
    //--- duplicate task_id: re-issue the FIRST approve after it was acked (expect audit `duplicate`, no 2nd ack/exec)
    if(ack_poll && !st_dup_done && st_sid_done>=1 && FileIsExist(LivePath("acks\\st-1-approve.json"),FILE_COMMON))
      { st_dup_done=true; SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\"}"); }

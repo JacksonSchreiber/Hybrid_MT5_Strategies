@@ -385,8 +385,28 @@ class Monitor:
                       f"outcome).\nopinion TAKE: {m(tk)}\nopinion SKIP (blind outcome): {m(sk)}\n"
                       "That is the first read on whether the advisor's own view carries anything.")
 
+    # Equity history (trader 2026-09-30): the broker's deal history gives the BALANCE curve for free, but equity - what
+    # the account is worth with positions open, and what FTMO actually measures - exists only in the moment. So sample
+    # it every EQUITY_EVERY_S from the newest heartbeat, with the two floors beside it so the chart can show the room.
+    EQUITY_EVERY_S = 300
+
+    def equity_sample(self):
+        now = time.time()
+        if now - self.st.get("equity_last", 0) < self.EQUITY_EVERY_S: return
+        hbs = [C.heartbeat(self.cfg, s) for s in C.symbols(self.cfg)]
+        hbs = [h for h in hbs if h and h.get("equity") is not None]
+        if not hbs: return
+        hb = max(hbs, key=lambda h: C.parse_iso(h.get("ts")) or C.now_utc())
+        f = hb.get("ftmo") or {}
+        p = os.path.join(self.cfg["root"], "web", "equity.csv")
+        new = not os.path.exists(p)
+        C.append_line(p, ("ts,equity,balance,daily_floor,max_floor,agg_risk\n" if new else "") +
+                      f"{C.now_iso()},{hb.get('equity')},{hb.get('balance')},{f.get('daily_floor', '')},{f.get('max_floor', '')},"
+                      f"{hb.get('aggregate_risk_to_stop', '')}")
+        self.st["equity_last"] = now
+
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch, self.equity_sample):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()

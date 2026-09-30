@@ -13,7 +13,7 @@ SCHEMA_VERSION = 1
 VERBS_SIGNAL = ("approve", "skip", "delay")
 VERBS_POSITION = ("close", "close50", "sl_be", "ratchet_tp1")
 VERBS_ADMIN = ("test_signal",)          # trader-issued synthetic signal (live only)
-VERBS_PENDING = ("cancel_pending",)     # trader cancels a resting pending order (target: signal_id)
+VERBS_PENDING = ("cancel_pending", "fill_now")   # cancel a resting order, or take it at the market now (target: signal_id)
 SKIP_REASONS = {1: "Counter-trend", 2: "News / event", 3: "Ugly structure", 4: "Target blocked", 5: "Correlated", 6: "Gut / other"}
 SKIP_REASON_CODES = {8: "no response (expired; a TAKE is not charged since 2026-09-21)", 7: "legacy", 9: "superseded (another signal approved)", 10: "EA auto-reject: FTMO headroom"}
 EVENT_LABEL = {"W": "NO-HOLD (election)", "V": "NO ENTRY <6h (big release)", "C": "caution", "H": "holiday/thin"}
@@ -262,10 +262,24 @@ RETCODE = {
     10046: "opposite positions prohibited",
 }
 
+# The refusals a trader actually reads on the phone, in words (trader: "i dont memorize item numbers").
+REASON_WORDS = {
+    "price_through_sl": "price is already through the stop - entering now would be an instant loss",
+    "price_past_target": "price is already past the final target - there is nothing left to make",
+    "not_pending": "that order is no longer resting",
+    "already_filled": "that order has already filled - it is an open position now",
+    "no_price": "no live price from the terminal right now",
+    "lots_zero": "the size comes out at zero at this price",
+    "order_not_found": "the broker no longer has that order",
+    "trading_disabled": "the kill switch is off",
+}
+
 def reason_text(reason) -> str:
-    """'order_failed:10018' -> 'order_failed:10018 (market closed)'. Anything else is passed through
-    unchanged, so a reason the EA spells out in words (be_floor, stale_task, ...) reads as before."""
+    """'order_failed:10018' -> 'order_failed:10018 (market closed)'. Known codes read in words; anything else is
+    passed through unchanged, so a reason the EA spells out itself (be_floor, stale_task, ...) reads as before."""
     r = str(reason or "")
+    head = r.split(":", 1)[0]
+    if head in REASON_WORDS: return REASON_WORDS[head] + (f" ({r.split(':', 1)[1]})" if ":" in r else "")
     m = re.search(r"order_failed:(\d{4,6})\b", r)
     if not m: return r
     t = RETCODE.get(int(m.group(1)))
