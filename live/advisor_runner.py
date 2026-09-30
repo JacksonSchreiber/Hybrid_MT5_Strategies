@@ -152,7 +152,7 @@ def d1_ext_line(sig: dict) -> str:
     """D1's distance from its own EMA20, in D1 ATR(14), signed by the trade's direction (coach 2026-09-24). The
     driver study found this is the only measured feature that explains the trader's selection edge, and the blind
     record backs it: above +0.5 ATR the graded TrendCont population returns +0.18R against -0.08R below it."""
-    ext = charts.d1_extension(sig)
+    ext = charts.d1_ext_of(sig)
     if ext is None: return "- **D1 extension:** (unavailable — not enough D1 history on this card)"
     where = ("stretched well away from the mean" if ext > 1.5 else
              ("extended with the trade" if ext >= 0.5 else ("near its mean" if ext > -0.5 else "extended AGAINST this trade")))
@@ -165,8 +165,7 @@ def quality_line(sig: dict) -> str:
     """The Quality grade, computed (coach 2026-09-24): D1 extension >= 1.5 ATR = A, 0.5-1.5 = B, and one grade off for
     a spread of 0.05R or worse, or for the broker-midnight bar (00:00 broker = the 21:00 UTC rollover close, where the
     exotics' spread runs 0.5-1R). Printed so the panel restates the grade instead of inventing one."""
-    ext = sig.get("sizing", {}).get("d1_ext")
-    if ext is None: ext = charts.d1_extension(sig)          # older cards / EA without the field
+    ext = charts.d1_ext_of(sig)                              # the same number the extension line and the gate use
     if ext is None: return "- **Quality (mechanical):** not computable — no D1 history on this card."
     ext = float(ext)
     base = "A" if ext >= 1.5 else ("B" if ext >= 0.5 else "C")

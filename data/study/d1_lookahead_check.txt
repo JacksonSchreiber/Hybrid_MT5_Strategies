@@ -1,0 +1,2 @@
+AS PUBLISHED (d <= day: look-ahead) n=2346 | above +0.185 (n=1261) below -0.084 (n=1085) | diff +0.269 +-0.052 = 5.2 SE | halves +0.254 / +0.286 | gated costed +0.167
+AS THE EA SEES IT (d < day)        n=2346 | above +0.036 (n=1053) below +0.080 (n=1293) | diff -0.044 +-0.052 = -0.8 SE | halves -0.009 / -0.079 | gated costed +0.018

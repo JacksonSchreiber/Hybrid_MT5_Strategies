@@ -454,7 +454,7 @@ def dashboard(q: dict) -> str:
     # descending (the one feature that separates outcomes on the blind record). Hard drops are the EA's, unchanged.
     ext = {}
     for s_ in opn:
-        try: ext[s_["signal_key"]] = charts.d1_extension(s_)
+        try: ext[s_["signal_key"]] = charts.d1_ext_of(s_)
         except Exception: ext[s_["signal_key"]] = None
     opn.sort(key=lambda x: (ext.get(x["signal_key"]) is None, -(ext.get(x["signal_key"]) or 0)))
     out.append("<h2>Pending signals</h2>")

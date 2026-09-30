@@ -177,11 +177,25 @@ def render_signal(sig: dict, out_dir: str, fresh: bool = False) -> tuple[str, st
     render(signal_bars(sig, "d1"), title="D1  " + head + f"   regime {(sig.get('regime') or {}).get('pretty', '')}", levels=lv, overlay=None, n_show=D1_BARS, digits=digits).save(p_d1 + ".tmp", "PNG"); os.replace(p_d1 + ".tmp", p_d1)
     return p_h4, p_d1
 
+def d1_ext_of(sig: dict) -> float | None:
+    """THE D1-extension number for a signal - card, quality grade and dashboard sort all read this one. The EA's own
+    value (sizing.d1_ext) is the one its gate decided on, frozen at publication; recomputing at render time drifted as
+    new daily bars closed. The local calculation is only a fallback for cards published before the EA wrote the field."""
+    v = (sig.get("sizing") or {}).get("d1_ext")
+    if v is not None:
+        try: return float(v)
+        except (TypeError, ValueError): pass
+    return d1_extension(sig)
+
+
 def d1_extension(sig: dict) -> float | None:
     """D1's distance from its own EMA20 in D1 ATR(14), signed by the trade's direction (+ = extended WITH the trade).
     The one feature that separates outcomes on the blind record (coach 2026-09-24): above +0.5 ATR the graded
     TrendCont population returns +0.18R against -0.08R below it. Printed on the card, and the home screen's sort."""
     bars = signal_bars(sig, "d1")
+    # the LAST CLOSED daily bar, exactly as the EA reads it (shift 1): the feed's final bar is today's still-forming
+    # one, and including it made this disagree with the gate's own number (coach item 8: +2.45 vs +2.05 on GBPUSD #2)
+    if bars: bars = bars[:-1]
     if len(bars) < 40: return None
     c = [b[4] for b in bars]
     k = 2.0 / 21; e = c[0]
@@ -189,9 +203,8 @@ def d1_extension(sig: dict) -> float | None:
     tr = [max(bars[j][2] - bars[j][3], abs(bars[j][2] - bars[j - 1][4]), abs(bars[j][3] - bars[j - 1][4]))
           for j in range(max(1, len(bars) - 200), len(bars))]
     if len(tr) < 14: return None
-    a = sum(tr[:14]) / 14
-    for x in tr[14:]: a = (a * 13 + x) / 14
-    if a <= 0: return None
+    a = sum(tr[-14:]) / 14                   # MT5's iATR is a SIMPLE 14-bar mean of true range, not Wilder's smoothing:
+    if a <= 0: return None                  # matching it removes a steady +0.04..+0.08 bias against the EA's number
     up = str(sig.get("direction", "")).upper().startswith("B")
     return ((c[-1] - e) / a) * (1 if up else -1)
 
