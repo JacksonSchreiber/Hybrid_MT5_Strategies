@@ -103,7 +103,15 @@ def write(cfg: dict) -> tuple[int, int, int]:
 # ----------------------------------------------------------------------------- coach item 18: staged entry log
 STAGED_COLS = ["symbol", "signal_id", "strategy", "signal_time", "full_lots", "first_lots", "add_lots", "add_state", "add_fill",
                "add_time", "R_first_per_lot", "R_add_per_lot", "staged_R", "counterfactual_full_R",
-               "pyramid_lots", "pyramid_fill", "pyramid_time", "R_pyramid_per_lot", "counterfactual_noadd_R", "closed"]
+               "pyramid_lots", "pyramid_fill", "pyramid_fill_R", "pyramid_time", "R_pyramid_per_lot", "counterfactual_noadd_R", "closed"]
+
+
+def _fill_r(first: dict, py: dict | None):
+    """coach watch item 2026-10-01: the pyramid add's actual fill in R of the first entry (modelled +1.5R)."""
+    if not py: return ""
+    e, s, f = _f(first.get("entry")), _f(first.get("sl")), _f(py.get("entry"))
+    if not e or not s or f is None or e == s: return ""
+    return round((f - e) / (e - s), 3)          # (e - s) carries the sign: positive R for a BUY above entry and a SELL below
 
 
 def staged(cfg: dict) -> list[dict]:
@@ -137,7 +145,7 @@ def staged(cfg: dict) -> list[dict]:
                     "R_first_per_lot": "" if r1 is None else round(r1, 3), "R_add_per_lot": "" if r2 is None else round(r2, 3),
                     "staged_R": "" if st_R is None else round(st_R, 3),
                     "counterfactual_full_R": "" if r1 is None else round(r1, 3),
-                    "pyramid_lots": l3 or "", "pyramid_fill": py.get("entry") if py else "", "pyramid_time": py.get("fill_time") if py else "",
+                    "pyramid_lots": l3 or "", "pyramid_fill": py.get("entry") if py else "", "pyramid_fill_R": _fill_r(a, py), "pyramid_time": py.get("fill_time") if py else "",
                     "R_pyramid_per_lot": "" if r3 is None else round(r3, 3),
                     "counterfactual_noadd_R": "" if noadd is None else round(noadd, 3), "closed": int(closed)})
     return out
@@ -173,3 +181,9 @@ def pyramid_stats(cfg: dict) -> tuple[int, float, float]:
         for r in v: cur += r; peak = max(peak, cur); m = max(m, peak - cur)
         return m
     return len(rows), sum(a - b for a, b in zip(w, wo)) / len(rows), (dd(w) / dd(wo)) if dd(wo) > 0 else 0.0
+
+
+def pyramid_fill_watch(cfg: dict) -> tuple[int, float | None]:
+    """-> (pyramid adds with a fill, their mean fill in R) - the coach wants a word if it averages worse than +1.55R after 10."""
+    f = [x["pyramid_fill_R"] for x in staged(cfg) if x["pyramid_fill_R"] != ""]
+    return len(f), (sum(f) / len(f) if f else None)

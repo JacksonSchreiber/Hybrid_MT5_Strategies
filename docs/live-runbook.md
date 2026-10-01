@@ -340,3 +340,12 @@ clean 25%**: at the 0.1% ladder rung the broker's lot step floors the bank - 25%
 (= 20%), and a 0.01-lot position cannot split at all (stop to entry, nothing banked). Since 20:37 UTC the journal's
 `partial_frac` holds the share ACTUALLY banked (0 for a no-split trade); read it per trade, never assume 25%.
 `web/shadow_bank.csv` (download on the home page) prices every closed TrendCont at 50 / 25 / 0% on the same path.
+
+## Reproductions of intrabar triggers use REAL TICKS (coach 2026-10-01)
+
+Doctrine boundaries: staged entry 2026-09-30 22:14Z, +1.5R pyramid 2026-10-01 00:08Z. The pyramid's EA-vs-replay check
+FAILED on 1-minute OHLC (EURUSD gap -0.027R) and PASSED on real ticks (gap -0.0135R): the 1-minute OHLC model jumps between
+each minute's four prices and filled the add at +1.60R on average against the modelled +1.5R. Any future reproduction of a
+rule with an intrabar trigger (pyramid, early promotion, anything "the first time price reaches X") runs the tester with
+`--model 4`. Live watch item: `web/staged_entry.csv` column `pyramid_fill_R`; the monitor flags the coach if the first ten
+live adds average worse than +1.55R.

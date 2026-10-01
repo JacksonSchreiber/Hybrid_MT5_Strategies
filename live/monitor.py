@@ -423,6 +423,11 @@ class Monitor:
         from live import shadow_bank
         n, be, ok = shadow_bank.write(self.cfg)
         sn, s_rdd, c_rdd = shadow_bank.write_staged(self.cfg)          # coach item 18: early read at 20, grading at 40
+        fn_, f_mean = shadow_bank.pyramid_fill_watch(self.cfg)            # coach watch 2026-10-01: add fills vs the modelled +1.5R
+        if fn_ >= 10 and f_mean is not None and f_mean < 1.55 and not self.st.get("pyr_fill_flag"):
+            self.st["pyr_fill_flag"] = True
+            self.send(f"COACH WATCH ITEM - pyramid fills: the first {fn_} live adds filled at an average of +{f_mean:.2f}R "
+                      f"(modelled +1.50R; flag threshold +1.55R). web/staged_entry.csv has each fill.")
         pn, p_mean, p_ddr = shadow_bank.pyramid_stats(self.cfg)         # coach item 20: graded at n=30 pyramided trades
         if pn >= 30 and not self.st.get("pyr_flag_30"):
             self.st["pyr_flag_30"] = True
