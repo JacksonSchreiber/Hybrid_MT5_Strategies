@@ -550,8 +550,23 @@ def dashboard(q: dict) -> str:
     pos = C.list_positions(CFG)
     out.append("<h2>Open positions</h2>")
     if not pos: out.append('<div class="card k">none</div>')
+    # a staged add (tranche 2) or a pyramid add (tranche 3) sits indented under the position it was added to
+    def _tr(p): return int(p.get("tranche") or 0)
+    parents = [p for p in pos if _tr(p) < 2]
+    children = {}
     for p in pos:
-        out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"><div class="row"><span class="big">{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
+        if _tr(p) >= 2: children.setdefault((p["symbol"], str(p.get("signal_id"))), []).append(p)
+    ordered = []
+    for p in parents:
+        ordered.append((p, False))
+        for c in sorted(children.pop((p["symbol"], str(p.get("signal_id"))), []), key=_tr): ordered.append((c, True))
+    for rest in children.values(): ordered += [(c, False) for c in rest]   # parent already closed: show it on its own
+    for p, child in ordered:
+        what = {2: "staged add", 3: "pyramid add (+1.5R)"}.get(_tr(p), "")
+        title = (f'↳ {E(what)} {E(p["direction"])}' if child else f'{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}'
+                 + (f' <span class="k">({E(what)})</span>' if what else ""))
+        style = ' style="margin-left:28px;border-left:3px solid var(--line, #888)"' if child else ""
+        out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"{style}><div class="row"><span class="big">{title}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
                    f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
     # instances: one compact table (the expanded universe runs ~40 charts - a card each would bury everything below)
     live_n = 0; rows_i = []
