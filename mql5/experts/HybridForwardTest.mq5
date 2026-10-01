@@ -3322,8 +3322,11 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
               {
                double stp=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(stp<=0) stp=0.01;
                double vmn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmn<=0) vmn=0.01;
-               double first=MathFloor(lots*g_cfg_st_f0/stp+1e-9)*stp;
-               if(lots>=0.05-1e-9 && first>=vmn-1e-9 && (lots-first)>=vmn-1e-9)
+               //--- coach 2026-10-01 lot-step rule: first = max(min lot, 25% rounded DOWN to the step); stage every position
+               //--- that leaves at least a min lot for the add (0.02 -> 50/50, 0.03 -> 33/67, 0.04 -> 25/75, 0.05 -> 20/80);
+               //--- only a min-lot position goes in full. The actual split is journaled (lots vs full_lots).
+               double first=MathMax(vmn,MathFloor(lots*g_cfg_st_f0/stp+1e-9)*stp);
+               if(first>=vmn-1e-9 && (lots-first)>=vmn-1e-9)
                  { staged=true; lots=NormalizeDouble(first,2); g_rows[n].lots=lots; }
               }
             bool ok=(cand.direction>0)
@@ -5883,7 +5886,8 @@ void PyramidCheck(int i,double bid,double ask,double step,double vmin)
    if(!(dir>0 ? bid>=trig : ask<=trig)) return;
    if(!PositionSelectByTicket((ulong)g_rows[i].posid)) return;
    double full=(g_rows[i].st_full_lots>0.0 ? g_rows[i].st_full_lots : g_rows[i].lots);
-   double add=NormalizeDouble(MathFloor(frac*full/step+1e-9)*step,2);
+   //--- coach 2026-10-01 lot-step rule: add = max(min lot, 50% of the ruled lots rounded down); skipped only on a min-lot position
+   double add=(full<2.0*vmin-1e-9 ? 0.0 : NormalizeDouble(MathMax(vmin,MathFloor(frac*full/step+1e-9)*step),2));
    string sid=StringFormat("sig:%d",g_rows[i].id);
    if(add<vmin-1e-9) { g_rows[i].st_pyr=2; AuditLine("pyramid","","",sid,"skipped",StringFormat("add_below_min_lot:%.2f",add),""); return; }
    double be=NormPrice(BEPrice(i)), tp=PositionGetDouble(POSITION_TP);
