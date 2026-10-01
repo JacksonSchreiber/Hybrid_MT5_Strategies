@@ -48,20 +48,28 @@ def tmin(s):            # 'YYYY.MM.DD HH:MM' -> minutes since epoch
     return int(dt.datetime.strptime(s[:16], "%Y.%m.%d %H:%M").replace(tzinfo=dt.timezone.utc).timestamp() // 60)
 
 
-def run_inverse(M, k, end, up_inv, fill, R, bank_R, tp2_R, bankf):
-    """the inverse from M1 bar k (the bar AFTER the fill): stop first each bar, gap fills at the open."""
+PYR_R, PYR_F = 1.5, 0.5
+
+
+def run_inverse(M, k, end, up_inv, fill, R, bank_R, tp2_R, bankf, pyr=False):
+    """the inverse from M1 bar k (the bar AFTER the fill): stop first each bar, gap fills at the open. pyr: coach item 21
+    addendum - the first bar reaching +1.5R after the bank adds 50% of the Inverse's size there (the open if gapped), stop at
+    the Inverse's entry, target the mirrored TP2 (spread drag on the add charged by the caller)."""
     sg = 1.0 if up_inv else -1.0; toR = lambda p: (p - fill) * sg / R
     O, H, L, C = M["o"], M["h"], M["l"], M["c"]
-    stop, banked, locked, size = -1.0, False, 0.0, 1.0
+    stop, banked, locked, size, add = -1.0, False, 0.0, 1.0, None
+    val = lambda r: locked + size * r + (PYR_F * (r - add) if add is not None else 0.0)
     for j in range(k, end):
         o = toR(O[j]); hi, lo = (toR(H[j]), toR(L[j])) if up_inv else (toR(L[j]), toR(H[j]))
-        if lo <= stop: return locked + size * (o if o < stop else stop)
+        if lo <= stop: return val(o if o < stop else stop), add is not None
         if not banked and hi >= bank_R:
             banked = True; locked += bankf * bank_R; size *= (1 - bankf); stop = 0.0
-            if tp2_R is not None and hi >= tp2_R: return locked + size * tp2_R
+            if pyr and add is None and hi >= PYR_R: add = max(PYR_R, o)
+            if tp2_R is not None and hi >= tp2_R: return val(tp2_R), add is not None
             continue
-        if banked and tp2_R is not None and hi >= tp2_R: return locked + size * tp2_R
-    return locked + size * toR(C[end - 1])
+        if banked and pyr and add is None and hi >= PYR_R: add = max(PYR_R, o)
+        if banked and tp2_R is not None and hi >= tp2_R: return val(tp2_R), add is not None
+    return val(toR(C[end - 1])), add is not None
 
 
 def trade(x, M):
@@ -88,8 +96,10 @@ def trade(x, M):
             out = {}
             for sl in SLIPS:
                 f = fill - sg * sl * R                                   # slippage against the inverse (it trades opposite)
-                out[sl] = run_inverse(M, k + 1, min(len(O), k + 1 + MAXM1), not up, f, R, bank_R,
-                                      tp2_R, BANKF.get(x["strat"], 0.5)) - x["cost"] - 0.0
+                for pyr in (False, True):
+                    r, added = run_inverse(M, k + 1, min(len(O), k + 1 + MAXM1), not up, f, R, bank_R,
+                                           tp2_R, BANKF.get(x["strat"], 0.5), pyr)
+                    out[(sl, pyr)] = r - x["cost"] * (1.0 + (PYR_F if added else 0.0))
             return bar, out
         if hi >= bank_R: return None                                     # parent banked first: no inverse
         if tp2_R is not None and hi >= tp2_R: return None
@@ -123,8 +133,11 @@ def main():
             if r: res.append({"sym": sym.split(".")[0], "t": x["t"], "strat": x["strat"], "bar": r[0], "Rs": r[1]})
         print(f"  {sym}: {len(by_sym[sym])} parents, {len(res) - n0} slow stop-outs (bar >= {W0}) inverted", flush=True)
         del M
-    for sl in SLIPS:
-        for q in res: q["R"] = q["Rs"][sl]
+    globals()["_RES"] = res
+    for pyr in (False, True):
+      print(f"\n################ {'WITH THE +1.5R PYRAMID' if pyr else 'PLAIN INVERSE'} ################")
+      for sl in SLIPS:
+        for q in res: q["R"] = q["Rs"][(sl, pyr)]
         win = [q for q in res if W0 <= q["bar"] <= W1]
         dev = [q for q in win if q["t"][:4] < HOLD]; hold = [q for q in win if q["t"][:4] >= HOLD]
         print(f"\n===== SLIPPAGE {sl:.2f}R on the fill =====")
@@ -152,4 +165,22 @@ def main():
                 print(line(f"    stop at bar {a}-{b}", [q for q in unw if a <= q["bar"] <= b and q["t"][:4] < HOLD]))
 
 
-if __name__ == "__main__": main()
+
+
+
+def pyramid_increment(res):
+    """coach item 21 B9: the pyramid ships with the Inverse if its increment >= 0 and its DD <= 1.25x the plain Inverse."""
+    from pipeline.exit_mgmt_study import paired_t
+    print("\n################ PYRAMID INCREMENT (bars 7-18, slippage 0) ################")
+    win = [q for q in res if W0 <= q["bar"] <= W1]
+    for name, sel in (("2012-24", [q for q in win if q["t"][:4] < HOLD]), ("2025+", [q for q in win if q["t"][:4] >= HOLD]),
+                      ("2012-24 ex-gold", [q for q in win if q["t"][:4] < HOLD and q["sym"] != "XAUUSD"])):
+        o = sorted(sel, key=lambda q: q["t"]); a = [q["Rs"][(0.0, False)] for q in o]; b = [q["Rs"][(0.0, True)] for q in o]
+        ps = defaultdict(list)
+        for q, x, y in zip(o, a, b): ps[q["sym"]].append(y - x)
+        print(f"  {name:16} n={len(o):4d} plain {st.mean(a):+.3f} pyramid {st.mean(b):+.3f} increment {st.mean(b) - st.mean(a):+.3f} "
+              f"(t {paired_t(a, b):+.2f}, better in {sum(1 for v in ps.values() if st.mean(v) > 0)}/{len(ps)} symbols)  DD {maxdd(a):.1f} -> {maxdd(b):.1f}R")
+
+
+if __name__ == "__main__":
+    main(); pyramid_increment(_RES)
