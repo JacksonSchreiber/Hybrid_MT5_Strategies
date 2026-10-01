@@ -24,7 +24,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from pipeline.exit_mgmt_study import load_rows, maxdd, paired_t, MAX_BARS, DRAG   # noqa: E402
 from pipeline.trendcont_step13_study import load                                  # noqa: E402
 
-AAJ = "/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/Common/Files/journal"
+# 2026-10-01: pinned copies (data/study/aa_pinned) - a tester reproduction run with the same window had overwritten the live
+# Common\Files\journal\AA_EURUSD.dk_20160801_20260629.csv with a staged/pyramid run (extra rows). EURUSD restored from
+# pyr_repro_m4/EURUSD.dk_nopyr.csv (identical signal levels to ratchet/EURUSD.dk.csv).
+AAJ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "study", "aa_pinned")
 AA_FILES = ["AA_BTCUSD.dk_20180101_20260716.csv", "AA_EURUSD.dk_20160801_20260629.csv", "AA_GBPUSD.dk_20130801_20251230.csv",
             "AA_US100.dk_20120223_20251230.csv", "AA_US500.dk_20120215_20251230.csv", "AA_USDJPY.dk_20200126_20251230.csv",
             "AA_USOIL.dk_20130124_20251230.csv", "AA_XAUUSD.dk_20200126_20251230.csv"]
