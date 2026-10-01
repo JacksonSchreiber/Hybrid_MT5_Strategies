@@ -349,3 +349,10 @@ each minute's four prices and filled the add at +1.60R on average against the mo
 rule with an intrabar trigger (pyramid, early promotion, anything "the first time price reaches X") runs the tester with
 `--model 4`. Live watch item: `web/staged_entry.csv` column `pyramid_fill_R`; the monitor flags the coach if the first ten
 live adds average worse than +1.55R.
+
+## Judging reproductions (coach 2026-10-01)
+
+A reproduction is judged on the EA's REAL-TICK tester result. Where the EA and a replay disagree on a SHORT at a
+breakeven (or any) stop, the EA is right: shorts are stopped, banked and filled on the ASK, and the bid-only M1/M5 replays
+cannot see a spread-width touch (the Inverse's US100 gap, 2021-05-07, was one such trade). Every study report from now on
+carries a LONG/SHORT split. Item 23 builds an ask series (bid + the per-symbol, per-hour spread profile) for the replays.

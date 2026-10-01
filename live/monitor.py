@@ -442,6 +442,14 @@ class Monitor:
                 self.send(f"COACH READ DUE - Inverse: {iv['closed']} closed fills, mean {iv['mean_R']:+.3f}R vs the backtest +0.20R. web/inverse_shadow.csv.")
         except Exception as e:
             self.log(f"inverse_shadow error: {e!r}")
+        ipn, ip_inc = shadow_bank.inverse_pyramid_watch(self.cfg)       # coach 2026-10-01: early stop for the pyramid on Inverses
+        if ipn >= 10 and ip_inc is not None and not self.st.get("inv_pyr_flag"):
+            self.st["inv_pyr_flag"] = True
+            if ip_inc < 0:
+                self.send(f"COACH EARLY STOP - pyramid on Inverses: the first 10 adds average {ip_inc:+.3f}R vs no add. The ruling is OFF: "
+                          f"set live.json pyramid_on_inverse to 0 (provisioning/live.json + deploy --config) and tell the coach.")
+            else:
+                self.send(f"Pyramid on Inverses: the first 10 adds average {ip_inc:+.3f}R vs no add - the early stop did not trigger.")
         mn, m_diff = shadow_bank.write_manual(self.cfg)                  # coach item 22: graded at n=20 manual sizings
         if mn >= 20 and not self.st.get("manual_flag_20"):
             self.st["manual_flag_20"] = True

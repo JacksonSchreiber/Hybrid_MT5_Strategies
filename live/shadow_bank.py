@@ -270,3 +270,12 @@ def write_manual(cfg: dict) -> tuple[int, float | None]:
     os.replace(p + ".tmp", p)
     d = [x["diff_R"] for x in rows if x["diff_R"] != ""]
     return len(d), (sum(d) / len(d) if d else None)
+
+
+def inverse_pyramid_watch(cfg: dict) -> tuple[int, float | None]:
+    """coach 2026-10-01: the first 10 pyramid adds on Inverse positions vs their no-add counterfactual (full-position R)."""
+    rows = [x for x in staged(cfg) if x["strategy"] == "Inverse" and x["closed"] and x["pyramid_lots"] not in ("", 0)
+            and x["staged_R"] != "" and x["counterfactual_noadd_R"] != ""]
+    rows = rows[:10]
+    if not rows: return 0, None
+    return len(rows), sum(x["staged_R"] - x["counterfactual_noadd_R"] for x in rows) / len(rows)
