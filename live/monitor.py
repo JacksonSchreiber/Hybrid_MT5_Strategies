@@ -497,7 +497,7 @@ class Monitor:
                 if r.get("decision") not in ("approved", "approved_pending") or not r.get("exit_time"): continue
                 rr = ELIG._f(r.get("r_multiple"))
                 if rr is None: continue
-                sig_r[key] = sig_r.get(key, 0.0) + rr * ELIG._full_scale(r, f0 if r is not f0 else None)   # full-position R per signal
+                sig_r[key] = sig_r.get(key, 0.0) + rr * ELIG.price_r_scale(r)                      # full-position R per signal (r_multiple is in the first tranche's 1R)
             ix_n = len(sig_r)
             if ix_n >= 20 and not self.st.get("ix_short_flag"):
                 self.st["ix_short_flag"] = True

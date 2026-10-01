@@ -73,6 +73,14 @@ def _full_scale(r: dict, first: dict | None) -> float:
     if not e0 or not s0 or not e or not s or e == s: return lots / full
     return (abs(e - s) * lots) / (abs(e0 - s0) * full)
 
+def price_r_scale(r: dict) -> float:
+    """2026-10-01: the weight for the EA's own r_multiple (journal column), NOT for costed_r. The EA measures every tranche -
+    first, staged add, pyramid add - against the FIRST tranche's 1R (risk_px = the anchor risk), per unit of the row's own lots,
+    so the full-position share is just lots / full lots. (_full_scale's extra |entry - sl| factor belongs to costed_r, which is
+    net / the row's OWN stop risk; applied to r_multiple it over-weighted a pyramid add ~2.5x.)"""
+    full, lots = _f(r.get("full_lots")) or 0.0, _f(r.get("lots")) or 0.0
+    return lots / full if full > 0 and lots > 0 else 1.0
+
 def table(cfg: dict) -> list[dict]:
     cache = C.load_json(_cache_path(cfg), {}) or {}
     syms = {s: None for s in C.symbols(cfg)}

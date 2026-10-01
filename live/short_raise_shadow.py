@@ -3,8 +3,8 @@
 On a SELL signal the EA moves every ticket's stop to +short_raise_at_pyramid_r R when +1.5R trades (journal short_raise=1,
 with this ticket's pre-raise stop short_raise_from and its volume short_raise_vol). Each ARMED short gets a line in
 <root>/web/short_raise.csv:
-  actual_R                     the signal's full-position R (sum of each ticket's costed R scaled to the full position, as
-                               eligibility._full_scale does);
+  actual_R                     the signal's full-position R (each ticket's r_multiple - already in the first tranche's 1R -
+                               x its lots / the full lots: eligibility.price_r_scale);
   counterfactual_entry_stop_R  what the same signal would have made with the stop left where it was (at entry). The two
                                paths are identical until a ticket is stopped at the raised stop; only those tickets differ.
                                Each one is replayed on the feed's M5 bid bars from its exit, with the median live spread
@@ -78,7 +78,7 @@ def build(cfg: dict) -> list[dict]:
         actual = 0.0
         for r in rs:
             rr = _f(r.get("r_multiple"))
-            if rr is not None: actual += rr * ELIG._full_scale(r, first if r is not first else None)
+            if rr is not None: actual += rr * ELIG.price_r_scale(r)        # r_multiple is already in the first tranche's 1R
         diff, pending, n_hit, notes = 0.0, False, 0, []
         for r in armed:
             stop, frm, vol, ex = _f(r.get("short_raise_stop")), _f(r.get("short_raise_from")), _f(r.get("short_raise_vol")), _f(r.get("exit_price"))

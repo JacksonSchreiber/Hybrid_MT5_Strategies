@@ -5,11 +5,12 @@ EA side: MT5 tester AA journals with the live stack, rule off and on:
   STAGED=1 PYR=1 TC_BANK=0.25 [SHORT_RAISE=0.25] pipeline/mt5_verify.sh --mode ALL --strat SMC,Fib,TrendCont,EMArevQ
   --symbol <S> --from 2016.08.01 --to 2026.06.30 --model 4  ->  data/study/short_raise_repro/<SYM>_off.csv / <SYM>_on.csv
 Per signal (signal_time + strategy): full-position R = sum over its rows (first tranche, staged add, pyramid add) of the row's
-r_multiple x the row's risk over the full position's risk at the first entry (live/eligibility._full_scale). Signals are
+r_multiple x its lots / the full lots (the EA measures every row in the first tranche's 1R). Signals are
 matched across the two runs; a stop that exits earlier can change the one-setup lock and so the later signal set - unmatched
 signals are counted, not scored.
 Guard (coach 2026-10-01): if the EA's mean increment on SHORTS (on - off, matched) is below -0.01R on a symbol, the rule is
-switched off and the coach told. Longs must be unchanged (a non-zero long increment = a defect).
+switched off and the coach told. Longs must exit identically (their R can differ slightly: the tester sizes by equity, so lot
+rounding drifts once the two runs' P&L diverge - only a changed exit price is a defect).
     python3 pipeline/short_raise_repro_check.py [EURUSD.dk US100.dk]
 """
 import csv, math, os, statistics as st, sys
@@ -31,9 +32,10 @@ def signals(p):
         tot = 0.0
         for r in rs:
             lots, e, s = f(r["lots"]), f(r["entry"]), f(r["sl"])
-            sc = (abs(e - s) * lots) / (abs(e0 - s0) * full) if (e0 and s0 and e and s and full and lots) else 1.0
+            sc = lots / full if (full and lots) else 1.0     # r_multiple is in the FIRST tranche's 1R for every row (risk_px = anchor)
             tot += f(r["r_multiple"]) * sc
-        out[k] = (first["direction"].upper().startswith("S"), tot, any((r.get("short_raise") or "") == "1" for r in rs), first["signal_time"])
+        out[k] = (first["direction"].upper().startswith("S"), tot, any((r.get("short_raise") or "") == "1" for r in rs), first["signal_time"],
+                  tuple(sorted((r.get("tranche") or "", r.get("exit_price") or "") for r in rs)))
     return out
 
 
@@ -54,7 +56,10 @@ for sym in (sys.argv[1:] or ["EURUSD.dk", "US100.dk"]):
         m = st.mean(d) if d else float("nan")
         verdict = ""
         if side: verdict = "GUARD TRIPPED (< -0.01R): switch the rule off" if m < -0.01 else "guard holds (>= -0.01R)"; fail |= m < -0.01
-        elif any(abs(x) > 1e-6 for x in d): verdict = "DEFECT: longs changed"; fail = True
+        else:   # equity-based sizing re-rounds lots once the runs' P&L diverge - only a changed EXIT is a defect
+            moved = sum(1 for k in ks if A[k][4] != B[k][4])
+            verdict = (f"DEFECT: {moved} long exits changed" if moved else "longs: exits identical (R differs only by lot rounding)")
+            fail |= moved > 0
         print(f"{sym} {lab} matched n={len(ks):4d} armed {armed:3d}  off {st.mean(A[k][1] for k in ks):+.4f}  on {st.mean(B[k][1] for k in ks):+.4f}"
               f"  increment {m:+.4f} (t {tstat(d):+.2f})  helped/hurt {hp}/{ht}  {verdict}")
     print(f"{sym} unmatched signals: off-only {len(set(A) - set(B))}, on-only {len(set(B) - set(A))}")
