@@ -473,6 +473,28 @@ class Monitor:
                           f"set live.json pyramid_on_inverse to 0 (provisioning/live.json + deploy --config) and tell the coach.")
             else:
                 self.send(f"Pyramid on Inverses: the first 10 adds average {ip_inc:+.3f}R vs no add - the early stop did not trigger.")
+        try:                                                             # coach 2026-10-01 watch flag (no rule): TrendCont index shorts
+            from live import eligibility as ELIG
+            rows = C.journal_rows(self.cfg)
+            firsts = {(r.get("symbol"), r.get("signal_id")): r for r in rows if int(ELIG._f(r.get("tranche")) or 0) <= 1}
+            sig_r: dict = {}
+            for r in rows:
+                root = (r.get("symbol") or "").split(".")[0]
+                if root not in ("US100", "US500", "US30"): continue
+                key = (r.get("symbol"), r.get("signal_id")); f0 = firsts.get(key)
+                if not f0 or f0.get("strategy") != "TrendCont" or (f0.get("direction") or "").upper() != "SELL": continue
+                if r.get("decision") not in ("approved", "approved_pending") or not r.get("exit_time"): continue
+                rr = ELIG._f(r.get("r_multiple"))
+                if rr is None: continue
+                sig_r[key] = sig_r.get(key, 0.0) + rr * ELIG._full_scale(r, f0 if r is not f0 else None)   # full-position R per signal
+            ix_n = len(sig_r)
+            if ix_n >= 20 and not self.st.get("ix_short_flag"):
+                self.st["ix_short_flag"] = True
+                self.send(f"COACH WATCH FLAG - TrendCont index shorts on the live book: {ix_n} closed signals, mean "
+                          f"{sum(sig_r.values()) / ix_n:+.3f}R (full-position R; backtest 2012-24 -0.164, 2025-26 -0.189). No rule - for the coach.")
+            self.st["ix_short_n"] = ix_n
+        except Exception as e:
+            self.log(f"index-short watch error: {e!r}")
         mn, m_diff = shadow_bank.write_manual(self.cfg)                  # coach item 22: graded at n=20 manual sizings
         if mn >= 20 and not self.st.get("manual_flag_20"):
             self.st["manual_flag_20"] = True
