@@ -506,7 +506,8 @@ double   g_cfg_df_bank=0.5;       // live.json deepfib_bank_frac: the same for D
 bool     g_cfg_staged=false;      // live.json staged_entry: coach item 18 (trader override 2026-09-30)
 double   g_cfg_st_f0=0.25;        // live.json staged_first_frac: first tranche share of the ruled lots
 int      g_cfg_st_n=6;            // live.json staged_add_bar: add at the close of this H4 bar after the signal
-double   g_cfg_st_early=0.5;      // live.json staged_early_promote_r: add the rest at once if price trades through +this R before bar N (0 = off)
+double   g_cfg_st_early=0.0;      // early promotion: RETIRED (coach 2026-10-01 - the H4 replay flattered it; M5 -0.002R, +11R DD).
+                                  //   Hard-off live (no live.json key is read); the tester input InpEarlyPromoteR remains for studies.
 bool     g_cfg_pyr=false;         // live.json pyramid_add: coach item 20 - add at +1.5R after the bank
 double   g_cfg_pyr_r=1.5;         // live.json pyramid_trigger_r
 double   g_cfg_pyr_f=0.5;         // live.json pyramid_frac: share of the ORIGINAL full size added
@@ -822,7 +823,6 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_staged=(StringToInteger(JGet(k,v,"staged_entry","0"))!=0);
       g_cfg_st_f0=StringToDouble(JGet(k,v,"staged_first_frac","0.25")); if(g_cfg_st_f0<0.05 || g_cfg_st_f0>0.95) g_cfg_st_f0=0.25;
       g_cfg_st_n=(int)StringToInteger(JGet(k,v,"staged_add_bar","6")); if(g_cfg_st_n<1 || g_cfg_st_n>60) g_cfg_st_n=6;
-      g_cfg_st_early=StringToDouble(JGet(k,v,"staged_early_promote_r","0.5")); if(g_cfg_st_early<0.0 || g_cfg_st_early>0.99) g_cfg_st_early=0.5;
       g_cfg_pyr=(StringToInteger(JGet(k,v,"pyramid_add","0"))!=0);
       g_cfg_pyr_r=StringToDouble(JGet(k,v,"pyramid_trigger_r","1.5")); if(g_cfg_pyr_r<1.05 || g_cfg_pyr_r>5.0) g_cfg_pyr_r=1.5;
       g_cfg_pyr_f=StringToDouble(JGet(k,v,"pyramid_frac","0.5"));     if(g_cfg_pyr_f<0.05 || g_cfg_pyr_f>1.0) g_cfg_pyr_f=0.5;
@@ -3053,6 +3053,18 @@ void HandleSignal(SignalCandidate &cand)
          JournalReject(id,cand,StringFormat("spread %.3fR of the stop > max %.3fR - entry cost too high",spr,g_cfg_max_spread_r));
          return;
         }
+      //--- LOT FLOOR (coach 2026-10-01): when the broker's minimum lot carries more than 2x the active rung's risk (XAUUSD at
+      //--- the 0.10% rung: 0.01 lots = 0.30%), the signal is auto-rejected rather than traded oversized.
+      {
+       double fl_rr=0.0, fl_rung=0.0;
+       if(LotFloorExceedsRung(cand.entry,cand.sl,fl_rr,fl_rung))
+         {
+          AuditLine("lot_floor","","",StringFormat("sig:%d",id),"rejected","lot_floor_exceeds_rung",
+                    StringFormat("%s min lot risks %.2f%% vs rung %.2f%%",cand.strategy,fl_rr*100.0,fl_rung*100.0));
+          JournalReject(id,cand,StringFormat("lot floor exceeds rung: the minimum lot risks %.2f%% vs the %.2f%% rung (> 2x)",fl_rr*100.0,fl_rung*100.0));
+          return;
+         }
+      }
       //--- D1-EXTENSION GATE (coach 2026-09-24, TrendCont only): a pullback bought while the daily sits on its own mean
       //--- has no measured edge; from +0.5 ATR out it does. Journaled like the spread gate so the gated population can
       //--- be graded later (revisit at n=100 gated rows, per-symbol).
@@ -4641,6 +4653,20 @@ double MarginCapLots(double entry,double sl,double lots)
    return capped;
   }
 
+//--- coach 2026-10-01: true when the ladder's lots round below the broker minimum AND the minimum lot would risk more
+//--- than 2x the active rung. Live only (the tester keeps its clamp-up, parity).
+bool LotFloorExceedsRung(double entry,double sl,double &risk_at_min,double &rung_pct)
+  {
+   risk_at_min=0.0; rung_pct=0.0;
+   if(!InpLiveMode) return false;
+   string rung=""; rung_pct=LadderRiskPct(rung);
+   if(rung_pct<=0.0 || LotsForRisk(_Symbol,entry,sl,rung_pct)>0.0) return false;
+   double tsz=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE), tvl=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN), eq=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(tsz<=0.0 || tvl<=0.0 || vmin<=0.0 || eq<=0.0) return false;
+   risk_at_min=(MathAbs(entry-sl)/tsz)*tvl*vmin/eq;
+   return (risk_at_min>2.0*rung_pct);
+  }
 double SizeByRisk(double entry,double sl)
   {
    //--- the ladder decides the risk in live; the tester keeps InpRiskPct*g_risk_mult exactly as before (parity)
