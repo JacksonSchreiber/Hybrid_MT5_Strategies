@@ -3620,7 +3620,9 @@ void ManageOpenPositions()
       string bst =(g_rows[i].strategy=="Inverse" ? g_rows[i].inv_parent_strategy : g_rows[i].strategy);   // coach item 21
       bool   tc  =(InpLiveMode ? LiveBankFrac(bst)>0.0 : bst=="TrendCont");
       double bf  =(tc ? (InpLiveMode ? LiveBankFrac(bst) : InpTcBankFrac) : 0.5);
-      double pv  =MathFloor((bf*lots)/step)*step;           // mechanical bank
+      //--- live: a 1e-9 tolerance so an exact multiple is not lost to floating point (0.25*0.12/0.01 = 2.9999999999999996
+      //--- floored to 2 -> banked 0.02 instead of 0.03; found by the item-23 study, 2026-10-01). Tester keeps the old floor (parity).
+      double pv  =MathFloor((bf*lots)/step+(InpLiveMode ? 1e-9 : 0.0))*step;           // mechanical bank
       //--- live: journal the share ACTUALLY banked (the lot step rounds 25% of 0.05 lots down to 0.01 = 20%; a 0.01-lot
       //--- position cannot split at all -> 0), so the record shows exactly what each trade ran under
       if(InpLiveMode && tc) g_rows[i].partial_frac=((pv>=vmin && (lots-pv)>=vmin) ? pv/lots : 0.0);
