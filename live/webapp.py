@@ -105,9 +105,20 @@ def ftmo_block(hb: dict) -> str:
     if not f or not f.get("initial_balance"): return '<div class="k">FTMO limits: not yet captured (account not synced)</div>'
     eq = hb.get("equity", 0); hd = f.get("headroom_daily", 0); hm = f.get("headroom_max", 0)
     def pct(x): return f"{x / f['initial_balance'] * 100:.2f}%" if f.get("initial_balance") else "-"
-    return (f'<div class="grid2"><div><div class="k">Daily headroom</div><div class="big v {"bad" if hd < 0.01 * f["initial_balance"] else "ok"}">{hd:,.0f} <span class="k">({pct(hd)})</span></div><div class="k">floor {f.get("daily_floor", 0):,.0f} · day {f.get("day_key", "")}</div></div>'
+    # the risk rung the EA sizes at (LadderRiskPct): max-loss headroom after open risk < 1,000 -> 0.10%; 1,000-1,500 -> 0.25%;
+    # above -> the ruled full size. headroom_max in the heartbeat is exactly that number (equity - aggregate risk - max floor).
+    if hm < 1000: rung, nxt = "0.10%", f"steps up to 0.25% at 1,000 of headroom ({1000 - hm:,.0f} to go)"
+    elif hm <= 1500: rung, nxt = "0.25%", f"steps up to full size above 1,500 ({1500 - hm:,.0f} to go) · down to 0.10% below 1,000"
+    else: rung, nxt = "full ruled size", "steps down to 0.25% at 1,500 of headroom"
+    pl = eq - f["initial_balance"]
+    top = (f'<div class="row" style="align-items:baseline"><div><div class="k">Equity</div>'
+           f'<div style="font-size:2.2em;font-weight:700" class="{"ok" if pl >= 0 else "bad"}">{eq:,.2f}</div>'
+           f'<div class="k">{pl:+,.2f} ({pl / f["initial_balance"] * 100:+.2f}%) vs the {f["initial_balance"]:,.0f} start</div></div>'
+           f'<div style="margin-left:auto;text-align:right"><div class="k">Risk level</div><div class="big">{rung} per trade</div>'
+           f'<div class="k">{nxt}</div></div></div>')
+    return (top + f'<div class="grid2"><div><div class="k">Daily headroom</div><div class="big v {"bad" if hd < 0.01 * f["initial_balance"] else "ok"}">{hd:,.0f} <span class="k">({pct(hd)})</span></div><div class="k">floor {f.get("daily_floor", 0):,.0f} · day {f.get("day_key", "")}</div></div>'
             f'<div><div class="k">Max-loss headroom</div><div class="big v {"bad" if hm < 0.01 * f["initial_balance"] else "ok"}">{hm:,.0f} <span class="k">({pct(hm)})</span></div><div class="k">floor {f.get("max_floor", 0):,.0f} · initial {f["initial_balance"]:,.0f}</div></div></div>'
-            f'<div class="k">equity {eq:,.2f} · aggregate risk-to-stop {hb.get("aggregate_risk_to_stop", 0):,.0f} · buffer {f.get("buffer", 0):,.0f}</div>')
+            f'<div class="k">aggregate risk-to-stop {hb.get("aggregate_risk_to_stop", 0):,.0f} · buffer {f.get("buffer", 0):,.0f}</div>')
 
 
 
@@ -502,12 +513,8 @@ def dashboard(q: dict) -> str:
                f'<form method="post" action="/kill" class="inline" style="margin-left:auto"><input type="hidden" name="enable" value="{0 if ks else 1}"><button class="btn {"no" if ks else "go"}" onclick="return confirm(\'{"Disable" if ks else "Enable"} trading?\')">{"Disable" if ks else "Enable"}</button></form></div></div>')
     acct = next((hb for hb in (C.heartbeat(CFG, x) for x in syms) if hb and (hb.get("ftmo") or {}).get("initial_balance")), None)
     if acct: out.append(f'<div class="card"><div class="k">Account · from {E(acct.get("symbol", ""))} beat {C.rel_time(C.parse_iso(acct.get("ts")))}</div>' + ftmo_block(acct) + '</div>')
-    out.append(shadow_line())
-    out.append(tc_watch_line())
-    ow = C.load_json(os.path.join(CFG["root"], "advisor", "opinion_watch.json")) or {}
-    if ow.get("n"):
-        out.append(f'<div class="k">advisor opinions logged since the 2026-09-30 20:22 UTC redeploy (counter restarted, coach ruling): {int(ow["n"])}/50'
-                   f' ({int(ow.get("paired") or 0)} with a closed outcome){" — due for the coach\'s read" if ow.get("flagged") else ""}</div>')
+    # (trader 2026-10-01: the shadow-day / watch-counter / opinion-counter lines are gone from the top - the monitor still
+    #  tracks them and sends the coach's alerts by Telegram)
     # backup + telegram test (trader rulings 2026-09-16: manual 30-day zip instead of a nightly pull)
     from live import backup
     ds = backup.days_since(CFG); lb = backup.last(CFG)
