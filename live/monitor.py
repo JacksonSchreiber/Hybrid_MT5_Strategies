@@ -121,7 +121,16 @@ class Monitor:
             elif not prev and self.st.get("positions_initialised"):
                 self.send(f"FILLED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} at {p.get('entry')} · {p.get('lots_live')} lots · SL {p.get('sl_live')} (pending order or market fill)\n{self.base}/position/{k}")
             if p.get("banked") and not prev.get("banked"):
-                self.send(f"+1R BANKED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · banked {C.r_fmt(p.get('banked_r'))}, {p.get('lots_live')} lots run · SL now {p.get('sl_live')}")
+                li, ll = float(p.get("lots_init") or 0), float(p.get("lots_live") or 0)
+                if int(p.get("tranche") or 0) == 3:
+                    pass                                                   # a pyramid add is born banked: nothing to announce
+                elif li > 0 and ll >= li - 1e-9:
+                    self.send(f"+1R REACHED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · stop moved to entry ({p.get('sl_live')}). "
+                              f"Nothing banked: {li:g} lots is too small to split off 25%.")
+                else:
+                    share = (li - ll) / li if li else 0
+                    self.send(f"+1R BANKED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · closed {li - ll:.2f} of {li:g} lots "
+                              f"({share:.0%}) at +1R = {C.r_fmt(p.get('banked_r'))} on this position · {ll:g} lots run · stop now {p.get('sl_live')} (entry)")
             if p.get("ratcheted") and not prev.get("ratcheted"): self.send(f"SL ratcheted to TP1: pos {p['posid']} {p['symbol']}")
             if int(p.get("staged_state") or 0) == 3 and prev and prev.get("staged", 0) != 3:
                 self.send(f"STAGED ADD SKIPPED: pos {p['posid']} {p['symbol']} {p['strategy']} - {p.get('staged_note')}")
