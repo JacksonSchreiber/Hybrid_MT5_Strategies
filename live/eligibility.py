@@ -57,22 +57,47 @@ def refresh(cfg: dict, max_n: int = 25, log=None) -> int:
         if log: log(f"eligibility: priced {done} closed position(s)")
     return done
 
+def _f(x):
+    try: return float(x)
+    except (TypeError, ValueError): return None
+
+def _full_scale(r: dict, first: dict | None) -> float:
+    """trader 2026-10-01: R in FULL-POSITION units. A staged first tranche stopped in trial lost 1R on 25% of the size =
+    -0.25R of the position; a staged add or a pyramid add is likewise a fraction of the full ruled position. Scale the row's
+    own costed R (net / its own stop risk) by its own risk over the full position's risk at the first entry."""
+    full = _f(r.get("full_lots")) or 0.0
+    lots = _f(r.get("lots")) or 0.0
+    if full <= 0 or lots <= 0: return 1.0
+    base = first or r
+    e0, s0, e, s = _f(base.get("entry")), _f(base.get("sl")), _f(r.get("entry")), _f(r.get("sl"))
+    if not e0 or not s0 or not e or not s or e == s: return lots / full
+    return (abs(e - s) * lots) / (abs(e0 - s0) * full)
+
 def table(cfg: dict) -> list[dict]:
     cache = C.load_json(_cache_path(cfg), {}) or {}
     syms = {s: None for s in C.symbols(cfg)}
     agg: dict[str, dict] = {}
-    for r in C.journal_rows(cfg):
+    rows = C.journal_rows(cfg)
+    firsts = {(r.get("symbol"), r.get("signal_id")): r for r in rows if int(_f(r.get("tranche")) or 0) <= 1 and r.get("strategy") != "Inverse"}
+    for r in rows:
         sym = (r.get("symbol") or "").strip()
         if not sym: continue
         a = agg.setdefault(sym, {"symbol": sym, "decisions": 0, "approved": 0, "skipped": 0, "no_response": 0, "closed": 0, "costed_r": 0.0, "uncosted": 0, "open": 0})
+        tr = int(_f(r.get("tranche")) or 0)
+        pid = str(r.get("posid") or "").strip()
+        closed_row = bool((r.get("exit_time") or "").strip() and (r.get("terminal") or "").strip())
+        if tr >= 2:                                           # a staged add or a pyramid add: part of its signal, not a decision
+            if closed_row and pid in cache:
+                a["costed_r"] += cache[pid]["costed_r"] * _full_scale(r, firsts.get((r.get("symbol"), r.get("signal_id"))))
+            elif closed_row: a["uncosted"] += 1
+            continue
         ok, kind = _is_decision(r)
         if not ok: continue
         a["decisions"] += 1; a[kind] += 1
         if kind == "approved":
-            pid = str(r.get("posid") or "").strip()
-            if (r.get("exit_time") or "").strip() and (r.get("terminal") or "").strip():
+            if closed_row:
                 a["closed"] += 1
-                if pid in cache: a["costed_r"] += cache[pid]["costed_r"]
+                if pid in cache: a["costed_r"] += cache[pid]["costed_r"] * _full_scale(r, None)
                 else: a["uncosted"] += 1
             elif pid and pid != "0": a["open"] += 1
     for s in syms:

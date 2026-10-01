@@ -421,7 +421,7 @@ def shadow_line() -> str:
 
 def eligibility_card() -> str:
     rows = ELIG.table(CFG)
-    out = [f'<div class="card"><div class="k">Live eligibility (demo) · decisions = approved + skips 1–8 (code 9, auto and TEST excluded) · costed R from broker deals · flag at ≥ {ELIG.FLAG_N} decisions with R ≥ 0</div>'
+    out = [f'<div class="card"><div class="k">Live eligibility (demo) · decisions = approved + skips 1–8 (code 9, auto and TEST excluded) · costed R from broker deals, in FULL-POSITION R (a trial stop-out at 25% size counts about −0.25R; adds count toward their signal, not as decisions) · flag at ≥ {ELIG.FLAG_N} decisions with R ≥ 0</div>'
            '<table><tr><th>symbol</th><th>dec</th><th>appr</th><th>skip</th><th>no-resp</th><th>closed</th><th>costed R</th><th></th></tr>']
     active = [a for a in rows if a["decisions"] or a["open"]]; idle = [a for a in rows if not (a["decisions"] or a["open"])]
     for a in active:
