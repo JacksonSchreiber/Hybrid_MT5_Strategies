@@ -4,6 +4,7 @@ trial, up to the bar-6 close), what share go on to hit TP2 - vs the average trad
 Best R in bars 1-6 = the highest bid-side favourable excursion from the first tranche's entry, M1, through the close of H4 bar 6.
 Outcome under the live stack (bank at +1R/TP1 -> stop to entry; shorts' stop to +0.25R at +1.5R; stop checked first each bar):
 TP2 = the runner reached TP2; also the mean full-position R (live stack, staged 25/75 + pyramid) per bucket.
+Time to TP2 (TP2 trades only): calendar days and H4 bars from the entry bar's open to the M1 bar that touched TP2.
 Engine pipeline/ask_side_study, SCALED (ask-corrected) mode. All four detectors, 7 symbols; 2012-24 and 2025-26; long/short.
 """
 from __future__ import annotations
@@ -24,13 +25,13 @@ def outcome(F, be, bank_R, tp2_R, up):
     xh, xl, bh, n = F["xh"], F["xl"], F["bh"], F["n"]
     stop, banked, raised = -1.0, False, False
     for j in range(n):
-        if xl[j] <= stop: return "stop"
+        if xl[j] <= stop: return "stop", j
         if not banked and xh[j] >= bank_R: banked = True; stop = be
         if banked and not raised and bh[j] >= A.PYR_R:
             raised = True
             if not up: stop = max(stop, be + 0.25)
-        if tp2_R is not None and xh[j] >= tp2_R: return "tp2"
-    return "open"
+        if tp2_R is not None and xh[j] >= tp2_R: return "tp2", j
+    return "open", None
 
 
 ALL = []
@@ -43,9 +44,13 @@ def do_symbol(sym):
         e0 = float(F["eo"][0]); be = e0
         k = min(u["k_add"], F["n"] - 1)
         mfe6 = float(F["bh"][:k + 1].max())
-        oc = outcome(F, be, u["bank_R"], u["tp2_R"], u["up"])
+        oc, jx = outcome(F, be, u["bank_R"], u["tp2_R"], u["up"])
+        days = bars = None
+        if oc == "tp2":
+            tk = S.t[u["k0"] + jx]; days = (tk - S.t[u["k0"]]) / 1440.0
+            bars = int(A.np.searchsorted(S.h4t, tk, side="right")) - u["i0"]
         r, units, _ = TL.run_v(F, e0, be, u["bank_R"], u["tp2_R"], BANKF.get(x["strat"], 0.5), A.F0, u["k_add"], u["up"], True, None, None)
-        res.append((x["t"], x["up"], x["strat"], mfe6, oc, r, u["tp2_R"]))
+        res.append((x["t"], x["up"], x["strat"], mfe6, oc, r, u["tp2_R"], days, bars))
     return res
 
 
@@ -58,13 +63,20 @@ def main():
     for per in ("dev", "hold"):
         zs = [z for z in res if (z[0][:4] < "2025") == (per == "dev")]
         L.append(f"\n{'2012-24' if per == 'dev' else '2025-26'}  (n={len(zs)}; TP2 median {st.median(z[6] for z in zs):.2f}R)")
-        L.append(f"  {'best R in bars 1-6':>20} {'n':>5} {'share':>6} {'-> TP2':>7} {'longs':>7} {'shorts':>7} {'stopped':>8} {'mean R':>7}")
+        L.append(f"  {'best R in bars 1-6':>20} {'n':>5} {'share':>6} {'-> TP2':>7} {'longs':>7} {'shorts':>7} {'stopped':>8} {'mean R':>7} | "
+                 f"{'TP2 n':>5} {'days mean':>9} {'median':>6} {'25%':>5} {'75%':>5} {'H4 bars mean':>12} {'median':>6} {'TP2 inside bar 6':>16}")
         def row(lab, s):
             if not s: return
             tp = lambda q: (sum(1 for z in q if z[4] == "tp2") / len(q) * 100) if q else float("nan")
             lo = [z for z in s if z[1]]; sh = [z for z in s if not z[1]]
             L.append(f"  {lab:>20} {len(s):5d} {len(s) / len(zs) * 100:5.0f}% {tp(s):6.0f}% {tp(lo):6.0f}% {tp(sh):6.0f}% "
-                     f"{sum(1 for z in s if z[4] == 'stop') / len(s) * 100:7.0f}% {st.mean(z[5] for z in s):+7.3f}")
+                     f"{sum(1 for z in s if z[4] == 'stop') / len(s) * 100:7.0f}% {st.mean(z[5] for z in s):+7.3f} | " + tt(s))
+        def tt(s):
+            w = sorted(z[7] for z in s if z[4] == "tp2"); b = sorted(z[8] for z in s if z[4] == "tp2")
+            if not w: return f"{0:5d}"
+            q = lambda v, f: v[min(len(v) - 1, int(f * len(v)))]
+            return (f"{len(w):5d} {st.mean(w):9.1f} {st.median(w):6.1f} {q(w, .25):5.1f} {q(w, .75):5.1f} {st.mean(b):12.0f} {st.median(b):6.0f} "
+                    f"{sum(1 for x in b if x <= 6) / len(b) * 100:15.0f}%")
         row("ALL TRADES", zs)
         for a, b in BUCKETS:
             row(f"{'<' + str(b) if a < 0 else (str(a) + '+' if b > 50 else f'{a}-{b}')}R", [z for z in zs if a <= z[3] < b])
