@@ -3321,6 +3321,13 @@ void HandleSignal(SignalCandidate &cand)
    if(!is_replay) g_sig_class=ClassifyProtocol(cand.strategy,g_sig_regime);       // protocol class, FROZEN with the tag (same on every delay re-present)
    if(!is_replay){ g_to_entry=NormPrice(cand.entry); g_to_sl=NormPrice(cand.sl);
                    g_to_tp1=NormPrice(cand.tp1); g_to_tp2=NormPrice(cand.tp2); }  // (1a) TRUE-ORIG freeze
+   if(InpLiveMode && !is_replay && !g_reoffer_now)
+     {   // coach item 26 (part D finding): DeepFib can re-fire the SAME leg on a later bar - a fresh emit from the same detector
+         // and direction supersedes a held candidate, so one setup never yields two cards
+      for(int hh=0;hh<MAX_HELD;hh++)
+         if(g_held[hh].active && g_held[hh].cand.strategy==cand.strategy && g_held[hh].cand.direction==cand.direction)
+            HeldFinal(hh,StringFormat("superseded by a fresh %s signal #%d of the same direction",cand.strategy,id));
+     }
    if(g_reoffer_now)
      {   // coach item 26: regime / true-orig as frozen at the ORIGINAL signal; protocol DISCRETION for every detector
       g_sig_regime=g_ro_regime; g_sig_with_trend=g_ro_with_trend; g_sig_class="DISCRETION";
