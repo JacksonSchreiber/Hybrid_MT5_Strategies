@@ -135,6 +135,7 @@ input bool   InpStaged           = false;  // TESTER study (coach item 18): stag
 input double InpStagedF0         = 0.25;
 input int    InpStagedN          = 6;
 input double InpEarlyPromoteR    = 0.0;    // TESTER study: early promotion of the staged add at +R during bars 1..N-1 (0 = off; live: staged_early_promote_r)
+input bool   InpInverse          = false;  // TESTER study (coach item 21): publish + auto-arm the Inverse in AA runs (live: live.json inverse_signal)
 input bool   InpPyramid          = false;  // TESTER study (coach item 20): add InpPyramidFrac of the full size at +InpPyramidR after the bank
 input double InpPyramidR         = 1.5;
 input double InpPyramidFrac      = 0.5;
@@ -337,8 +338,17 @@ struct JournalRow
    double   st_anchor_risk;     // |first fill - original stop|: 1R for every tranche
    datetime st_fill_time;       // this tranche's fill time (server clock)
    int      st_pyr;             // coach item 20: 0 no pyramid yet, 1 pyramid added, 2 pyramid refused (reason in the audit)
+   //--- coach item 21 (2026-10-01): the INVERSE signal. On a parent row: 0 not yet considered, 1 Inverse published,
+   //--- 2 window passed / not eligible. On an Inverse row: 1 armed (EA-held), 2 filled, 3 cancelled / missed (reject_why).
+   int      inv_state;
+   int      inv_parent_sid;     // Inverse row: the parent's signal id
+   long     inv_parent_posid;   // Inverse row: the parent's position id (its first tranche)
+   string   inv_parent_strategy;// Inverse row: the parent's detector (its bank fraction applies)
+   int      inv_bars_to_stop;   // Inverse row: the H4 bar (after the parent's signal bar) in which the parent was stopped
+   double   inv_slip_r;         // Inverse row: fill vs the parent's stop, in R (positive = worse)
   };
-void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0; r.st_anchor_entry=0.0; r.st_anchor_risk=0.0; r.st_fill_time=0; r.st_pyr=0; }
+void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0; r.st_anchor_entry=0.0; r.st_anchor_risk=0.0; r.st_fill_time=0; r.st_pyr=0;
+                              r.inv_state=0; r.inv_parent_sid=0; r.inv_parent_posid=0; r.inv_parent_strategy=""; r.inv_bars_to_stop=0; r.inv_slip_r=0.0; }
 JournalRow g_rows[];
 
 //--- mid-trade management panel state
@@ -509,6 +519,8 @@ int      g_cfg_st_n=6;            // live.json staged_add_bar: add at the close 
 double   g_cfg_st_early=0.0;      // early promotion: RETIRED (coach 2026-10-01 - the H4 replay flattered it; M5 -0.002R, +11R DD).
                                   //   Hard-off live (no live.json key is read); the tester input InpEarlyPromoteR remains for studies.
 bool     g_cfg_pyr=false;         // live.json pyramid_add: coach item 20 - add at +1.5R after the bank
+bool     g_cfg_inverse=false;     // live.json inverse_signal: coach item 21 - publish the Inverse at the parent's bar-6 close
+bool     g_cfg_pyr_inverse=true;  // live.json pyramid_on_inverse: the +1.5R pyramid also on Inverse positions (coach B9)
 double   g_cfg_pyr_r=1.5;         // live.json pyramid_trigger_r
 double   g_cfg_pyr_f=0.5;         // live.json pyramid_frac: share of the ORIGINAL full size added
 double LiveBankFrac(string strat){ return strat=="TrendCont" ? g_cfg_tc_bank : (strat=="DeepFib" ? g_cfg_df_bank : 0.0); }
@@ -824,6 +836,8 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_st_f0=StringToDouble(JGet(k,v,"staged_first_frac","0.25")); if(g_cfg_st_f0<0.05 || g_cfg_st_f0>0.95) g_cfg_st_f0=0.25;
       g_cfg_st_n=(int)StringToInteger(JGet(k,v,"staged_add_bar","6")); if(g_cfg_st_n<1 || g_cfg_st_n>60) g_cfg_st_n=6;
       g_cfg_pyr=(StringToInteger(JGet(k,v,"pyramid_add","0"))!=0);
+      g_cfg_inverse=(StringToInteger(JGet(k,v,"inverse_signal","0"))!=0);
+      g_cfg_pyr_inverse=(StringToInteger(JGet(k,v,"pyramid_on_inverse","1"))!=0);
       g_cfg_pyr_r=StringToDouble(JGet(k,v,"pyramid_trigger_r","1.5")); if(g_cfg_pyr_r<1.05 || g_cfg_pyr_r>5.0) g_cfg_pyr_r=1.5;
       g_cfg_pyr_f=StringToDouble(JGet(k,v,"pyramid_frac","0.5"));     if(g_cfg_pyr_f<0.05 || g_cfg_pyr_f>1.0) g_cfg_pyr_f=0.5;
       if(g_cfg_election_days<0) g_cfg_election_days=0;
@@ -999,6 +1013,7 @@ void OnTimer()
       LiveFtmoDayReset();      // no file I/O unless the FTMO day key changed
       LiveProcessTasks();
       StagedAddTick();         // coach item 18: add the second tranche at the close of H4 bar N (live, staged rows only)
+      if(g_cfg_inverse || InverseArmedCount()>0) { InverseArmTick(); InverseFireTick(); }   // coach item 21 (also every tick)
       if(LiveWeekendFlatOn() && LiveWeekendWindow(TimeCurrent())) LiveWeekendFlatten();   // §10.1 live: retries a refused close
      }
    //--- positions/ view: refreshed on every state change (journal hook) and at the heartbeat cadence
@@ -1024,6 +1039,7 @@ void OnTimer()
 int OnInit()
   {
    //--- coach item 18 tester study: staged entry (+ early promotion) from inputs when not live; live reads live.json
+   if(!InpLiveMode && InpInverse) g_cfg_inverse=true;   // coach item 21 tester study
    if(!InpLiveMode && InpStaged)
      { g_cfg_staged=true; g_cfg_st_f0=InpStagedF0; g_cfg_st_n=MathMax(1,InpStagedN); g_cfg_st_early=MathMax(0.0,InpEarlyPromoteR); }
    bool in_tester = (bool)MQLInfoInteger(MQL_TESTER);
@@ -1338,6 +1354,7 @@ void OnTick()
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
    if(!InpLiveMode && g_cfg_staged) StagedAddTick();   // coach item 18 tester study (live runs it on the timer)
+   if(g_cfg_inverse || InverseArmedCount()>0) { InverseArmTick(); InverseFireTick(); }   // coach item 21 (every tick: the fill is time-critical)
    LiveDetectExternalEdits();  // live only: SL/TP moved in the trader's own terminal -> EXTERNAL_* action + audit
    TrackAllMfePath();          // Item 2: per-tick MFE + path (journal-only)
    //--- age out unfilled pending orders (edited-entry setups) every tick
@@ -1859,6 +1876,21 @@ void WriteSignalJson(string status,string auto_reason)
    j.KTime("signal_time",c.zone_to); j.KTime("decision_bar",bar0); j.KTime("published_at",g_park.published_at);
    j.KStr("sigtime_text",SigTimeString(bar0,c.zone_to)); j.KStr("session",SessionName(bar0));
    j.KStr("strategy",c.strategy); j.KStr("strategy_text",c.strategy+(c.d1_context?"  [D1 aligned]":"")+(c.comment!=""?" - "+c.comment:""));
+   if(c.strategy=="Inverse")
+     {   // coach item 21: the card shows the parent's entry, stop, current R and bars open
+      int psid=0; long pposid=0; string pst=""; InverseParseComment(c.comment,psid,pposid,pst);
+      int pi=RowIdxByPosidAny(pposid);
+      j.Key("parent"); j.BeginObj();
+      j.KInt("signal_id",psid); j.KInt("posid",pposid); j.KStr("strategy",pst);
+      if(pi>=0)
+        {
+         j.KStr("direction",DirStr(g_rows[pi].direction)); j.KNum("entry",AnchorEntry(pi),_Digits); j.KNum("stop",g_rows[pi].sl,_Digits);
+         j.KNum("open_r",OpenR(pi),3); j.KInt("bars_open",iBarShift(_Symbol,PERIOD_H4,g_rows[pi].time,false)-1);
+         j.KNum("lots",g_rows[pi].lots,2);
+        }
+      j.KStr("rule","fills only if the parent is stopped before H4 bar 19 (EA-held stop-entry at the parent's stop)");
+      j.EndObj();
+     }
    j.KStr("direction",DirStr(c.direction)); j.KInt("direction_sign",c.direction);
    j.Key("levels"); j.BeginObj();
      j.KNum("entry",c.entry,_Digits); j.KNum("sl",c.sl,_Digits); j.KNum("tp",c.tp,_Digits);
@@ -2076,6 +2108,8 @@ void LiveSaveRowState(int i)
    j.KInt("auto_skip",r.auto_skip); j.KStr("entry_mode",r.entry_mode); j.KStr("reject_why",r.reject_why);
    j.KInt("st_state",r.st_state); j.KInt("st_tranche",r.st_tranche); j.KNum("st_full_lots",r.st_full_lots,2);
    j.KNum("st_anchor_entry",r.st_anchor_entry,_Digits); j.KNum("st_anchor_risk",r.st_anchor_risk,_Digits); j.KInt("st_fill_time",(long)r.st_fill_time); j.KInt("st_pyr",r.st_pyr);
+   j.KInt("inv_state",r.inv_state); j.KInt("inv_parent_sid",r.inv_parent_sid); j.KInt("inv_parent_posid",r.inv_parent_posid);
+   j.KStr("inv_parent_strategy",r.inv_parent_strategy); j.KInt("inv_bars_to_stop",r.inv_bars_to_stop); j.KNum("inv_slip_r",r.inv_slip_r,4);
    j.Key("actions"); j.BeginObj();
    int na=0;
    for(int a=0;a<ArraySize(g_actions);a++)
@@ -2188,6 +2222,9 @@ bool LiveLoadRowState(string rel)
    r.st_full_lots=StringToDouble(JGet(k,v,"st_full_lots","0")); r.st_anchor_entry=StringToDouble(JGet(k,v,"st_anchor_entry","0"));
    r.st_anchor_risk=StringToDouble(JGet(k,v,"st_anchor_risk","0")); r.st_fill_time=(datetime)StringToInteger(JGet(k,v,"st_fill_time","0"));
    r.st_pyr=(int)StringToInteger(JGet(k,v,"st_pyr","0"));
+   r.inv_state=(int)StringToInteger(JGet(k,v,"inv_state","0")); r.inv_parent_sid=(int)StringToInteger(JGet(k,v,"inv_parent_sid","0"));
+   r.inv_parent_posid=StringToInteger(JGet(k,v,"inv_parent_posid","0")); r.inv_parent_strategy=JGet(k,v,"inv_parent_strategy","");
+   r.inv_bars_to_stop=(int)StringToInteger(JGet(k,v,"inv_bars_to_stop","0")); r.inv_slip_r=StringToDouble(JGet(k,v,"inv_slip_r","0"));
    g_rows[n]=r;
    int na=(int)StringToInteger(JGet(k,v,"actions.n","0"));
    for(int a=0;a<na;a++)
@@ -2402,6 +2439,8 @@ bool TaskIdOk(string id)
   }
 int RowIdxByPosid(long posid)
   { for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].posid==posid && !g_rows[i].closed) return i; return -1; }
+int RowIdxByPosidAny(long posid)   // coach item 21: the Inverse looks up its parent even after the parent closed
+  { if(posid<=0) return -1; for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].posid==posid) return i; return -1; }
 int RowIdxBySid(int sid)
   { for(int i=ArraySize(g_rows)-1;i>=0;i--) if(g_rows[i].id==sid) return i; return -1; }
 //--- FTMO guards (G3/§11-7). config\account.json = the rules; state\account.json = what we observed.
@@ -2522,6 +2561,17 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       if(LiveWeekendFlatOn() && LiveWeekendWindow(TimeCurrent())){ reason="weekend_flat"; return "rejected"; }   // §10.1 live: no entries after the Friday cutoff
       string evn=""; datetime evt=0;
       if(ElectionGateHit(now,evn,evt)){ reason="election_gate:"+evn; return "rejected"; }
+      bool inv=(cand.strategy=="Inverse");
+      if(inv)
+        {   // coach item 21: armed while its own parent is the symbol's open position; sized and gated at the fill
+         if(HasActiveOrderOrPosition() && !InverseParentIsOnlyPosition(cand)){ reason="setup_lock"; return "rejected"; }
+         CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
+                        true,0,DecisionMs(),false,false,"inverse_stop");
+         row_idx=RowIdxBySid(sid);
+         WriteSignalJson("approved_pending","");
+         LiveUnpark();                      // the symbol's OTHER parked signals stay open (coach exemption)
+         reason="ok"; return "accepted";
+        }
       if(HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
       string em=JGet(k,v,"params.entry_mode",(g_delay_count>0 ? "pending" : "market"));
       if(em=="market_now") em="market";
@@ -3274,6 +3324,16 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
       return;
      }
 
+   if(approved && cand.strategy=="Inverse")
+     {   // coach item 21: EA-held stop-entry - armed now, fired by InverseFireTick() the moment the parent is stopped
+      g_rows[n].decision="approved_pending"; g_rows[n].is_pending=true; g_rows[n].order_ticket=0; g_rows[n].posid=0;
+      g_rows[n].entry_mode="inverse_stop"; g_rows[n].inv_state=1;
+      InverseParseComment(cand.comment,g_rows[n].inv_parent_sid,g_rows[n].inv_parent_posid,g_rows[n].inv_parent_strategy);
+      if(InpLiveMode) AuditLine("inverse_armed","","approve",StringFormat("sig:%d",id),"ok","",
+                                StringFormat("parent=#%d posid=%I64d stop-entry %s",g_rows[n].inv_parent_sid,g_rows[n].inv_parent_posid,DoubleToString(cand.entry,_Digits)));
+      WriteJournal(g_journal_part);
+      return;
+     }
    if(approved)
      {
       g_rows[n].decision="approved";
@@ -3510,8 +3570,9 @@ void ManageOpenPositions()
       //--- the bank share: 50% everywhere, except live TrendCont, which takes live.json trendcont_bank_frac (coach
       //--- 2026-09-30: 25%) - read at the moment of the bank, so it applies from the first TrendCont to reach +1R after
       //--- a config change, and journaled in partial_frac so the record shows which bank each trade ran under.
-      bool   tc  =(InpLiveMode ? LiveBankFrac(g_rows[i].strategy)>0.0 : g_rows[i].strategy=="TrendCont");
-      double bf  =(tc ? (InpLiveMode ? LiveBankFrac(g_rows[i].strategy) : InpTcBankFrac) : 0.5);
+      string bst =(g_rows[i].strategy=="Inverse" ? g_rows[i].inv_parent_strategy : g_rows[i].strategy);   // coach item 21
+      bool   tc  =(InpLiveMode ? LiveBankFrac(bst)>0.0 : bst=="TrendCont");
+      double bf  =(tc ? (InpLiveMode ? LiveBankFrac(bst) : InpTcBankFrac) : 0.5);
       double pv  =MathFloor((bf*lots)/step)*step;           // mechanical bank
       //--- live: journal the share ACTUALLY banked (the lot step rounds 25% of 0.05 lots down to 0.01 = 20%; a 0.01-lot
       //--- position cannot split at all -> 0), so the record shows exactly what each trade ran under
@@ -5582,6 +5643,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 
    ApplyExitDeal(idx,deal);
    WriteJournal(g_journal_part);
+   if(g_rows[idx].closed && InverseArmedCount()>0) InverseFireTick();   // coach item 21: fire the armed Inverse at the parent's stop-out
   }
 //--- Graded-close accounting for ONE DEAL_ENTRY_OUT deal of row idx (extracted verbatim from
 //--- OnTradeTransaction, Phase 3 M1 Slice 4) so the restart reconcile can replay history deals
@@ -5679,13 +5741,14 @@ void WriteLiveJournals()
        if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
    for(int q=0;q<nm;q++)
      {
-      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason,entry_mode,tranche,full_lots,fill_time\n";
+      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason,entry_mode,tranche,full_lots,fill_time,parent_signal_id,bars_to_stop,inv_slip_r\n";
       for(int i=0;i<ArraySize(g_rows);i++)
         {
          if(StampMonth(g_rows[i].time)!=months[q]) continue;
          body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+","+CsvSafe(g_rows[i].reject_why)
               +StringFormat(",%s,%d,%s,%s",CsvSafe(g_rows[i].entry_mode),g_rows[i].st_tranche,(g_rows[i].st_full_lots>0.0?DoubleToString(g_rows[i].st_full_lots,2):""),
-                            (g_rows[i].st_fill_time>0?TimeToString(g_rows[i].st_fill_time,TIME_DATE|TIME_SECONDS):""))+"\n";
+                            (g_rows[i].st_fill_time>0?TimeToString(g_rows[i].st_fill_time,TIME_DATE|TIME_SECONDS):""))
+              +(g_rows[i].strategy=="Inverse" ? StringFormat(",%d,%d,%.3f",g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r) : ",,,")+"\n";
         }
       AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }
@@ -5708,10 +5771,11 @@ void WriteJournal(string path)
       "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
       "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal,decision_class,"
-      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"+FloorHeader()+(InpStaged ? ",entry_mode,tranche,full_lots" : "")+"\n");
+      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"+FloorHeader()+(InpStaged ? ",entry_mode,tranche,full_lots" : "")+(InpInverse ? ",inv_entry_mode,parent_signal_id,bars_to_stop,inv_slip_r,inv_state,reject_why" : "")+"\n");
    for(int i=0;i<ArraySize(g_rows);i++)
       FileWriteString(h,JournalRowLine(g_rows[i])+FloorCols(g_rows[i])
-                        +(InpStaged ? StringFormat(",%s,%d,%.2f",g_rows[i].entry_mode,g_rows[i].st_tranche,g_rows[i].st_full_lots) : "")+"\n");
+                        +(InpStaged ? StringFormat(",%s,%d,%.2f",g_rows[i].entry_mode,g_rows[i].st_tranche,g_rows[i].st_full_lots) : "")
+                        +(InpInverse ? StringFormat(",%s,%d,%d,%.3f,%d,%s",g_rows[i].entry_mode,g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r,g_rows[i].inv_state,CsvSafe(g_rows[i].reject_why)) : "")+"\n");
    FileFlush(h); FileClose(h);
   }
 
@@ -5904,6 +5968,7 @@ void PyramidCheck(int i,double bid,double ask,double step,double vmin)
   {
    bool on=(InpLiveMode ? g_cfg_pyr : InpPyramid);
    if(!on || g_rows[i].st_pyr!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) return;
+   if(g_rows[i].strategy=="Inverse" && InpLiveMode && !g_cfg_pyr_inverse) return;   // coach item 21 B9
    double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR), frac=(InpLiveMode ? g_cfg_pyr_f : InpPyramidFrac);
    int dir=g_rows[i].direction;
    double ae=AnchorEntry(i), ar=AnchorRisk(i);
@@ -5960,4 +6025,208 @@ void PyramidCheck(int i,double bid,double ask,double step,double vmin)
    Print("Signal #",g_rows[i].id," PYRAMID +",DoubleToString(trigR,2),"R -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
    WriteJournal(g_journal_part);
    if(InpLiveMode) LiveWritePositions();
+  }
+
+//+------------------------------------------------------------------+
+//| INVERSE SIGNAL (coach item 21, trader ruling 2026-10-01)          |
+//+------------------------------------------------------------------+
+//--- A parent (any detector, first tranche) still open and UNBANKED at the close of its 6th H4 bar publishes an Inverse:
+//--- the opposite trade, entered by an EA-HELD stop-entry at the parent's stop, 1R = the parent's original stop distance
+//--- (stop at the parent's entry), bank at the mirrored +1R with the parent's fraction, runner to the mirrored TP2. It is
+//--- a DISCRETION card: never auto-approved live, no response = expired. Approval ARMS it (no broker order). It fires
+//--- only if the parent is stopped inside H4 bars 7-18 - the EA sends a market order at that moment after the kill
+//--- switch, NO-ENTRY window, spread gate, lot floor, FTMO headroom and a 0.10R slippage guard. Cancelled when the parent
+//--- banks, is closed any other way, or passes bar 18. One per parent; never an Inverse of an Inverse.
+const double INV_SLIP_GUARD_R=0.10;
+const int    INV_W0=7, INV_W1=18;
+
+void InverseParseComment(string c,int &psid,long &pposid,string &pstrat)
+  {   // "INV parent=<sid> posid=<posid> strat=<strategy> | ..."
+   psid=0; pposid=0; pstrat="";
+   string parts[]; int n=StringSplit(c,' ',parts);
+   for(int i=0;i<n;i++)
+     {
+      if(StringFind(parts[i],"parent=")==0) psid=(int)StringToInteger(StringSubstr(parts[i],7));
+      else if(StringFind(parts[i],"posid=")==0) pposid=StringToInteger(StringSubstr(parts[i],6));
+      else if(StringFind(parts[i],"strat=")==0) pstrat=StringSubstr(parts[i],6);
+     }
+  }
+
+int InverseArmedCount()
+  {
+   int n=0;
+   for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].strategy=="Inverse" && g_rows[i].inv_state==1 && !g_rows[i].closed) n++;
+   return n;
+  }
+
+//--- the symbol's only open position is this Inverse's parent (the approve exemption, coach A3)
+bool InverseParentIsOnlyPosition(SignalCandidate &cand)
+  {
+   int psid=0; long pposid=0; string pst=""; InverseParseComment(cand.comment,psid,pposid,pst);
+   for(int p=PositionsTotal()-1;p>=0;p--)
+     {
+      ulong tk=PositionGetTicket(p); if(tk==0) continue;
+      if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+      long pid=(long)PositionGetInteger(POSITION_IDENTIFIER);
+      int ri=RowIdxByPosid(pid);
+      if(ri<0) return false;
+      if(pid!=pposid && g_rows[ri].id!=psid) return false;      // another position (or a tranche of another signal)
+     }
+   for(int i=0;i<ArraySize(g_rows);i++)
+      if(g_rows[i].is_pending && g_rows[i].order_ticket>0 && g_rows[i].posid<=0 && !g_rows[i].closed) return false;
+   return true;
+  }
+
+//--- a V-class (big release) event for this symbol inside the next 6 hours: the guide's NO ENTRY window
+bool VNoEntryHit(datetime now,string &ev)
+  {
+   ev="";
+   if(!g_ev_loaded) return false;
+   string base,quote; SymbolCcy(base,quote);
+   for(int i=0;i<ArraySize(g_ev_t);i++)
+     {
+      if(g_ev_cls[i]!="V") continue;
+      if(g_ev_ccy[i]!=base && g_ev_ccy[i]!=quote && g_ev_ccy[i]!="All") continue;
+      if(g_ev_t[i]>now && g_ev_t[i]<=now+6*3600){ ev=g_ev_ccy[i]+" "+g_ev_name[i]; return true; }
+     }
+   return false;
+  }
+
+//--- rewrite a (no longer parked) signal file's status - the Inverse lives past its park
+void InverseSignalStatus(int sid,string from,string to)
+  {
+   if(!InpLiveMode) return;
+   string sp=LivePath(StringFormat("signals\\%s-%d.json",_Symbol,sid)); string js=ReadTextFile(sp);
+   if(js=="") return;
+   StringReplace(js,"\"status\":\""+from+"\"","\"status\":\""+to+"\""); AtomicWriteText(sp,js);
+  }
+
+void InverseCancel(int i,string why)
+  {
+   g_rows[i].inv_state=3; g_rows[i].closed=true; g_rows[i].is_pending=false;
+   if(g_rows[i].decision=="approved_pending") g_rows[i].decision="cancelled";
+   g_rows[i].reject_why="inverse "+why;
+   if(InpLiveMode)
+     {
+      AuditLine("inverse","","",StringFormat("sig:%d",g_rows[i].id),"cancelled",why,StringFormat("parent=#%d",g_rows[i].inv_parent_sid));
+      InverseSignalStatus(g_rows[i].id,"approved_pending","cancelled");
+     }
+   Print("Signal #",g_rows[i].id," INVERSE cancelled: ",why);
+  }
+
+//--- publish: at the parent's bar-6 close (H4 bar 7 opened), still open and unbanked
+void InverseArmTick()
+  {
+   if(!g_cfg_inverse) return;
+   int nrows=ArraySize(g_rows);
+   for(int i=0;i<nrows;i++)
+     {
+      if(g_rows[i].symbol!=_Symbol || g_rows[i].strategy=="Inverse" || g_rows[i].strategy=="TEST" || g_rows[i].strategy=="ADOPTED") continue;
+      if(g_rows[i].inv_state!=0 || g_rows[i].st_tranche>=2) continue;
+      if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending") || g_rows[i].posid<=0) continue;
+      if(g_rows[i].closed || g_rows[i].banked) { g_rows[i].inv_state=2; continue; }
+      if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;
+      int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
+      if(sh<INV_W0) continue;                                   // bar 6 not closed yet
+      if(sh>INV_W1){ g_rows[i].inv_state=2; continue; }
+      if(InpLiveMode && ParkCount()>=g_cfg_max_parks) continue;   // retry on a later tick
+      double R=AnchorRisk(i), pe=AnchorEntry(i), ps=g_rows[i].sl;
+      if(R<=0.0 || ps<=0.0){ g_rows[i].inv_state=2; continue; }
+      int pd=g_rows[i].direction;
+      double tp1R=(g_rows[i].tp1>0.0 ? MathAbs(g_rows[i].tp1-pe)/R : 1.0), tp2R=(g_rows[i].tp2>0.0 ? MathAbs(g_rows[i].tp2-pe)/R : MathAbs(g_rows[i].tp-pe)/R);
+      SignalCandidate c; ResetCandidate(c);
+      c.valid=true; c.strategy="Inverse"; c.direction=-pd; c.stop_entry=true;
+      c.entry=NormPrice(ps); c.sl=NormPrice(pe);
+      c.tp1=NormPrice(ps-pd*MathMin(1.0,tp1R)*R); c.tp2=NormPrice(ps-pd*tp2R*R); c.tp=c.tp2;
+      c.partial_fraction=(g_rows[i].partial_frac>0.0 ? g_rows[i].partial_frac : 0.5); c.rr=tp2R;
+      c.comment=StringFormat("INV parent=%d posid=%I64d strat=%s | %s Inverse: fills only if the parent is stopped before H4 bar %d",
+                             g_rows[i].id,g_rows[i].posid,g_rows[i].strategy,g_rows[i].strategy,INV_W1+1);
+      c.zone_from=iTime(_Symbol,g_tf,1); c.zone_to=iTime(_Symbol,g_tf,0); c.zone_hi=MathMax(c.entry,c.sl); c.zone_lo=MathMin(c.entry,c.sl);
+      g_rows[i].inv_state=1;
+      if(InpLiveMode) AuditLine("inverse","","",StringFormat("sig:%d",g_rows[i].id),"published","",StringFormat("parent bar %d open %+.2fR",sh-1,OpenR(i)));
+      HandleSignal(c);
+      if(InpLiveMode && g_live_parked) ParkStoreCurrent();
+     }
+  }
+
+//--- fire / cancel the armed Inverses
+void InverseFireTick()
+  {
+   int nrows=ArraySize(g_rows); bool changed=false;
+   for(int i=0;i<nrows;i++)
+     {
+      if(g_rows[i].strategy!="Inverse" || g_rows[i].inv_state!=1 || g_rows[i].closed || g_rows[i].symbol!=_Symbol) continue;
+      int p=RowIdxByPosidAny(g_rows[i].inv_parent_posid);
+      if(p<0){ InverseCancel(i,"parent_not_found"); changed=true; continue; }
+      if(g_rows[p].banked){ InverseCancel(i,"parent_banked"); changed=true; continue; }
+      int shs=iBarShift(_Symbol,PERIOD_H4,g_rows[p].time,false);
+      if(!g_rows[p].closed && PositionSelectByTicket((ulong)g_rows[p].posid))
+        {
+         if(shs>INV_W1){ InverseCancel(i,"window_passed"); changed=true; }
+         continue;                                               // armed, waiting
+        }
+      if(!g_rows[p].closed) continue;                            // the exit deal has not been applied yet
+      //--- the parent is closed: was it STOPPED (at / through its original stop) inside bars 7-18?
+      double R=AnchorRisk(p); int pd=g_rows[p].direction; double ps=g_rows[p].sl;
+      double beyond=(pd>0 ? ps-g_rows[p].exit_price : g_rows[p].exit_price-ps);   // >= 0 when the exit is at/through the stop
+      int bar=(g_rows[p].exit_time>0 ? iBarShift(_Symbol,PERIOD_H4,g_rows[p].time,false)-iBarShift(_Symbol,PERIOD_H4,g_rows[p].exit_time,false) : 0);
+      if(R<=0.0 || beyond<-0.02*R){ InverseCancel(i,"parent_closed_not_stopped"); changed=true; continue; }
+      if(bar<INV_W0 || bar>INV_W1){ InverseCancel(i,StringFormat("parent_stopped_outside_window:bar%d",bar)); changed=true; continue; }
+      changed=true;
+      int d=g_rows[i].direction;
+      double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+      double px=(d>0 ? ask : bid);
+      double slip=(d>0 ? px-ps : ps-px)/R;                      // positive = worse than the parent's stop
+      g_rows[i].inv_bars_to_stop=bar;
+      if(slip>INV_SLIP_GUARD_R){ g_rows[i].inv_slip_r=slip; InverseCancel(i,StringFormat("missed: slipped %.3fR",slip)); continue; }
+      double sl=g_rows[i].sl, tp=(g_rows[i].tp2>0.0 ? g_rows[i].tp2 : g_rows[i].tp);
+      if(InpLiveMode)
+        {
+         string ev="", why="";
+         if(!g_trading_enabled){ InverseCancel(i,"trading_disabled"); continue; }
+         if(VNoEntryHit(LiveNow(),ev)){ InverseCancel(i,"no_entry_window:"+ev); continue; }
+         if(g_cfg_max_spread_r>0.0 && (ask-bid)/R>g_cfg_max_spread_r){ InverseCancel(i,StringFormat("spread_too_wide:%.3fR",(ask-bid)/R)); continue; }
+         double fr=0.0, frung=0.0;
+         if(LotFloorExceedsRung(px,sl,fr,frung)){ InverseCancel(i,StringFormat("lot_floor_exceeds_rung:%.2f%%",fr*100.0)); continue; }
+        }
+      double lots=SizeByRisk(px,sl);
+      if(lots<=0.0){ InverseCancel(i,"lots_zero"); continue; }
+      if(InpLiveMode)
+        {
+         string fwhy="";
+         if(!FtmoHeadroomOK(lots,px,sl,fwhy,"inverse")){ InverseCancel(i,fwhy); continue; }
+        }
+      string cap=StringFormat("Signal #%d inv",g_rows[i].id);
+      bool ok=(d>0 ? g_trade.Buy(lots,_Symbol,0.0,sl,tp,cap) : g_trade.Sell(lots,_Symbol,0.0,sl,tp,cap));
+      if(!ok){ InverseCancel(i,StringFormat("order_failed:%d",(int)g_trade.ResultRetcode())); continue; }
+      long pid=0; double fill=px; ulong deal=g_trade.ResultDeal();
+      for(int t=0;t<10 && pid<=0;t++)
+        {
+         if(deal>0 && HistoryDealSelect(deal)) { pid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID); double f=HistoryDealGetDouble(deal,DEAL_PRICE); if(f>0.0) fill=f; }
+         if(pid<=0 && InpLiveMode && !(bool)MQLInfoInteger(MQL_TESTER)) Sleep(200); else break;
+        }
+      if(pid<=0)
+        for(int q=PositionsTotal()-1;q>=0 && pid<=0;q--)
+          {
+           ulong tk=PositionGetTicket(q); if(tk==0) continue;
+           if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+           if(PositionGetString(POSITION_COMMENT)!=cap) continue;
+           pid=(long)PositionGetInteger(POSITION_IDENTIFIER); fill=PositionGetDouble(POSITION_PRICE_OPEN);
+          }
+      g_rows[i].posid=pid; g_rows[i].entry=fill; g_rows[i].risk_px=MathAbs(fill-sl); g_rows[i].lots=lots;
+      g_rows[i].decision="approved"; g_rows[i].is_pending=false; g_rows[i].inv_state=2;
+      g_rows[i].inv_slip_r=(d>0 ? fill-ps : ps-fill)/R;
+      g_rows[i].st_anchor_entry=fill; g_rows[i].st_anchor_risk=g_rows[i].risk_px; g_rows[i].st_fill_time=TimeCurrent(); g_rows[i].placed_time=TimeCurrent();
+      g_rows[i].tp=tp; g_rows[i].banked=false; g_rows[i].tp1_done=false;
+      if(g_rows[i].partial_frac>0.0 && g_rows[i].tp1>0.0) MinLotSplitGuard(i);
+      if(InpLiveMode)
+        {
+         AuditLine("inverse","","",StringFormat("sig:%d",g_rows[i].id),"filled","",
+                   StringFormat("parent=#%d stopped bar %d · fill %s vs stop %s (%+.3fR) · lots %.2f posid=%I64d",
+                                g_rows[i].inv_parent_sid,bar,DoubleToString(fill,_Digits),DoubleToString(ps,_Digits),g_rows[i].inv_slip_r,lots,pid));
+         InverseSignalStatus(g_rows[i].id,"approved_pending","approved");
+        }
+      Print("Signal #",g_rows[i].id," INVERSE FILLED ",DoubleToString(lots,2)," lots @ ",DoubleToString(fill,_Digits)," (parent stopped bar ",bar,")");
+     }
+   if(changed){ WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions(); }
   }

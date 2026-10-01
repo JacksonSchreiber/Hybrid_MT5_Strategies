@@ -127,9 +127,9 @@ def main():
         for p in jn:
             if not re.fullmatch(rf"{re.escape(S)}_\d{{6}}\.csv", os.path.basename(p)): fail(f"journal not monthly-named: {os.path.basename(p)}")
             with open(p,newline="",encoding="ascii",errors="replace") as f: hdr=f.readline().rstrip("\r\n").split(",")
-            if hdr[-10:-5]!=["live","account_id","risk_pct_gate","risk_mult_applied","auto"]: fail(f"journal {os.path.basename(p)} header lacks live columns: {hdr[-10:-5]}")
-            if hdr[-5:]!=["reject_reason","entry_mode","tranche","full_lots","fill_time"]: fail(f"journal {os.path.basename(p)} ends {hdr[-5:]!r}, expected reject_reason + the staged-entry columns")
-            if len(hdr)!=56: fail(f"journal {os.path.basename(p)} has {len(hdr)} columns, expected 56 (46 tester + 5 live + reject_reason + 4 staged)")
+            if hdr[-13:-8]!=["live","account_id","risk_pct_gate","risk_mult_applied","auto"]: fail(f"journal {os.path.basename(p)} header lacks live columns: {hdr[-13:-8]}")
+            if hdr[-8:]!=["reject_reason","entry_mode","tranche","full_lots","fill_time","parent_signal_id","bars_to_stop","inv_slip_r"]: fail(f"journal {os.path.basename(p)} ends {hdr[-8:]!r}, expected reject_reason + the staged-entry + Inverse columns")
+            if len(hdr)!=59: fail(f"journal {os.path.basename(p)} has {len(hdr)} columns, expected 59 (46 tester + 5 live + reject_reason + 4 staged + 3 Inverse)")
         if not jn: fail("no monthly live journal found")
         for p in glob.glob(os.path.join(R,"journal","*.part.csv")): fail(f"live journal dir has a .part file (tester path leaked): {os.path.basename(p)}")
     skip8=skip2auto=0; all_rows=[]
