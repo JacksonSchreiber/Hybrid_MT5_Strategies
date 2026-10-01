@@ -74,6 +74,29 @@ def parse_iso(s: str | None) -> datetime | None:
     if not s: return None
     try: return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError: return None
+def clean_overlay(ov: dict | None, ref: float | None) -> dict:
+    """2026-10-01: drop overlay geometry that is not a plausible price/time. A restored parked signal re-published random
+    memory in zone2 / leg / swings (GBPJPY #1: zone2.hi 2.9e139, swing prices 1e43-1e276, year -708848736) and both charts
+    scaled to it - the candles collapsed into a line. Keeps a price only within [ref/2, 2*ref] and a time only 2000..now+1y."""
+    ov = dict(ov or {})
+    if not ref or ref <= 0: return ov
+    okp = lambda p: isinstance(p, (int, float)) and ref / 2 <= p <= ref * 2
+    now_y = datetime.now(timezone.utc).year
+    def okt(t):
+        d = parse_iso(t) if isinstance(t, str) else None
+        return d is not None and 2000 <= d.year <= now_y + 1
+    for z in ("zone", "zone2"):
+        zz = ov.get(z)
+        if isinstance(zz, dict) and (zz.get("hi") or zz.get("lo")) and not (okp(zz.get("hi")) and okp(zz.get("lo"))):
+            ov[z] = {**zz, "hi": 0.0, "lo": 0.0}
+    lg = ov.get("leg")
+    if isinstance(lg, dict) and not (okp(lg.get("p0")) and okp(lg.get("p1")) and okt(lg.get("t0")) and okt(lg.get("t1"))):
+        ov["leg"] = {"t0": None, "p0": 0.0, "t1": None, "p1": 0.0}
+    ov["aux"] = [a for a in (ov.get("aux") or []) if isinstance(a, dict) and okp(a.get("price"))]
+    for k in ("swings_hi", "swings_lo"):
+        ov[k] = [w for w in (ov.get(k) or []) if isinstance(w, dict) and okp(w.get("p")) and okt(w.get("t"))]
+    return ov
+
 def fmt_dt(d: datetime | None, with_day=True) -> str:
     if not d: return "-"
     return d.strftime("%a %d %b %H:%M" if with_day else "%d %b %H:%M") + " UTC"

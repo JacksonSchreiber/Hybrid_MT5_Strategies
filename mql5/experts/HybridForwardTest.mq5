@@ -1460,7 +1460,7 @@ void OnTick()
    SignalCandidate best; bool have=false;
    for(int i=0;i<g_ndet;i++)
      {
-      SignalCandidate c;
+      SignalCandidate c; ResetCandidate(c);
       bool v=g_detectors[i].Detect(_Symbol,g_tf,c);
       if(v && c.valid && !have) { best=c; have=true; }
      }
@@ -1989,6 +1989,19 @@ void WriteSignalJson(string status,string auto_reason)
    j.EndObj();
    AtomicWriteText(LivePath(StringFormat("signals\\%s-%d.json",_Symbol,id)),j.Text());
   }
+//--- the parked candidate's display overlay, read back from its flat keys (absent in files written before 2026-10-01 -> empty)
+void ParkedOverlayLoad(SignalCandidate &c,string &pk[],string &pv[])
+  {
+   c.zone2_hi=StringToDouble(JGet(pk,pv,"cand.zone2_hi","0")); c.zone2_lo=StringToDouble(JGet(pk,pv,"cand.zone2_lo","0"));
+   c.leg_t0=IsoToTime(JGet(pk,pv,"cand.leg_t0","")); c.leg_p0=StringToDouble(JGet(pk,pv,"cand.leg_p0","0"));
+   c.leg_t1=IsoToTime(JGet(pk,pv,"cand.leg_t1","")); c.leg_p1=StringToDouble(JGet(pk,pv,"cand.leg_p1","0"));
+   c.aux_count=MathMin(MathMax((int)StringToInteger(JGet(pk,pv,"cand.aux_count","0")),0),8);
+   for(int a=0;a<c.aux_count;a++){ c.aux_price[a]=StringToDouble(JGet(pk,pv,StringFormat("cand.aux_p%d",a),"0")); c.aux_label[a]=JGet(pk,pv,StringFormat("cand.aux_l%d",a),""); }
+   c.n_swing_hi=MathMin(MathMax((int)StringToInteger(JGet(pk,pv,"cand.n_swing_hi","0")),0),10);
+   c.n_swing_lo=MathMin(MathMax((int)StringToInteger(JGet(pk,pv,"cand.n_swing_lo","0")),0),10);
+   for(int a=0;a<c.n_swing_hi;a++){ c.swing_hi_t[a]=IsoToTime(JGet(pk,pv,StringFormat("cand.swh_t%d",a),"")); c.swing_hi_p[a]=StringToDouble(JGet(pk,pv,StringFormat("cand.swh_p%d",a),"0")); }
+   for(int a=0;a<c.n_swing_lo;a++){ c.swing_lo_t[a]=IsoToTime(JGet(pk,pv,StringFormat("cand.swl_t%d",a),"")); c.swing_lo_p[a]=StringToDouble(JGet(pk,pv,StringFormat("cand.swl_p%d",a),"0")); }
+  }
 //--- parked-signal state file (restored by Slice 4)
 void LiveSaveParked()
   {
@@ -2007,6 +2020,14 @@ void LiveSaveParked()
      j.KNum("partial_fraction",c.partial_fraction,3); j.KTime("zone_from",c.zone_from); j.KTime("zone_to",c.zone_to);
      j.KNum("zone_hi",c.zone_hi,_Digits); j.KNum("zone_lo",c.zone_lo,_Digits); j.KBool("stop_entry",c.stop_entry);
      j.KBool("d1_context",c.d1_context); j.KStr("comment",c.comment);
+     //--- the display overlay too (2026-10-01): without it a restored signal re-published an empty/garbage overlay
+     j.KNum("zone2_hi",c.zone2_hi,_Digits); j.KNum("zone2_lo",c.zone2_lo,_Digits);
+     j.KTime("leg_t0",c.leg_t0); j.KNum("leg_p0",c.leg_p0,_Digits); j.KTime("leg_t1",c.leg_t1); j.KNum("leg_p1",c.leg_p1,_Digits);
+     int na=MathMin(MathMax(c.aux_count,0),8); j.KInt("aux_count",na);
+     for(int a=0;a<na;a++){ j.KNum(StringFormat("aux_p%d",a),c.aux_price[a],_Digits); j.KStr(StringFormat("aux_l%d",a),c.aux_label[a]); }
+     int nh=MathMin(MathMax(c.n_swing_hi,0),10), nl=MathMin(MathMax(c.n_swing_lo,0),10); j.KInt("n_swing_hi",nh); j.KInt("n_swing_lo",nl);
+     for(int a=0;a<nh;a++){ j.KTime(StringFormat("swh_t%d",a),c.swing_hi_t[a]); j.KNum(StringFormat("swh_p%d",a),c.swing_hi_p[a],_Digits); }
+     for(int a=0;a<nl;a++){ j.KTime(StringFormat("swl_t%d",a),c.swing_lo_t[a]); j.KNum(StringFormat("swl_p%d",a),c.swing_lo_p[a],_Digits); }
    j.EndObj();
    j.EndObj();
    AtomicWriteText(LivePath(StringFormat("state\\%s\\parked_%d.json",_Symbol,g_park.sid)),j.Text());
@@ -2396,13 +2417,15 @@ void LiveRestoreState()
      {
       string pk[],pv[],pe; string pt=ReadTextFile(LivePath("state\\"+_Symbol+"\\"+pfiles[pf]));
       if(pt=="" || !JsonFlatParse(pt,pk,pv,pe)) continue;
-      SignalCandidate c; c.valid=true;
+      SignalCandidate c; ResetCandidate(c); c.valid=true;      // 2026-10-01: a local struct is NOT zeroed - unreset overlay fields
+                                                                 // published random memory (GBPJPY #1 zone2.hi 2.9e139) after a restart
       c.strategy=JGet(pk,pv,"cand.strategy",""); c.direction=(int)StringToInteger(JGet(pk,pv,"cand.direction","0"));
       c.entry=StringToDouble(JGet(pk,pv,"cand.entry")); c.sl=StringToDouble(JGet(pk,pv,"cand.sl")); c.tp=StringToDouble(JGet(pk,pv,"cand.tp"));
       c.tp1=StringToDouble(JGet(pk,pv,"cand.tp1")); c.tp2=StringToDouble(JGet(pk,pv,"cand.tp2")); c.rr=StringToDouble(JGet(pk,pv,"cand.rr"));
       c.partial_fraction=StringToDouble(JGet(pk,pv,"cand.partial_fraction")); c.zone_from=IsoToTime(JGet(pk,pv,"cand.zone_from","")); c.zone_to=IsoToTime(JGet(pk,pv,"cand.zone_to",""));
       c.zone_hi=StringToDouble(JGet(pk,pv,"cand.zone_hi")); c.zone_lo=StringToDouble(JGet(pk,pv,"cand.zone_lo"));
       c.stop_entry=(JGet(pk,pv,"cand.stop_entry")=="true"); c.d1_context=(JGet(pk,pv,"cand.d1_context")=="true"); c.comment=JGet(pk,pv,"cand.comment","");
+      ParkedOverlayLoad(c,pk,pv);
       g_delayed=c; g_delayed_id=(int)StringToInteger(JGet(pk,pv,"sid","0")); g_delay_count=(int)StringToInteger(JGet(pk,pv,"delay_count","0"));
       g_park.sid=g_delayed_id; g_park.implicit_streak=(int)StringToInteger(JGet(pk,pv,"implicit_streak","0")); g_park.explicit_this_bar=(JGet(pk,pv,"explicit_this_bar")=="true");
       g_park.published_bar=IsoToTime(JGet(pk,pv,"published_bar","")); g_park.published_at=IsoToTime(JGet(pk,pv,"published_at","")); g_park.lots=StringToDouble(JGet(pk,pv,"lots"));

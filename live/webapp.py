@@ -736,7 +736,7 @@ def signal_page(key: str, q: dict) -> str:
 
 def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None) -> str:
     """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load."""
-    ov = sig.get("overlay") or {}
+    ov = C.clean_overlay(sig.get("overlay"), (sig.get("levels") or {}).get("entry"))   # never let garbage geometry rescale the chart
     from live import mt5feed
     live_feed = mt5feed.available()
     data = {"symbol": sig["symbol"], "live": live_feed, "bars_h4": sig.get("bars_h4") or [], "bars_d1": sig.get("bars_d1") or [],
