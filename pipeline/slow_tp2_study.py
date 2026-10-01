@@ -5,6 +5,8 @@ T in 1 / 2 / 3 / 5 / 10 trading days; M in 0.5 / 1 / 1.5 / 2 R. "Best R so far" 
 the first entry up to the checkpoint (M1). Outcome under the live stack (bank at +1R/TP1 -> stop to entry; shorts' stop to
 +0.25R at +1.5R; stop checked first each bar). Time to TP2: calendar days from entry (and from the checkpoint). Mean R = the
 trade's full-position R under the live stack (staged 25/75, pyramid). Comparison row: all trades / all open at T.
+Also: best R so far below 0 / -0.5 (never went above it), and the price AT the checkpoint (bid close of the last M1 bar before
+it) below 0 / -0.5R (underwater now).
 Engine pipeline/ask_side_study, SCALED (ask-corrected). All four detectors, 7 symbols; 2012-24 and 2025-26; long/short.
 """
 from __future__ import annotations
@@ -40,7 +42,7 @@ def do_symbol(sym):
             kT = int(np.searchsorted(S.t, S.h4t[ib])) - u["k0"]                 # the first M1 bar of H4 bar 6T+1 = the checkpoint
             if kT <= 0 or kT >= F["n"]: continue
             alive = jx is None or jx >= kT
-            cps[T] = (alive, float(F["bh"][:kT].max()), (S.t[u["k0"] + kT] - t0) / 1440.0)
+            cps[T] = (alive, float(F["bh"][:kT].max()), (S.t[u["k0"] + kT] - t0) / 1440.0, float(F["bc"][kT - 1]))
         res.append((x["t"], x["up"], oc, (tx - t0) / 1440.0 if tx is not None else None, r, cps))
     return res
 
@@ -69,7 +71,9 @@ def main():
             op = [z for z in zs if T in z[5] and z[5][T][0]]
             L.append(f"  -- still open after {T} trading day{'s' if T > 1 else ''} (checkpoint ~{st.median(z[5][T][2] for z in op):.1f} calendar days) --")
             for lab, s in [("all still open", op)] + [(f"best R so far < +{m:g}R", [z for z in op if z[5][T][1] < m]) for m in MS] \
-                           + [(f"best R so far >= +{MS[1]:g}R", [z for z in op if z[5][T][1] >= MS[1]])]:
+                           + [(f"best R so far >= +{MS[1]:g}R", [z for z in op if z[5][T][1] >= MS[1]])] \
+                           + [(f"best R so far < {m:+g}R (never above)", [z for z in op if z[5][T][1] < m]) for m in (0.0, -0.5)] \
+                           + [(f"price NOW < {m:+g}R (underwater)", [z for z in op if z[5][T][3] < m]) for m in (0.0, -0.5)]:
                 if not s: continue
                 w2 = [(i, z[3]) for i, z in enumerate(s) if z[2] == "tp2"]; dT = [z[5][T][2] for z in s]
                 tp = lambda q: (sum(1 for z in q if z[2] == "tp2") / len(q) * 100) if q else float("nan")
