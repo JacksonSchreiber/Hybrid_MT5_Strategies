@@ -162,6 +162,18 @@ def d1_ext_line(sig: dict) -> str:
             f"sits {ext:+.2f} ATR from its own EMA20, signed in the trade's direction — {where}.")
 
 
+def inverse_block(sig: dict) -> str:
+    """coach item 21: an Inverse card names its parent, the parent's state, and the fill rule."""
+    if sig.get("strategy") != "Inverse": return ""
+    p = sig.get("parent") or {}
+    return (f"- **Inverse of:** {p.get('strategy')} #{p.get('signal_id')} {p.get('direction', '')} - parent entry {p.get('entry')}, "
+            f"stop {p.get('stop')}, open {p.get('open_r', 0):+.2f}R after {p.get('bars_open')} H4 bars, unbanked\n"
+            f"- **Fill rule:** an EA-held stop-entry at the parent's stop; it fills ONLY if the parent is stopped before H4 bar 19, "
+            f"and only if the kill switch, NO-ENTRY window, spread gate, lot floor, FTMO headroom and a 0.10R slippage guard "
+            f"all pass at that moment. Approving arms it; nothing is placed until then. PROTOCOL: DISCRETION. "
+            f"Backtest: +0.20R/trade on 358 fills 2012-24 (t 2.7), +0.13R on 46 in 2025-26; the edge is gone at 0.10R slippage.\n")
+
+
 def build_setup_md(sig: dict, cfg: dict) -> str:
     lv = sig.get("levels") or {}; rr = sig.get("rr") or {}; sz = sig.get("sizing") or {}
     sig_t = C.parse_iso(sig.get("signal_time")); dl = C.parse_iso(sig.get("deadline"))
@@ -180,7 +192,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 - **{regime_line(sig)}**
 - **{protocol_line(sig)}**
 - **Strategy read:** {sig.get('strategy_text', '')}
-- **Proposed levels:** entry {lv.get('entry')}{entry_note}, SL {lv.get('sl')}, TP1 {lv.get('tp1')}{tp2} (partial {lv.get('partial_fraction', 0.5):.0%} at TP1)
+{inverse_block(sig)}- **Proposed levels:** entry {lv.get('entry')}{entry_note}, SL {lv.get('sl')}, TP1 {lv.get('tp1')}{tp2} (partial {lv.get('partial_fraction', 0.5):.0%} at TP1)
 - **Risk geometry:** SL 1.0R · TP1 {r_tp1}R · TP2 {r_run}R (floor {rr.get('floor')}R; detector already sized to the gate risk and cleared the R:R floor)
 {swing_block(sig)}
 {slam_block(sig)}
@@ -324,6 +336,8 @@ def ensure_log_line(cfg: dict, sig: dict, mid: str, text: str, kind: str, log) -
     mech = ("VETO:" + (pv.get("mech_rule") or "?") if pv.get("mech") == "VETO" else (pv.get("mech") or "-"))
     d1 = f"{pv['d1_ext']:+.2f}" if pv.get("d1_ext") is not None else "-"
     opin = (pv.get("opinion") or "-") + (f"({pv['opinion_conf']})" if pv.get("opinion_conf") else "")
+    size = (pv.get("size") or "-") + (f" {pv['size_cond']}" if pv.get("size") == "PROMOTE-IF" and pv.get("size_cond") else "") \
+           + (f"({pv['size_conf']})" if pv.get("size_conf") else "")          # coach item 22
     nsrc = len(pv.get("sources") or [])
     clause = VF.plainify((pv.get("why") or "").split(". ")[0], strat)[:150] or "(no Why line)"
     summ = VF.plainify(pv.get("summary"), strat) or "-"
@@ -335,7 +349,7 @@ def ensure_log_line(cfg: dict, sig: dict, mid: str, text: str, kind: str, log) -
     line = " | ".join([C.now_iso(), mid, sig["symbol"], f"#{sig['signal_id']}",
                        f"{sig.get('strategy')} {sig.get('direction')}",
                        f"{pv.get('verdict') or '-'}" + (f" ({pv['confidence']})" if pv.get("confidence") else ""),
-                       f"mech:{mech} d1ext:{d1}", f"opinion:{opin}", f"SH:{sh} steps:{steps}",
+                       f"mech:{mech} d1ext:{d1}", f"opinion:{opin}", f"size:{size.replace('|', '/')}", f"SH:{sh} steps:{steps}",
                        f"Q:{pv.get('quality') or '-'}", f"sources:{nsrc}", clause, summ]
                       + ([" ".join(flags)] if flags else []))
     with _log_lock: C.append_line(p_, line)

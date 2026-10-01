@@ -129,6 +129,21 @@ def ftmo_room_block(s: dict) -> str:
             f'spare {spare:,.0f} above the tighter floor + buffer)</div><div class="big {cls}">room for {n} more at {per * 100:.2f}%</div>'
             f'<div class="k">this signal sizes at {this * 100:.2f}%{note}</div></div>')
 
+def inverse_card(s: dict) -> str:
+    """coach item 21: the parent's entry, stop, current R and bars open; the Inverse's levels; the fill rule."""
+    p = s.get("parent") or {}; lv = s.get("levels") or {}
+    st_ = s.get("status")
+    state = {"open": "awaiting your decision", "approved_pending": "ARMED - waiting for the parent's stop (cancels if the parent banks, closes otherwise, or passes bar 18)",
+             "approved": "FILLED", "cancelled": "cancelled", "expired": "expired (no response) - nothing placed",
+             "skipped": "skipped"}.get(st_, st_)
+    return (f'<div class="card"><h2>{E(str(p.get("strategy")))} Inverse</h2>'
+            f'<div class="k">parent #{E(str(p.get("signal_id")))} {E(str(p.get("direction", "")))}: entry {p.get("entry")} · stop {p.get("stop")} · '
+            f'open {C.r_fmt(p.get("open_r"))} after {p.get("bars_open")} H4 bars · unbanked</div>'
+            f'<div class="big">{E(str(s.get("direction")))} stop-entry at {lv.get("entry")} · SL {lv.get("sl")} · bank {lv.get("tp1")} · TP2 {lv.get("tp2")}</div>'
+            f'<div class="k"><b>fills only if the parent is stopped before H4 bar 19</b> (EA-held; kill switch, NO-ENTRY, spread, lot floor, '
+            f'headroom and a 0.10R slippage guard run at the fill). Full size, no staging. State: {E(str(state))}</div></div>')
+
+
 def staged_block(p: dict) -> str:
     """coach item 18: the two tranches of a staged entry - the first at the signal, the add at the close of H4 bar N."""
     tr = int(p.get("tranche") or 0)
@@ -263,6 +278,8 @@ def advisor_rows(key: str, sig: dict) -> str:
             p = _parsed_last(rec)
             body = (f'{vpill(p.get("verdict"))}'
                     + (f'<span class="k">{E(p["confidence"])}</span>' if p.get("confidence") else "")
+                    + (f'<span class="chip">size {E(p["size"])}{(" " + E(p["size_cond"])) if p.get("size") == "PROMOTE-IF" and p.get("size_cond") else ""}'
+                       f'{(" (" + E(p["size_conf"]) + ")") if p.get("size_conf") else ""}</span>' if p.get("size") else "")   # coach item 22
                     + f'<span class="sm">{E(VF.plainify(p.get("summary"), p.get("strategy") or sig.get("strategy")))}</span>')
         elif st == "failed": body = '<span class="vp skip">BUNDLE FAILED</span><span class="sm">no consult was run on this card</span>'
         elif (rec or {}).get("policy_skip"): body = f'<span class="vp none">not run</span><span class="sm">{E((rec or {}).get("note", ""))}</span>'
@@ -494,7 +511,8 @@ def dashboard(q: dict) -> str:
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{(C.now_utc().replace(day=1) - timedelta(days=1)).strftime("%Y%m")}.zip">last month</a>'
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/export/{C.now_utc().strftime("%Y%m")}.zip">this month so far</a>'
                f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/shadow_bank.csv">bank shadow log</a>'
-               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/staged_entry.csv">staged entry log</a></div></div>')
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/staged_entry.csv">staged entry log</a>'
+               f'<a class="btn" style="padding:6px 10px;font-size:13px" href="/inverse_shadow.csv">inverse log</a></div></div>')
     # open signals
     sigs = C.list_signals(CFG); opn = [s for s in sigs if s.get("status") == "open"]
     # coach 2026-09-30: sorted by signal time (oldest first - nearest deadline); the D1-extension sort was withdrawn with
@@ -601,7 +619,16 @@ def signal_page(key: str, q: dict) -> str:
         out.append(ftmo_room_block(s))
         out.append(corr_block(s))
     # actions
-    if is_open:
+    if s.get("strategy") == "Inverse":
+        out.insert(2, inverse_card(s))
+    if is_open and s.get("strategy") == "Inverse":
+        # coach item 21: approving ARMS the EA-held stop-entry; no size/entry choice on an Inverse card
+        out.append(f'<div class="card"><h2>Decide</h2><form method="post" action="/task"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="approve">'
+                   f'<input type="hidden" name="entry_mode" value="market"><div class="k">Approving ARMS the Inverse: nothing is placed unless the parent is stopped before H4 bar 19.</div>'
+                   '<div style="margin-top:8px"><button class="btn go" style="width:100%">ARM INVERSE</button></div></form>'
+                   f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
+                   + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form></div>')
+    elif is_open:
         modes = s.get("entry_modes") or ["market"]
         out.append(f'<div class="card"><h2>Decide</h2><form method="post" action="/task"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="approve">'
                    + f'<select name="entry_mode"><option value="market">Enter NOW at market (SL/TP as shown)</option><option value="pending">Pending order at the original entry {lv.get("entry")} (waits for price to come back)</option></select>'
@@ -1142,7 +1169,7 @@ class H(BaseHTTPRequestHandler):
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backup|{name}|{len(data)}B|{man['files']} files|by=web")
                 self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Disposition", f'attachment; filename="{name}"')
                 self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
-            if parts[0] in ("shadow_bank.csv", "staged_entry.csv"):          # coach 2026-09-30 items 8 and 18
+            if parts[0] in ("shadow_bank.csv", "staged_entry.csv", "inverse_shadow.csv"):   # coach items 8, 18, 21
                 try:
                     with open(os.path.join(CFG["root"], "web", parts[0]), "rb") as f: data = f.read()
                 except OSError: data = b"not built yet - the monitor writes it hourly\n"

@@ -77,7 +77,9 @@ def compute(sig: dict, cfg: dict) -> dict:
     try: mine = get(sym)
     except Exception: mine = {}
     feed = _feed_risk()
+    parent_posid = int(((sig.get("parent") or {}).get("posid")) or 0) if sig.get("strategy") == "Inverse" else 0
     for p in C.list_positions(cfg):
+        if parent_posid and int(p.get("posid") or 0) == parent_posid: continue   # coach item 21: as if the parent were closed
         tk = int(p.get("posid") or 0)
         risk = feed.get(tk, 0.0) if feed and tk in feed else (_unbanked_pct(p) if not feed else 0.0)
         if p.get("banked"): risk = 0.0

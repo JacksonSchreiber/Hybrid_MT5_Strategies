@@ -10,7 +10,7 @@ import re
 
 GLYPH = {"✓": "ok", "✔": "ok", "v": "ok", "x": "no", "✗": "no", "✘": "no", "×": "no", "?": "maybe", "-": "na"}
 VERDICTS = ("TAKE (DEFAULT)", "TAKE", "SKIP", "ADJUST", "WAIT")
-_LABEL = re.compile(r"^(SUMMARY|VERDICT|Mechanical|OPINION|Sources|Quality|Why|Changes my mind|Notes)\s*:", re.I)
+_LABEL = re.compile(r"^(SUMMARY|VERDICT|Mechanical|OPINION|Size|Sources|Quality|Why|Changes my mind|Notes)\s*:", re.I)
 _CHECKS = re.compile(r"^Checks\s*[—–-]\s*(.+?)\s*:\s*(.*)$", re.I)
 _STEP = re.compile(r"(\d{1,2})\s*([✓✔✗✘×?xXvV-])")            # v/V: some transports mangle the tick glyph
 _CHIP = re.compile(r"(regime|news|correlation)\s*([✓✔✗✘×?xXvV-])", re.I)
@@ -35,7 +35,9 @@ def parse(text: str | None) -> dict:
                  # layer 1 / layer 2 (coach 2026-09-24): the mechanical read and the advisor's own opinion are
                  # separate lines and may disagree - the card shows both rather than reconciling them.
                  "mech": None, "mech_rule": None, "mech_detail": "", "d1_ext": None,
-                 "opinion": None, "opinion_conf": None, "opinion_text": "", "sources": [], "unsourced": True}
+                 "opinion": None, "opinion_conf": None, "opinion_text": "", "sources": [], "unsourced": True,
+                 # coach item 22 (2026-10-01): the advisor's sizing call - STAGED | FULL | PROMOTE-IF <condition> | n/a
+                 "size": None, "size_cond": None, "size_conf": None}
     if not text: out["missing"] = ["everything"]; return out
     cur, buf = None, []
 
@@ -80,6 +82,16 @@ def parse(text: str | None) -> dict:
                 out["opinion"] = verdict_of(rest)
                 oc = re.search(r"\b(low|medium|high)\b", rest.split("—")[0] if "—" in rest else rest[:60], re.I)
                 out["opinion_conf"] = oc.group(1).lower() if oc else None
+            elif lab == "size":
+                cur = None
+                sm = re.match(r"\s*(STAGED|FULL|PROMOTE-IF|n/?a)\b\s*(.*)$", rest, re.I)
+                if sm:
+                    out["size"] = sm.group(1).upper().replace("N/A", "n/a").replace("NA", "n/a")
+                    tail = sm.group(2)
+                    cf = re.search(r"confidence\s*:?\s*(low|medium|high)", tail, re.I)
+                    out["size_conf"] = cf.group(1).lower() if cf else None
+                    cond = re.sub(r"\(?\s*confidence\s*:?\s*(low|medium|high)\s*\)?", "", tail, flags=re.I).strip(" -—–()")
+                    out["size_cond"] = cond or None
             elif lab == "sources":
                 cur = None
                 out["sources"] = [x.strip() for x in re.split(r"[;\n]", rest) if len(x.strip()) > 2

@@ -115,6 +115,9 @@ class Monitor:
             elif not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 3:
                 self.send(f"PYRAMID ADD (+1.5R): pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots at {p.get('entry')} "
                           f"· stop at entry {p.get('sl_live')} · target TP2\n{self.base}/position/{k}")
+            elif not prev and self.st.get("positions_initialised") and p.get("strategy") == "Inverse":
+                self.send(f"INVERSE FILLED: pos {p['posid']} {p['symbol']} {p['direction']} at {p.get('entry')} · {p.get('lots_live')} lots · "
+                          f"SL {p.get('sl_live')} (the parent was stopped)\n{self.base}/position/{k}")
             elif not prev and self.st.get("positions_initialised"):
                 self.send(f"FILLED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} at {p.get('entry')} · {p.get('lots_live')} lots · SL {p.get('sl_live')} (pending order or market fill)\n{self.base}/position/{k}")
             if p.get("banked") and not prev.get("banked"):
@@ -423,6 +426,22 @@ class Monitor:
         from live import shadow_bank
         n, be, ok = shadow_bank.write(self.cfg)
         sn, s_rdd, c_rdd = shadow_bank.write_staged(self.cfg)          # coach item 18: early read at 20, grading at 40
+        try:                                                             # coach item 21: Inverse alerts
+            from live import inverse_shadow
+            iv = inverse_shadow.write(self.cfg)
+            if iv["slip_first10"] is not None and iv["slip_first10"] > 0.05 and not self.st.get("inv_slip_flag"):
+                self.st["inv_slip_flag"] = True
+                self.send(f"COACH WATCH ITEM - Inverse fills: the first 10 filled at an average of {iv['slip_first10']:+.3f}R beyond the parent's stop "
+                          f"(threshold 0.05R; the backtest's edge is gone near 0.10R). web/inverse_shadow.csv has each fill.")
+            if iv["closed"] >= 25 and iv["mean_R"] is not None and iv["mean_R"] <= -0.15 and not self.st.get("inv_stop_flag"):
+                self.st["inv_stop_flag"] = True
+                self.send(f"COACH EARLY STOP - Inverse: {iv['closed']} closed fills average {iv['mean_R']:+.3f}R (<= -0.15R). The ruling is OFF: "
+                          f"set live.json inverse_signal to 0.")
+            if iv["closed"] >= 50 and not self.st.get("inv_read_flag"):
+                self.st["inv_read_flag"] = True
+                self.send(f"COACH READ DUE - Inverse: {iv['closed']} closed fills, mean {iv['mean_R']:+.3f}R vs the backtest +0.20R. web/inverse_shadow.csv.")
+        except Exception as e:
+            self.log(f"inverse_shadow error: {e!r}")
         fn_, f_mean = shadow_bank.pyramid_fill_watch(self.cfg)            # coach watch 2026-10-01: add fills vs the modelled +1.5R
         if fn_ >= 10 and f_mean is not None and f_mean < 1.55 and not self.st.get("pyr_fill_flag"):
             self.st["pyr_fill_flag"] = True
