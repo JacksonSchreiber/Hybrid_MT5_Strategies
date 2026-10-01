@@ -356,3 +356,10 @@ A reproduction is judged on the EA's REAL-TICK tester result. Where the EA and a
 breakeven (or any) stop, the EA is right: shorts are stopped, banked and filled on the ASK, and the bid-only M1/M5 replays
 cannot see a spread-width touch (the Inverse's US100 gap, 2021-05-07, was one such trade). Every study report from now on
 carries a LONG/SHORT split. Item 23 builds an ask series (bid + the per-symbol, per-hour spread profile) for the replays.
+
+## Pending at the next parity refresh (coach 2026-10-01)
+
+- The bank volume's lot-step floor gained a 1e-9 tolerance in LIVE only (`MathFloor(bf*lots/step + 1e-9)`; exact
+  multiples were dropping a step, e.g. 0.25 x 0.12 lots -> 0.02). The tester keeps the old floor so the parity baseline
+  stays byte-identical; apply it to the tester too when the baseline is next re-parked. Live impact to the fix
+  (2026-10-01 11:23Z): none of the 5 automatic banks so far was short.
