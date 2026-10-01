@@ -132,7 +132,15 @@ def ftmo_room_block(s: dict) -> str:
 def staged_block(p: dict) -> str:
     """coach item 18: the two tranches of a staged entry - the first at the signal, the add at the close of H4 bar N."""
     tr = int(p.get("tranche") or 0)
-    if not tr: return ""
+    try:                                                    # coach item 20: the +1.5R pyramid level on every first-entry card
+        e, slb = float(p.get("entry")), float(p.get("sl_risk_basis"))
+        lvl = e + 1.5 * (e - slb)
+        pyr = f'<div class="k">pyramid: +50% of the full size if price reaches +1.5R after the bank = <b>{lvl:.{max(2, len(str(p.get("entry")).split(".")[-1]))}f}</b> (stop at entry, target TP2)</div>'
+    except (TypeError, ValueError): pyr = ""
+    if tr == 3:
+        return (f'<div class="card"><div class="k">Pyramid add (+1.5R after the bank)</div><div class="big">{p.get("lots_init")} lots added at {p.get("entry")}</div>'
+                f'<div class="k">stop at the first entry, target TP2; the runner\'s stop is unchanged</div></div>')
+    if not tr: return f'<div class="card">{pyr}</div>' if pyr else ""
     full = p.get("full_lots"); stt = int(p.get("staged_state") or 0)
     if tr == 1:
         due = C._srv_to_utc(p.get("add_due"), CFG) if p.get("add_due") else None
@@ -141,7 +149,7 @@ def staged_block(p: dict) -> str:
                  2: "add placed - see the other position of this signal",
                  3: f'add skipped - {p.get("staged_note") or ""}'}.get(stt, "")
         return (f'<div class="card"><div class="k">Staged entry · tranche 1 of 2</div><div class="big">{p.get("lots_init")} of {full} lots at the signal</div>'
-                f'<div class="k">{E(state)}</div></div>')
+                f'<div class="k">{E(state)}</div>{pyr}</div>')
     return (f'<div class="card"><div class="k">Staged entry · tranche 2 of 2 (the add)</div><div class="big">{p.get("lots_init")} lots added at {p.get("entry")}</div>'
             f'<div class="k">banks and moves to entry at the FIRST tranche\'s +1R and entry, as one position</div></div>')
 

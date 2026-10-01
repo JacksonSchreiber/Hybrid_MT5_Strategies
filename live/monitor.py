@@ -112,6 +112,9 @@ class Monitor:
             if not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 2:
                 self.send(f"STAGED ADD: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots added at {p.get('entry')} "
                           f"(bar-{self.cfg.get('staged_add_bar', 6)} close) · SL {p.get('sl_live')}\n{self.base}/position/{k}")
+            elif not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 3:
+                self.send(f"PYRAMID ADD (+1.5R): pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots at {p.get('entry')} "
+                          f"· stop at entry {p.get('sl_live')} · target TP2\n{self.base}/position/{k}")
             elif not prev and self.st.get("positions_initialised"):
                 self.send(f"FILLED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} at {p.get('entry')} · {p.get('lots_live')} lots · SL {p.get('sl_live')} (pending order or market fill)\n{self.base}/position/{k}")
             if p.get("banked") and not prev.get("banked"):
@@ -420,6 +423,11 @@ class Monitor:
         from live import shadow_bank
         n, be, ok = shadow_bank.write(self.cfg)
         sn, s_rdd, c_rdd = shadow_bank.write_staged(self.cfg)          # coach item 18: early read at 20, grading at 40
+        pn, p_mean, p_ddr = shadow_bank.pyramid_stats(self.cfg)         # coach item 20: graded at n=30 pyramided trades
+        if pn >= 30 and not self.st.get("pyr_flag_30"):
+            self.st["pyr_flag_30"] = True
+            self.send(f"COACH GRADING POINT - pyramid: {pn} closed pyramided signals. Mean R vs the no-add counterfactual "
+                      f"{p_mean:+.3f} (needs >= 0); drawdown {p_ddr:.2f}x the counterfactual's (needs <= 1.25x). web/staged_entry.csv has the rows.")
         for mark in (20, 40):
             if sn >= mark and not self.st.get(f"staged_flag_{mark}"):
                 self.st[f"staged_flag_{mark}"] = True

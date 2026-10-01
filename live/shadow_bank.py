@@ -102,7 +102,8 @@ def write(cfg: dict) -> tuple[int, int, int]:
 
 # ----------------------------------------------------------------------------- coach item 18: staged entry log
 STAGED_COLS = ["symbol", "signal_id", "strategy", "signal_time", "full_lots", "first_lots", "add_lots", "add_state", "add_fill",
-               "add_time", "R_first_per_lot", "R_add_per_lot", "staged_R", "counterfactual_full_R", "closed"]
+               "add_time", "R_first_per_lot", "R_add_per_lot", "staged_R", "counterfactual_full_R",
+               "pyramid_lots", "pyramid_fill", "pyramid_time", "R_pyramid_per_lot", "counterfactual_noadd_R", "closed"]
 
 
 def staged(cfg: dict) -> list[dict]:
@@ -112,25 +113,33 @@ def staged(cfg: dict) -> list[dict]:
     rounding of the bank aside)."""
     by: dict = {}
     for r in C.journal_rows(cfg):
+        if r.get("decision") not in ("approved", "approved_pending"): continue
         t = int(_f(r.get("tranche")) or 0)
-        if t: by.setdefault((r.get("symbol"), r.get("signal_id")), {})[t] = r
+        by.setdefault((r.get("symbol"), r.get("signal_id")), {})[t] = r
     out = []
     for (sym, sid), d in sorted(by.items(), key=lambda kv: (kv[1].get(1) or kv[1].get(2) or {}).get("signal_time", "")):
-        a, b = d.get(1), d.get(2)
+        a, b, py = d.get(1), d.get(2), d.get(3)
+        if not a and py: a = d.get(0)                       # not staged (too small to split) but pyramided: the first row is tranche 0
         if not a: continue
         full = _f(a.get("full_lots")) or _f(a.get("lots")) or 0.0
         l1, l2 = _f(a.get("lots")) or 0.0, (_f(b.get("lots")) or 0.0) if b else 0.0
         r1 = _f(a.get("r_multiple")) if a.get("exit_time") else None
         r2 = (_f(b.get("r_multiple")) if b.get("exit_time") else None) if b else None
-        closed = r1 is not None and (b is None or r2 is not None)
-        st_R = ((l1 * r1 + (l2 * r2 if b else 0.0)) / full) if (closed and full) else None
+        l3 = (_f(py.get("lots")) or 0.0) if py else 0.0
+        r3 = (_f(py.get("r_multiple")) if py.get("exit_time") else None) if py else None
+        closed = r1 is not None and (b is None or r2 is not None) and (py is None or r3 is not None)
+        noadd = ((l1 * r1 + (l2 * r2 if b else 0.0)) / full) if (closed and full) else None
+        st_R = (noadd + (l3 * r3 / full if py else 0.0)) if noadd is not None else None
         out.append({"symbol": sym, "signal_id": sid, "strategy": a.get("strategy"), "signal_time": a.get("signal_time"),
                     "full_lots": full, "first_lots": l1, "add_lots": l2 or "",
                     "add_state": "added" if b else ("skipped: " + (a.get("reject_reason") or "") if a.get("reject_reason") else "pending"),
                     "add_fill": b.get("entry") if b else "", "add_time": b.get("fill_time") if b else "",
                     "R_first_per_lot": "" if r1 is None else round(r1, 3), "R_add_per_lot": "" if r2 is None else round(r2, 3),
                     "staged_R": "" if st_R is None else round(st_R, 3),
-                    "counterfactual_full_R": "" if r1 is None else round(r1, 3), "closed": int(closed)})
+                    "counterfactual_full_R": "" if r1 is None else round(r1, 3),
+                    "pyramid_lots": l3 or "", "pyramid_fill": py.get("entry") if py else "", "pyramid_time": py.get("fill_time") if py else "",
+                    "R_pyramid_per_lot": "" if r3 is None else round(r3, 3),
+                    "counterfactual_noadd_R": "" if noadd is None else round(noadd, 3), "closed": int(closed)})
     return out
 
 
@@ -149,3 +158,18 @@ def write_staged(cfg: dict) -> tuple[int, float | None, float | None]:
         for v in vals: cur += v; peak = max(peak, cur); dd = max(dd, peak - cur)
         return (sum(vals) / dd) if dd > 0 else None
     return len(done), r_per_dd([x["staged_R"] for x in done]), r_per_dd([x["counterfactual_full_R"] for x in done])
+
+
+
+def pyramid_stats(cfg: dict) -> tuple[int, float, float]:
+    """coach item 20 grading: over closed pyramided signals, mean (R with the add - R without it) and the drawdown ratio
+    (with / without), both in full-position units."""
+    rows = [x for x in staged(cfg) if x["closed"] and x["pyramid_lots"] not in ("", 0)]
+    if not rows: return 0, 0.0, 0.0
+    w = [x["staged_R"] for x in rows]; wo = [x["counterfactual_noadd_R"] for x in rows]
+
+    def dd(v):
+        cur = peak = m = 0.0
+        for r in v: cur += r; peak = max(peak, cur); m = max(m, peak - cur)
+        return m
+    return len(rows), sum(a - b for a, b in zip(w, wo)) / len(rows), (dd(w) / dd(wo)) if dd(wo) > 0 else 0.0
