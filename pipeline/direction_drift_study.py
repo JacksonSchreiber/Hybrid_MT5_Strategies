@@ -192,18 +192,23 @@ def main():
 # ----------------------------------------------------------------------------------------------------------- report
 READING = """
 READING (hand-written from the tables below; SCALED unless stated)
-  * 2012-24: the coach's reading holds for INDICES - longs +0.221 (n669, t+3.25), shorts -0.094 (n239), L-S +0.314 (t+2.84);
-    the indices' buy-and-hold drift (+18%/yr US100, +12%/yr US500) charged to each trade over its holding time accounts for
-    ALL of it (drift-adjusted L-S -0.019). FX pooled is symmetric (L-S +0.031, t+0.31), but that hides two opposite symbols
-    that also follow their drift: GBPUSD (drifted -1.7%/yr) shorts beat longs, USDJPY (+7.7%/yr) longs beat shorts.
-    So it is DRIFT BY SYMBOL rather than the class label: sign(L-S) follows sign(drift) in 6 of 7 symbols.
+  * 2012-24: the coach's reading holds for INDICES - longs +0.221 (n669, t+3.25), shorts -0.094 (n239), L-S +0.314 (t+2.84).
+    The drift collected over the holding time is the same size as the gap (~0.33R vs 0.31R; class drift-adjusted L-S -0.019):
+    consistent with drift, but the magnitude is approximate - per symbol it under-corrects US100 (+0.166 left) and
+    over-corrects US500 (-0.189) and USDJPY (-0.232); holding time depends on the outcome (winners run, stopped shorts exit
+    early), so index longs carry ~2.5x the drift-in-R of shorts. FX pooled is symmetric within noise (L-S +0.031, t+0.31);
+    no FX pair's gap is significant (|t| < 0.7).
+  * Symbol by symbol, among symbols whose drift is itself significant (|drift t| >= 2), the gap has the drift's sign in every
+    case (see the count above); the low-drift symbols (EURUSD, GBPUSD, USOIL dev) are coin flips and are not counted.
   * It does NOT hold for commodities as a class: OIL had no up-drift in 2012-24 (-2%/yr) and has no gap (L +0.032 / S +0.056,
     L-S -0.025); the coach's oil short +0.012 is bid-only - the ask correction lifts oil shorts to +0.056 (TrendCont +0.068).
     GOLD longs > shorts (+0.247 / +0.118) but L-S +0.128 is t+0.57 on 75 shorts - consistent with drift, not established.
-  * 2025+ (holdout) does NOT replicate the asset-class pattern: index longs ~0 (+0.001, n59) despite +17-23%/yr drift, index
-    shorts +0.104 (n31; TrendCont-only -0.189 on n16). The short-side damage in 2025+ is FX: shorts -0.523 (n57, t-4.89) on
-    every pair (EURUSD -0.49, GBPUSD -0.48, USDJPY -0.58); the 2025 dollar slide explains under half of it (drift-adjusted FX
-    L-S still +0.365, t+2.03; USDJPY drifted only +1.9%). Gold 2025+ longs +1.049 (n40) ride a +31%/yr drift.
+  * 2025+ (holdout) does NOT replicate the asset-class pattern - the short-side weakness sits in FX, not indices, the opposite
+    of what the claim predicts. Index longs ~0 (+0.001, n59) despite +17-23%/yr drift (drift t ~0.8), index shorts +0.104
+    (n31; TrendCont-only -0.189 on n16; per symbol 14 and 17 shorts). FX shorts -0.523 (n57, t-4.89) on every pair (EURUSD
+    -0.49, GBPUSD -0.48, USDJPY -0.58); the 2025 dollar slide explains under half (drift-adjusted FX L-S still +0.365, t+2.03),
+    and USDJPY shorts lost -0.58 against a drift-in-R of only -0.035 - that cell is not drift. Gold 2025+ longs +1.049 (n40)
+    ride a +31%/yr drift.
   * The ask correction (SCALED vs BID, section 2) does not change the picture: 2012-24 shorts +0.005..+0.048R (oil most),
     longs +0.004..+0.027R (oil, where the old DRAG exceeded the 2026 bar-minimum spread); 2025+ FX longs -0.045R.
   * No class x direction cell is negative in BOTH periods with n>=30 in each. Nearest: TrendCont index SHORT (2012-24 n138
@@ -284,12 +289,13 @@ def report(TR, INV, REG, DR, nomap, tsym, secs):
             L, S_ = cellstats(sel(per=p, sym=s_, up=True)), cellstats(sel(per=p, sym=s_, up=False))
             d = DR.get((s_, p))
             if not (L and S_ and d): continue
+            if abs(d["at"]) < 2: continue                     # drift not itself significant: a coin flip, not counted
             tot += 1
-            if (L["m"] - S_["m"] > 0) == (d["ann"] > 0): k += 1
-            else: miss.append(s_)
+            if (L["m"] - S_["m"] > 0) == (d["ann"] > 0): k += 1; miss.append(s_)
+            else: miss.append(s_ + " MISS")
         agree[p] = (k, tot, miss)
-    o("  sign(L-S) = sign(annualised drift), symbol by symbol: " + "; ".join(
-        f"{PL[p]} {k}/{t_} (misses: {', '.join(m) or 'none'})" for p, (k, t_, m) in agree.items()))
+    o("  sign(L-S) = sign(drift), symbols with |drift t| >= 2 only: " + "; ".join(
+        f"{PL[p]} {k}/{t_} ({', '.join(m) or 'none'})" for p, (k, t_, m) in agree.items()))
     o(f"  flags (class/symbol x direction negative in BOTH periods, n>=30 each): {len(flags) or 'none'}")
     for ln in READING: o(ln)
 
