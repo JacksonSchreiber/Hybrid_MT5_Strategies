@@ -566,6 +566,14 @@ def dashboard(q: dict) -> str:
         title = (f'↳ {E(what)} {E(p["direction"])}' if child else f'{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}'
                  + (f' <span class="k">({E(what)})</span>' if what else ""))
         style = ' style="margin-left:28px;border-left:3px solid var(--line, #888)"' if child else ""
+        if _tr(p) == 1 and int(p.get("staged_state") or 0) == 1:
+            # trial phase: the staged first tranche, waiting for the bar-6 add (or a Promote now)
+            due = C._srv_to_utc(p.get("add_due"), CFG) if p.get("add_due") else None
+            left = ""
+            if due:
+                mins = int((due - C.now_utc()).total_seconds() // 60)
+                left = f" · add in {mins // 60}h{mins % 60:02d}" if mins > 0 else " · add due now"
+            title += f' <span class="pill warn">TRIAL {p.get("lots_init")}/{p.get("full_lots")} lots{left}</span>'
         out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"{style}><div class="row"><span class="big">{title}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
                    f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
     # instances: one compact table (the expanded universe runs ~40 charts - a card each would bury everything below)
