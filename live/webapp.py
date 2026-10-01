@@ -172,10 +172,11 @@ def staged_block(p: dict) -> str:
         lvl = e + 1.5 * (e - slb)
         pyr = f'<div class="k">pyramid: +50% of the full size if price reaches +1.5R after the bank = <b>{lvl:.{max(2, len(str(p.get("entry")).split(".")[-1]))}f}</b> (stop at entry, target TP2)</div>'
     except (TypeError, ValueError): pyr = ""
+    sr = short_raise_line(p)
     if tr == 3:
         return (f'<div class="card"><div class="k">Pyramid add (+1.5R after the bank)</div><div class="big">{p.get("lots_init")} lots added at {p.get("entry")}</div>'
-                f'<div class="k">stop at the first entry, target TP2; the runner\'s stop is unchanged</div></div>')
-    if not tr: return f'<div class="card">{pyr}</div>' if pyr else ""
+                f'<div class="k">stop at the first entry, target TP2; the runner\'s stop is unchanged</div>{sr}</div>')
+    if not tr: return f'<div class="card">{pyr}{sr}</div>' if (pyr or sr) else ""
     full = p.get("full_lots"); stt = int(p.get("staged_state") or 0)
     if tr == 1:
         due = C._srv_to_utc(p.get("add_due"), CFG) if p.get("add_due") else None
@@ -184,9 +185,38 @@ def staged_block(p: dict) -> str:
                  2: "add placed - see the other position of this signal",
                  3: f'add skipped - {p.get("staged_note") or ""}'}.get(stt, "")
         return (f'<div class="card"><div class="k">Staged entry · tranche 1 of 2</div><div class="big">{p.get("lots_init")} of {full} lots at the signal</div>'
-                f'<div class="k">{E(state)}</div>{pyr}{promote_button(p)}</div>')
+                f'<div class="k">{E(state)}</div>{pyr}{sr}{promote_button(p)}</div>')
     return (f'<div class="card"><div class="k">Staged entry · tranche 2 of 2 (the add)</div><div class="big">{p.get("lots_init")} lots added at {p.get("entry")}</div>'
-            f'<div class="k">banks and moves to entry at the FIRST tranche\'s +1R and entry, as one position</div></div>')
+            f'<div class="k">banks and moves to entry at the FIRST tranche\'s +1R and entry, as one position</div>{sr}</div>')
+
+
+def short_raise_line(p: dict) -> str:
+    """coach item 25 (trader override 2026-10-01): on a SELL (not an Inverse), every ticket's stop moves to +L R at +1.5R."""
+    if (p.get("direction") or "").upper() != "SELL" or p.get("strategy") == "Inverse": return ""
+    st_ = int(p.get("short_raise") or 0)
+    if st_ == 1:
+        try: when = C._srv_to_utc(datetime.fromtimestamp(int(p.get("short_raise_time")), timezone.utc).isoformat(), CFG) if int(p.get("short_raise_time") or 0) > 0 else None   # EA epoch = server clock
+        except (TypeError, ValueError, OverflowError): when = None
+        return (f'<div class="k"><span class="pill ok">STOP RAISED</span> shorts rule: +1.5R reached, the stop on every ticket of this signal is now '
+                f'<b>{p.get("short_raise_stop")}</b> (+0.25R)' + (f' since {when.strftime("%a %d %b %H:%M UTC")}' if when else "") + '</div>')
+    if st_ == 2:
+        return '<div class="k"><span class="pill bad">STOP RAISE REFUSED</span> +1.5R reached but the EA could not move the stop - still at entry (audit log)</div>'
+    L = _f_live("short_raise_at_pyramid_r")
+    if not L: return ""
+    try:
+        e, slb = float(p.get("entry")), float(p.get("sl_risk_basis"))
+        dg = max(2, len(str(p.get("entry")).split(".")[-1]))
+        return (f'<div class="k">shorts rule: if price reaches +1.5R = <b>{e + 1.5 * (e - slb):.{dg}f}</b> after the bank, the stop on every ticket '
+                f'moves to +{L:g}R = <b>{e + L * (e - slb):.{dg}f}</b></div>')
+    except (TypeError, ValueError): return ""
+
+
+def _f_live(key: str):
+    """a numeric key of the EA's live.json (<root>/config/live.json); None when absent or 0."""
+    try:
+        v = float((C.load_json(os.path.join(CFG["root"], "config", "live.json"), {}) or {}).get(key) or 0)
+        return v if v > 0 else None
+    except (TypeError, ValueError): return None
 
 
 def corr_block(s: dict) -> str:
@@ -581,6 +611,7 @@ def dashboard(q: dict) -> str:
                 mins = int((due - C.now_utc()).total_seconds() // 60)
                 left = f" · add in {mins // 60}h{mins % 60:02d}" if mins > 0 else " · add due now"
             title += f' <span class="pill warn">TRIAL {p.get("lots_init")}/{p.get("full_lots")} lots{left}</span>'
+        if int(p.get("short_raise") or 0) == 1 and not child: title += ' <span class="pill ok">STOP +0.25R</span>'
         out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"{style}><div class="row"><span class="big">{title}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
                    f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
     # instances: one compact table (the expanded universe runs ~40 charts - a card each would bury everything below)

@@ -113,8 +113,9 @@ class Monitor:
                 self.send(f"STAGED ADD: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots added at {p.get('entry')} "
                           f"(bar-{self.cfg.get('staged_add_bar', 6)} close) · SL {p.get('sl_live')}\n{self.base}/position/{k}")
             elif not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 3:
+                stp = (f"stop {p.get('sl_live')} (+R stop raise - shorts)" if int(p.get("short_raise") or 0) == 1 else f"stop at entry {p.get('sl_live')}")
                 self.send(f"PYRAMID ADD (+1.5R): pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots at {p.get('entry')} "
-                          f"· stop at entry {p.get('sl_live')} · target TP2\n{self.base}/position/{k}")
+                          f"· {stp} · target TP2\n{self.base}/position/{k}")
             elif not prev and self.st.get("positions_initialised") and p.get("strategy") == "Inverse":
                 self.send(f"INVERSE FILLED: pos {p['posid']} {p['symbol']} {p['direction']} at {p.get('entry')} · {p.get('lots_live')} lots · "
                           f"SL {p.get('sl_live')} (the parent was stopped)\n{self.base}/position/{k}")
@@ -132,6 +133,16 @@ class Monitor:
                     self.send(f"+1R BANKED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · closed {li - ll:.2f} of {li:g} lots "
                               f"({share:.0%}) at +1R = {C.r_fmt(p.get('banked_r'))} on this position · {ll:g} lots run · stop now {p.get('sl_live')} (entry)")
             if p.get("ratcheted") and not prev.get("ratcheted"): self.send(f"SL ratcheted to TP1: pos {p['posid']} {p['symbol']}")
+            sr, sk = int(p.get("short_raise") or 0), f"{p['symbol']}-{p.get('signal_id')}"          # coach item 25: once per signal
+            if sr in (1, 2) and sk not in self.st.setdefault("short_raise_sent", []) and self.st.get("positions_initialised"):
+                self.st["short_raise_sent"] = (self.st["short_raise_sent"] + [sk])[-500:]
+                if sr == 1:
+                    self.send(f"SHORT STOP RAISED: {p['symbol']} {p['strategy']} SELL signal #{p.get('signal_id')} reached +1.5R · the stop on every "
+                              f"ticket of the signal moved to {p.get('short_raise_stop')} (+0.25R locked in on the runner). Shorts-only rule, "
+                              f"scored against the stop left at entry (web/short_raise.csv).\n{self.base}/position/{k}")
+                else:
+                    self.send(f"SHORT STOP RAISE REFUSED: {p['symbol']} {p['strategy']} SELL signal #{p.get('signal_id')} reached +1.5R but the "
+                              f"stop could not be moved (see the EA audit log) - the stop is still at entry.\n{self.base}/position/{k}")
             if int(p.get("staged_state") or 0) == 3 and prev and prev.get("staged", 0) != 3:
                 self.send(f"STAGED ADD SKIPPED: pos {p['posid']} {p['symbol']} {p['strategy']} - {p.get('staged_note')}")
             xe = p.get("last_external_edit") or ""
@@ -495,6 +506,23 @@ class Monitor:
             self.st["ix_short_n"] = ix_n
         except Exception as e:
             self.log(f"index-short watch error: {e!r}")
+        try:                                                             # coach item 25: shorts stop raise vs stop-at-entry, 15 / 30
+            from live import short_raise_shadow
+            srn, sr_sum = short_raise_shadow.write(self.cfg)
+            if srn >= 15 and not self.st.get("short_raise_flag_15"):
+                self.st["short_raise_flag_15"] = True
+                self.send(f"COACH EARLY READ - shorts stop raise: {srn} armed shorts resolved, sum of actual - stop-at-entry counterfactual "
+                          f"{sr_sum:+.3f}R ({sr_sum / srn:+.3f}R each). No ruling at 15; judged at 30. web/short_raise.csv.")
+            if srn >= 30 and not self.st.get("short_raise_flag_30"):
+                self.st["short_raise_flag_30"] = True
+                if sr_sum < 0:
+                    self.send(f"COACH GUARD TRIPPED - shorts stop raise: {srn} armed shorts, sum of actual - counterfactual {sr_sum:+.3f}R (< 0). "
+                              f"The rule is RETIRED: set live.json short_raise_at_pyramid_r to 0 (provisioning/live.json + deploy --config) and tell the coach.")
+                else:
+                    self.send(f"COACH GRADING POINT - shorts stop raise: {srn} armed shorts, sum of actual - counterfactual {sr_sum:+.3f}R (>= 0): "
+                              f"the guard holds. web/short_raise.csv.")
+        except Exception as e:
+            self.log(f"short_raise_shadow error: {e!r}")
         mn, m_diff = shadow_bank.write_manual(self.cfg)                  # coach item 22: graded at n=20 manual sizings
         if mn >= 20 and not self.st.get("manual_flag_20"):
             self.st["manual_flag_20"] = True

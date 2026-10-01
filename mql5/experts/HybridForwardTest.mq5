@@ -139,6 +139,7 @@ input bool   InpInverse          = false;  // TESTER study (coach item 21): publ
 input bool   InpPyramid          = false;  // TESTER study (coach item 20): add InpPyramidFrac of the full size at +InpPyramidR after the bank
 input double InpPyramidR         = 1.5;
 input double InpPyramidFrac      = 0.5;
+input double InpShortRaiseR      = 0.0;    // TESTER study (coach item 25): SELL - every leg's stop to +R at the +InpPyramidR touch (0 = off)
 input bool   InpSelfTestStaged   = false;
 input int    InpSelfTestStagedN  = 6;      // TESTER ONLY: the add bar for the staged self-test (1 = add at the first bar close, so the path is exercised)  // TESTER ONLY: run the live self-test with staged entry on (coach item 18 check)
 input bool   InpLiveSelfTest     = false;  // LIVE self-test (TESTER ONLY): in-EA scripted task driver + assertions
@@ -346,9 +347,19 @@ struct JournalRow
    string   inv_parent_strategy;// Inverse row: the parent's detector (its bank fraction applies)
    int      inv_bars_to_stop;   // Inverse row: the H4 bar (after the parent's signal bar) in which the parent was stopped
    double   inv_slip_r;         // Inverse row: fill vs the parent's stop, in R (positive = worse)
+   //--- coach item 25 (2026-10-01, trader override): SHORTS-ONLY STOP RAISE. On a SELL (not an Inverse), when +1.5R trades the
+   //--- stop of every ticket of the signal moves to +short_raise_at_pyramid_r R. Every row of the signal carries the mark.
+   int      sr_state;           // 0 not raised, 1 raised, 2 refused (reason in the audit)
+   datetime sr_time;            // when the stop was moved (state 0: the last attempt, for the retry throttle)
+   double   sr_px;              // the ask when it fired
+   double   sr_stop;            // the new stop (+L R from the first tranche's fill)
+   double   sr_from;            // THIS ticket's stop before the move (the stop-at-entry counterfactual's level)
+   double   sr_vol;             // THIS ticket's volume when the stop was moved (the counterfactual's size)
+   int      sr_tries;           // failed modify attempts (5 -> refused)
   };
 void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0; r.st_anchor_entry=0.0; r.st_anchor_risk=0.0; r.st_fill_time=0; r.st_pyr=0;
-                              r.inv_state=0; r.inv_parent_sid=0; r.inv_parent_posid=0; r.inv_parent_strategy=""; r.inv_bars_to_stop=0; r.inv_slip_r=0.0; }
+                              r.inv_state=0; r.inv_parent_sid=0; r.inv_parent_posid=0; r.inv_parent_strategy=""; r.inv_bars_to_stop=0; r.inv_slip_r=0.0;
+                              r.sr_state=0; r.sr_time=0; r.sr_px=0.0; r.sr_stop=0.0; r.sr_from=0.0; r.sr_vol=0.0; r.sr_tries=0; }
 JournalRow g_rows[];
 
 //--- mid-trade management panel state
@@ -526,6 +537,7 @@ bool     g_cfg_inverse=false;     // live.json inverse_signal: coach item 21 - p
 bool     g_cfg_pyr_inverse=true;  // live.json pyramid_on_inverse: the +1.5R pyramid also on Inverse positions (coach B9)
 double   g_cfg_pyr_r=1.5;         // live.json pyramid_trigger_r
 double   g_cfg_pyr_f=0.5;         // live.json pyramid_frac: share of the ORIGINAL full size added
+double   g_cfg_short_raise_r=0.0; // live.json short_raise_at_pyramid_r: coach item 25 - SELL stop to +R at +1.5R (0 = off)
 double LiveBankFrac(string strat){ return strat=="TrendCont" ? g_cfg_tc_bank : (strat=="DeepFib" ? g_cfg_df_bank : 0.0); }
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
@@ -843,6 +855,8 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_pyr_inverse=(StringToInteger(JGet(k,v,"pyramid_on_inverse","1"))!=0);
       g_cfg_pyr_r=StringToDouble(JGet(k,v,"pyramid_trigger_r","1.5")); if(g_cfg_pyr_r<1.05 || g_cfg_pyr_r>5.0) g_cfg_pyr_r=1.5;
       g_cfg_pyr_f=StringToDouble(JGet(k,v,"pyramid_frac","0.5"));     if(g_cfg_pyr_f<0.05 || g_cfg_pyr_f>1.0) g_cfg_pyr_f=0.5;
+      g_cfg_short_raise_r=StringToDouble(JGet(k,v,"short_raise_at_pyramid_r","0"));
+      if(g_cfg_short_raise_r<0.0 || g_cfg_short_raise_r>=g_cfg_pyr_r) g_cfg_short_raise_r=0.0;      // nonsense -> off
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
@@ -2114,6 +2128,8 @@ void LiveSaveRowState(int i)
    j.KNum("st_anchor_entry",r.st_anchor_entry,_Digits); j.KNum("st_anchor_risk",r.st_anchor_risk,_Digits); j.KInt("st_fill_time",(long)r.st_fill_time); j.KInt("st_pyr",r.st_pyr);
    j.KInt("inv_state",r.inv_state); j.KInt("inv_parent_sid",r.inv_parent_sid); j.KInt("inv_parent_posid",r.inv_parent_posid);
    j.KStr("inv_parent_strategy",r.inv_parent_strategy); j.KInt("inv_bars_to_stop",r.inv_bars_to_stop); j.KNum("inv_slip_r",r.inv_slip_r,4);
+   j.KInt("sr_state",r.sr_state); j.KInt("sr_time",(long)r.sr_time); j.KNum("sr_px",r.sr_px,_Digits); j.KNum("sr_stop",r.sr_stop,_Digits);
+   j.KNum("sr_from",r.sr_from,_Digits); j.KNum("sr_vol",r.sr_vol,2); j.KInt("sr_tries",r.sr_tries);
    j.Key("actions"); j.BeginObj();
    int na=0;
    for(int a=0;a<ArraySize(g_actions);a++)
@@ -2179,6 +2195,8 @@ void LiveWritePositions()
       j.KInt("tranche",g_rows[i].st_tranche); j.KInt("staged_state",g_rows[i].st_state); j.KNum("full_lots",g_rows[i].st_full_lots,2);
       if(g_rows[i].st_tranche==1) j.KTime("add_due",g_rows[i].time+(datetime)((g_cfg_st_n+1)*PeriodSeconds(PERIOD_H4)));
       j.KStr("staged_note",g_rows[i].reject_why);
+      j.KInt("short_raise",g_rows[i].sr_state); j.KInt("short_raise_time",(long)(g_rows[i].sr_state==1 ? g_rows[i].sr_time : 0));
+      j.KNum("short_raise_stop",g_rows[i].sr_stop,_Digits);
       bool beok=BEPlaceable(i); PositionSelectByTicket((ulong)g_rows[i].posid);
       double csl0=PositionGetDouble(POSITION_SL), bep0=BEPrice(i);
       if(csl0>0.0 && (g_rows[i].direction>0 ? csl0>=bep0 : csl0<=bep0)) beok=false;   // BE would LOOSEN the live stop: not offered
@@ -2229,6 +2247,9 @@ bool LiveLoadRowState(string rel)
    r.inv_state=(int)StringToInteger(JGet(k,v,"inv_state","0")); r.inv_parent_sid=(int)StringToInteger(JGet(k,v,"inv_parent_sid","0"));
    r.inv_parent_posid=StringToInteger(JGet(k,v,"inv_parent_posid","0")); r.inv_parent_strategy=JGet(k,v,"inv_parent_strategy","");
    r.inv_bars_to_stop=(int)StringToInteger(JGet(k,v,"inv_bars_to_stop","0")); r.inv_slip_r=StringToDouble(JGet(k,v,"inv_slip_r","0"));
+   r.sr_state=(int)StringToInteger(JGet(k,v,"sr_state","0")); r.sr_time=(datetime)StringToInteger(JGet(k,v,"sr_time","0"));
+   r.sr_px=StringToDouble(JGet(k,v,"sr_px","0")); r.sr_stop=StringToDouble(JGet(k,v,"sr_stop","0")); r.sr_from=StringToDouble(JGet(k,v,"sr_from","0"));
+   r.sr_vol=StringToDouble(JGet(k,v,"sr_vol","0")); r.sr_tries=(int)StringToInteger(JGet(k,v,"sr_tries","0"));
    g_rows[n]=r;
    int na=(int)StringToInteger(JGet(k,v,"actions.n","0"));
    for(int a=0;a<na;a++)
@@ -3590,7 +3611,7 @@ void ManageOpenPositions()
          continue;
         }
 
-      if(g_rows[i].banked && !g_rows[i].closed) { PyramidCheck(i,bid,ask,step,vmin); continue; }   // coach item 20
+      if(g_rows[i].banked && !g_rows[i].closed) { PyramidCheck(i,bid,ask,step,vmin); ShortRaiseCheck(i,ask); continue; }   // coach items 20 / 25
       if(g_rows[i].closed || g_rows[i].banked) continue;      // one-time; NOT gated on tp1_done
       if(g_rows[i].risk_px<=0.0) continue;
       if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;   // already gone
@@ -5774,6 +5795,15 @@ string JournalRowLine(JournalRow &r)
          (r.closed?DoubleToString(r.rt_tp1R,3):""),(r.closed?DoubleToString(r.rt_tp2R,3):""),
          r.rt_touched1,r.rt_reached2,r.rt_redip1,(r.closed?DoubleToString(r.rt_bankr,3):""));
   }
+//--- coach item 25: the shorts-only stop raise, six columns appended to the live journal (and to the tester journal when
+//--- InpShortRaiseR > 0). Blank unless the stop was moved; short_raise_from / _vol are THIS ticket's stop and volume at the move.
+#define SR_HEADER ",short_raise,short_raise_time,short_raise_px,short_raise_stop,short_raise_from,short_raise_vol"
+string SrCols(JournalRow &r)
+  {
+   if(r.sr_state!=1) return(r.sr_state==2 ? ",2,,,,," : ",,,,,,");
+   return(StringFormat(",1,%s,%s,%s,%s,%.2f",TimeToString(r.sr_time,TIME_DATE|TIME_SECONDS),DoubleToString(r.sr_px,_Digits),
+                       DoubleToString(r.sr_stop,_Digits),DoubleToString(r.sr_from,_Digits),r.sr_vol));
+  }
 #define JOURNAL_HEADER "signal_id,signal_time,symbol,strategy,direction," \
       "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots," \
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done," \
@@ -5790,14 +5820,14 @@ void WriteLiveJournals()
        if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
    for(int q=0;q<nm;q++)
      {
-      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason,entry_mode,tranche,full_lots,fill_time,parent_signal_id,bars_to_stop,inv_slip_r\n";
+      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason,entry_mode,tranche,full_lots,fill_time,parent_signal_id,bars_to_stop,inv_slip_r"+SR_HEADER+"\n";
       for(int i=0;i<ArraySize(g_rows);i++)
         {
          if(StampMonth(g_rows[i].time)!=months[q]) continue;
          body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+","+CsvSafe(g_rows[i].reject_why)
               +StringFormat(",%s,%d,%s,%s",CsvSafe(g_rows[i].entry_mode),g_rows[i].st_tranche,(g_rows[i].st_full_lots>0.0?DoubleToString(g_rows[i].st_full_lots,2):""),
                             (g_rows[i].st_fill_time>0?TimeToString(g_rows[i].st_fill_time,TIME_DATE|TIME_SECONDS):""))
-              +(g_rows[i].strategy=="Inverse" ? StringFormat(",%d,%d,%.3f",g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r) : ",,,")+"\n";
+              +(g_rows[i].strategy=="Inverse" ? StringFormat(",%d,%d,%.3f",g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r) : ",,,")+SrCols(g_rows[i])+"\n";
         }
       AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }
@@ -5820,11 +5850,11 @@ void WriteJournal(string path)
       "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
       "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal,decision_class,"
-      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"+FloorHeader()+(InpStaged ? ",entry_mode,tranche,full_lots" : "")+(InpInverse ? ",inv_entry_mode,parent_signal_id,bars_to_stop,inv_slip_r,inv_state,reject_why" : "")+"\n");
+      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"+FloorHeader()+(InpStaged ? ",entry_mode,tranche,full_lots" : "")+(InpInverse ? ",inv_entry_mode,parent_signal_id,bars_to_stop,inv_slip_r,inv_state,reject_why" : "")+(InpShortRaiseR>0.0 ? SR_HEADER : "")+"\n");
    for(int i=0;i<ArraySize(g_rows);i++)
       FileWriteString(h,JournalRowLine(g_rows[i])+FloorCols(g_rows[i])
                         +(InpStaged ? StringFormat(",%s,%d,%.2f",g_rows[i].entry_mode,g_rows[i].st_tranche,g_rows[i].st_full_lots) : "")
-                        +(InpInverse ? StringFormat(",%s,%d,%d,%.3f,%d,%s",g_rows[i].entry_mode,g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r,g_rows[i].inv_state,CsvSafe(g_rows[i].reject_why)) : "")+"\n");
+                        +(InpInverse ? StringFormat(",%s,%d,%d,%.3f,%d,%s",g_rows[i].entry_mode,g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r,g_rows[i].inv_state,CsvSafe(g_rows[i].reject_why)) : "")+(InpShortRaiseR>0.0 ? SrCols(g_rows[i]) : "")+"\n");
    FileFlush(h); FileClose(h);
   }
 
@@ -5998,6 +6028,9 @@ void StagedAddTick()
       g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0; g_rows[n].rt_bankr=-99.0;
       //--- banked already: the add joins the runner - nothing more to bank, its stop is already the entry
       if(g_rows[i].banked) { g_rows[n].banked=true; g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0; }
+      //--- coach item 25: a staged add placed AFTER the shorts stop raise enters with the raised stop (csl); its stop-at-entry
+      //--- counterfactual level is the first tranche's pre-raise stop, at its own size
+      if(g_rows[n].sr_state==1) { g_rows[n].sr_from=g_rows[i].sr_from; g_rows[n].sr_vol=add; }
       else { g_rows[n].banked=false; g_rows[n].tp1_done=false; }
       g_rows[i].st_state=2;
       if(InpLiveMode) AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"ok","",
@@ -6073,6 +6106,61 @@ void PyramidCheck(int i,double bid,double ask,double step,double vmin)
    g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0; g_rows[n].rt_bankr=-99.0;
    AuditLine("pyramid","","",sid,"ok","",StringFormat("add=%.2f fill=%s sl=%s posid=%I64d",add,DoubleToString(fill,_Digits),DoubleToString(be,_Digits),pid));
    Print("Signal #",g_rows[i].id," PYRAMID +",DoubleToString(trigR,2),"R -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
+   WriteJournal(g_journal_part);
+   if(InpLiveMode) LiveWritePositions();
+  }
+
+//+------------------------------------------------------------------+
+//| SHORTS-ONLY STOP RAISE (coach item 25, trader override 2026-10-01)|
+//+------------------------------------------------------------------+
+//--- On a SELL signal (any detector; never an Inverse), after the bank, the first time the ASK reaches +pyramid_trigger_r R
+//--- (the first tranche's R - the pyramid's own trigger, whether or not the pyramid add was placed) the stop of EVERY open
+//--- ticket of the signal (first tranche, staged add, pyramid add) moves to the first fill - L x the first tranche's 1R.
+//--- Tighten-only per ticket. Runs after PyramidCheck on the same tick, so a pyramid placed this tick is moved too; a staged
+//--- add placed later inherits the raised stop (it copies the first tranche's live SL). Once per signal; 5 failed modifies ->
+//--- refused (audit). Tester: InpShortRaiseR (> 0) switches it on for the reproduction check.
+void ShortRaiseCheck(int i,double ask)
+  {
+   double L=(InpLiveMode ? g_cfg_short_raise_r : InpShortRaiseR);
+   if(L<=0.0 || g_rows[i].direction>=0 || g_rows[i].strategy=="Inverse" || g_rows[i].sr_state!=0) return;
+   if(g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) return;
+   double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR);
+   double ae=AnchorEntry(i), ar=AnchorRisk(i);
+   if(ar<=0.0 || !(ask<=ae-trigR*ar)) return;
+   if(g_rows[i].sr_tries>0 && TimeCurrent()-g_rows[i].sr_time<5) return;           // retry throttle after a failed modify
+   double lvl=NormPrice(ae-L*ar);
+   int sid=g_rows[i].id; string tag=StringFormat("sig:%d",sid);
+   double sl_min=ask+(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   bool ok=(lvl>=sl_min); string why=(ok ? "" : StringFormat("stops_level:lvl=%s ask=%s",DoubleToString(lvl,_Digits),DoubleToString(ask,_Digits)));
+   int moved=0, kept=0;
+   for(int k=0;k<ArraySize(g_rows) && ok;k++)
+     {
+      if(g_rows[k].id!=sid || g_rows[k].symbol!=_Symbol || g_rows[k].strategy=="Inverse" || g_rows[k].closed || g_rows[k].posid<=0) continue;
+      if(!PositionSelectByTicket((ulong)g_rows[k].posid)) continue;
+      double csl=PositionGetDouble(POSITION_SL), ctp=PositionGetDouble(POSITION_TP);
+      g_rows[k].sr_from=csl; g_rows[k].sr_vol=PositionGetDouble(POSITION_VOLUME);
+      if(csl>0.0 && csl<=lvl+_Point*0.5) { kept++; continue; }                     // already at or tighter than +L: never loosen
+      if(g_trade.PositionModify((ulong)g_rows[k].posid,lvl,ctp)) moved++;
+      else { ok=false; why=StringFormat("modify_failed:%d posid=%I64d",(int)g_trade.ResultRetcode(),g_rows[k].posid); }
+     }
+   datetime now=TimeCurrent();
+   if(!ok)
+     {
+      for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) { g_rows[k].sr_tries++; g_rows[k].sr_time=now; }
+      if(g_rows[i].sr_tries>=5 || StringFind(why,"stops_level")==0)
+        {
+         for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) g_rows[k].sr_state=2;
+         AuditLine("short_raise","","",tag,"refused",why,"");
+         Print("Signal #",sid," SHORT RAISE refused: ",why);
+         WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions();
+        }
+      return;
+     }
+   for(int k=0;k<ArraySize(g_rows);k++)
+      if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && g_rows[k].strategy!="Inverse")
+        { g_rows[k].sr_state=1; g_rows[k].sr_time=now; g_rows[k].sr_px=ask; g_rows[k].sr_stop=lvl; }
+   AuditLine("short_raise","","",tag,"ok","",StringFormat("stop=%s (+%.2fR) ask=%s moved=%d kept=%d",DoubleToString(lvl,_Digits),L,DoubleToString(ask,_Digits),moved,kept));
+   Print("Signal #",sid," SHORT RAISE at +",DoubleToString(trigR,2),"R -> stop ",DoubleToString(lvl,_Digits)," (+",DoubleToString(L,2),"R) on ",moved," ticket(s)");
    WriteJournal(g_journal_part);
    if(InpLiveMode) LiveWritePositions();
   }

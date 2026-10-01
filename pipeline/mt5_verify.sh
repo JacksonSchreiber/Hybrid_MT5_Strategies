@@ -82,6 +82,7 @@ mkdir -p "$SETDIR"
   [[ -n "${STAGED:-}" ]]        && echo "InpStaged=true"    # coach item 18: staged entry in AA runs (tester study)
   [[ -n "${EARLY:-}" ]]         && echo "InpEarlyPromoteR=${EARLY}"   # coach item 18: early promotion at +R
   [[ -n "${INVERSE:-}" ]]       && echo "InpInverse=true"   # coach item 21: publish + auto-arm the Inverse (tester study)
+  [[ -n "${SHORT_RAISE:-}" ]]   && echo "InpShortRaiseR=${SHORT_RAISE}"   # coach item 25: SELL stop to +R at +1.5R (tester study)
   [[ -n "${STOP_FLOOR_ATR:-}" ]] && echo "InpStopFloorATR=${STOP_FLOOR_ATR}"     # §10.2 floor (window 15; default off)
   [[ -n "${STOP_FLOOR_SYM:-}" ]] && echo "InpStopFloorSymbol=${STOP_FLOOR_SYM}"
   [[ -n "${WEEKEND_FLAT:-}" ]]  && echo "InpWeekendFlat=${WEEKEND_FLAT}"          # §10.1 weekend-flat (broker Mon-Fri)

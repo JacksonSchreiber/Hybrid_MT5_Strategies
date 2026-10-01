@@ -15,7 +15,7 @@ _lock = threading.Lock()
 _inited = False
 _init_fail_at = 0.0
 _cache: dict[tuple, tuple[float, list]] = {}
-TF = {"h4": "TIMEFRAME_H4", "d1": "TIMEFRAME_D1", "h1": "TIMEFRAME_H1", "m15": "TIMEFRAME_M15"}
+TF = {"h4": "TIMEFRAME_H4", "d1": "TIMEFRAME_D1", "h1": "TIMEFRAME_H1", "m15": "TIMEFRAME_M15", "m5": "TIMEFRAME_M5"}
 TERMINAL_PATH = r"C:\Program Files\OANDA MetaTrader 5\terminal64.exe"
 
 FEED_URL = ""          # when set (web app / advisor), bars come from the feed daemon over localhost instead of in-process
