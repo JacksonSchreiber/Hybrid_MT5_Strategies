@@ -135,7 +135,21 @@ class Monitor:
             k = f"{p['symbol']}-{p['posid']}"; prev = seen.get(k) or {}
             if prev.get("open") or (k not in seen and C.parse_iso(p.get("ts")) and C.now_utc() - C.parse_iso(p["ts"]) < timedelta(hours=12)):
                 tot = (p.get("banked_r") or 0) + (p.get("closenow_r") or 0)
-                self.send(f"CLOSED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · total {C.r_fmt(tot)} (banked {C.r_fmt(p.get('banked_r'))}) after {p.get('bars_open')} bars\n{self.base}/position/{k}")
+                tr, sst = int(p.get("tranche") or 0), int(p.get("staged_state") or 0)
+                full, li = float(p.get("full_lots") or 0), float(p.get("lots_init") or 0)
+                if tr == 1 and sst != 2 and full > 0 and li > 0:
+                    # trial phase: only the first tranche was on, so the loss/gain is a fraction of a full position
+                    share = li / full
+                    head = (f"CLOSED IN TRIAL: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · only {li:g} of {full:g} lots "
+                            f"({share:.0%}) were on · {C.r_fmt(tot)} on the trial = {C.r_fmt(tot * share)} of a full position")
+                elif tr in (1, 2) and full > 0 and li > 0:
+                    head = (f"CLOSED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · tranche {tr} of 2 ({li:g} of {full:g} lots) · "
+                            f"{C.r_fmt(tot)} on this tranche = {C.r_fmt(tot * li / full)} of a full position")
+                elif tr == 3:
+                    head = f"CLOSED: pyramid add pos {p['posid']} {p['symbol']} {p['direction']} · {C.r_fmt(tot)} on the add ({li:g} lots)"
+                else:
+                    head = f"CLOSED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · total {C.r_fmt(tot)} (banked {C.r_fmt(p.get('banked_r'))})"
+                self.send(f"{head} after {p.get('bars_open')} bars\n{self.base}/position/{k}")
             seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": False}
 
     def heartbeats(self):
