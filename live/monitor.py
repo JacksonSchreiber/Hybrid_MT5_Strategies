@@ -486,8 +486,26 @@ class Monitor:
             self.send(f"COACH REVISIT POINT: {ok} live TrendCont stop-to-entry exits filled within 0.05R of modelled "
                       f"(of {be}; {n} closed TrendConts in the bank shadow log). web/shadow_bank.csv has the rows.")
 
+    SPREAD_EVERY_S = 300
+
+    def spread_sample(self):
+        """coach 2026-10-01 item 23 follow-up: the spread profile was MT5's bar-MINIMUM spread (EURUSD ~ 0). Sample the live
+        bid/ask of every symbol every 5 minutes to web/spread_live.csv (ts, symbol, utc hour, spread in price) so the profile
+        can be rebuilt by symbol and hour from what the box actually quoted (with sizing.spread from the published signals)."""
+        now = time.time()
+        if now - self.st.get("spread_last", 0) < self.SPREAD_EVERY_S: return
+        from live import mt5feed
+        p = os.path.join(self.cfg["root"], "web", "spread_live.csv"); new = not os.path.exists(p)
+        hr = C.now_utc().hour; lines = []
+        for sym in C.symbols(self.cfg):
+            try: k = mt5feed.tick(sym)
+            except Exception: k = None
+            if k and k.get("bid") and k.get("ask"): lines.append(f"{C.now_iso()},{sym},{hr},{float(k['ask']) - float(k['bid']):.6f}")
+        if lines: C.append_line(p, ("ts,symbol,hour_utc,spread\n" if new else "") + "\n".join(lines))
+        self.st["spread_last"] = now
+
     def tick(self):
-        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch, self.equity_sample, self.shadow_bank):
+        for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch, self.equity_sample, self.shadow_bank, self.spread_sample):
             try: fn()
             except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
         self.save()
