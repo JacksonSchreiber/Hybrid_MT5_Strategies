@@ -131,6 +131,10 @@ input ENUM_AUTO_APPROVE InpAutoApprove = AA_NONE; // NONE=interactive; ALL/SKIP=
 //--- popup with the local file queue under Common\Files\<InpLiveRoot>\ ; detectors/exits/journal
 //--- logic are untouched (E1). Never combine with InpAutoApprove (never auto-trade live).
 input bool   InpLiveMode         = false;  // LIVE: file-queue decision path instead of the popup (-live build only)
+input bool   InpStaged           = false;  // TESTER study (coach item 18): staged entry in AA runs (live reads live.json staged_entry)
+input double InpStagedF0         = 0.25;
+input int    InpStagedN          = 6;
+input double InpEarlyPromoteR    = 0.0;    // TESTER study: early promotion of the staged add at +R during bars 1..N-1 (0 = off; live: staged_early_promote_r)
 input bool   InpPyramid          = false;  // TESTER study (coach item 20): add InpPyramidFrac of the full size at +InpPyramidR after the bank
 input double InpPyramidR         = 1.5;
 input double InpPyramidFrac      = 0.5;
@@ -502,6 +506,7 @@ double   g_cfg_df_bank=0.5;       // live.json deepfib_bank_frac: the same for D
 bool     g_cfg_staged=false;      // live.json staged_entry: coach item 18 (trader override 2026-09-30)
 double   g_cfg_st_f0=0.25;        // live.json staged_first_frac: first tranche share of the ruled lots
 int      g_cfg_st_n=6;            // live.json staged_add_bar: add at the close of this H4 bar after the signal
+double   g_cfg_st_early=0.5;      // live.json staged_early_promote_r: add the rest at once if price trades through +this R before bar N (0 = off)
 bool     g_cfg_pyr=false;         // live.json pyramid_add: coach item 20 - add at +1.5R after the bank
 double   g_cfg_pyr_r=1.5;         // live.json pyramid_trigger_r
 double   g_cfg_pyr_f=0.5;         // live.json pyramid_frac: share of the ORIGINAL full size added
@@ -817,6 +822,7 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_staged=(StringToInteger(JGet(k,v,"staged_entry","0"))!=0);
       g_cfg_st_f0=StringToDouble(JGet(k,v,"staged_first_frac","0.25")); if(g_cfg_st_f0<0.05 || g_cfg_st_f0>0.95) g_cfg_st_f0=0.25;
       g_cfg_st_n=(int)StringToInteger(JGet(k,v,"staged_add_bar","6")); if(g_cfg_st_n<1 || g_cfg_st_n>60) g_cfg_st_n=6;
+      g_cfg_st_early=StringToDouble(JGet(k,v,"staged_early_promote_r","0.5")); if(g_cfg_st_early<0.0 || g_cfg_st_early>0.99) g_cfg_st_early=0.5;
       g_cfg_pyr=(StringToInteger(JGet(k,v,"pyramid_add","0"))!=0);
       g_cfg_pyr_r=StringToDouble(JGet(k,v,"pyramid_trigger_r","1.5")); if(g_cfg_pyr_r<1.05 || g_cfg_pyr_r>5.0) g_cfg_pyr_r=1.5;
       g_cfg_pyr_f=StringToDouble(JGet(k,v,"pyramid_frac","0.5"));     if(g_cfg_pyr_f<0.05 || g_cfg_pyr_f>1.0) g_cfg_pyr_f=0.5;
@@ -1017,6 +1023,9 @@ void OnTimer()
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   //--- coach item 18 tester study: staged entry (+ early promotion) from inputs when not live; live reads live.json
+   if(!InpLiveMode && InpStaged)
+     { g_cfg_staged=true; g_cfg_st_f0=InpStagedF0; g_cfg_st_n=MathMax(1,InpStagedN); g_cfg_st_early=MathMax(0.0,InpEarlyPromoteR); }
    bool in_tester = (bool)MQLInfoInteger(MQL_TESTER);
    bool in_visual = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
    bool dll_ok    = (bool)MQLInfoInteger(MQL_DLLS_ALLOWED);
@@ -1328,6 +1337,7 @@ void OnTick()
 
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
+   if(!InpLiveMode && g_cfg_staged) StagedAddTick();   // coach item 18 tester study (live runs it on the timer)
    LiveDetectExternalEdits();  // live only: SL/TP moved in the trader's own terminal -> EXTERNAL_* action + audit
    TrackAllMfePath();          // Item 2: per-tick MFE + path (journal-only)
    //--- age out unfilled pending orders (edited-entry setups) every tick
@@ -3308,7 +3318,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
             //--- The ruled risk is the FULL position's at the original stop; a position that cannot split (under 0.05 lots,
             //--- or either tranche under the minimum lot) enters in full as before.
             bool staged=false; double full_lots=lots;
-            if(InpLiveMode && g_cfg_staged && (entry_mode=="market" || entry_mode=="market_now"))
+            if((InpLiveMode || InpStaged) && g_cfg_staged && (entry_mode=="market" || entry_mode=="market_now"))
               {
                double stp=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(stp<=0) stp=0.01;
                double vmn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmn<=0) vmn=0.01;
@@ -3348,13 +3358,13 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                      bound=true; AuditLine("fill_bound","","",StringFormat("sig:%d",id),"ok","by_comment",StringFormat("posid=%I64d",g_rows[n].posid));
                     }
                  }
-               if(InpLiveMode)
+               if(InpLiveMode || staged)
                  {   // every live row carries its own anchor (identical to entry/1R unless it is a staged add)
                   g_rows[n].st_anchor_entry=g_rows[n].entry; g_rows[n].st_anchor_risk=g_rows[n].risk_px; g_rows[n].st_fill_time=TimeCurrent();
                   if(staged)
                     {
                      g_rows[n].st_state=1; g_rows[n].st_tranche=1; g_rows[n].st_full_lots=full_lots; g_rows[n].entry_mode="staged";
-                     AuditLine("staged_first","","",StringFormat("sig:%d",id),"ok","",StringFormat("first=%.2f full=%.2f add_after_bar=%d",lots,full_lots,g_cfg_st_n));
+                     if(InpLiveMode) AuditLine("staged_first","","",StringFormat("sig:%d",id),"ok","",StringFormat("first=%.2f full=%.2f add_after_bar=%d",lots,full_lots,g_cfg_st_n));
                     }
                  }
                if(two_target) MinLotSplitGuard(n);
@@ -5669,8 +5679,10 @@ void WriteJournal(string path)
       "orig_entry,orig_sl,orig_tp,orig_tp1,orig_tp2,entry,sl,tp,tp1,tp2,partial_frac,lots,"
       "decision,skip_reason,edited,is_pending,decision_ms,posid,tp1_done,"
       "exit_time,exit_price,pnl,r_multiple,regime,with_trend,to_entry,to_sl,to_tp1,to_tp2,mfe_r,pre_dip_r,post_dip_r,dipped,terminal,decision_class,"
-      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"+FloorHeader()+"\n");
-   for(int i=0;i<ArraySize(g_rows);i++) FileWriteString(h,JournalRowLine(g_rows[i])+FloorCols(g_rows[i])+"\n");
+      "rt_tp1r,rt_tp2r,rt_touched1,rt_reached2,rt_redip1,rt_bankr"+FloorHeader()+(InpStaged ? ",entry_mode,tranche,full_lots" : "")+"\n");
+   for(int i=0;i<ArraySize(g_rows);i++)
+      FileWriteString(h,JournalRowLine(g_rows[i])+FloorCols(g_rows[i])
+                        +(InpStaged ? StringFormat(",%s,%d,%.2f",g_rows[i].entry_mode,g_rows[i].st_tranche,g_rows[i].st_full_lots) : "")+"\n");
    FileFlush(h); FileClose(h);
   }
 
@@ -5769,19 +5781,31 @@ void OnDeinit(const int reason)
 void StagedSkip(int i,string why)
   {
    g_rows[i].st_state=3; g_rows[i].reject_why="staged add skipped: "+why;
-   AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"skipped",why,StringFormat("posid=%I64d",g_rows[i].posid));
+   if(InpLiveMode) AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"skipped",why,StringFormat("posid=%I64d",g_rows[i].posid));
    Print("Signal #",g_rows[i].id," STAGED ADD SKIPPED: ",why);
   }
 void StagedAddTick()
   {
-   if(!InpLiveMode) return;
+   if(!InpLiveMode && !g_cfg_staged) return;
    bool changed=false;
    int nrows=ArraySize(g_rows);
    for(int i=0;i<nrows;i++)
      {
       if(g_rows[i].st_state!=1 || g_rows[i].st_tranche!=1 || g_rows[i].symbol!=_Symbol) continue;
       int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
-      if(sh<0 || sh<g_cfg_st_n+1) continue;                  // bar N after the signal bar has not closed yet
+      if(sh<0) continue;
+      //--- coach 2026-10-01: EARLY PROMOTION - during bars 1..N-1, price trading through +staged_early_promote_r (from the
+      //--- first tranche's entry, in its 1R) adds the rest at once; otherwise the bar-N close add as before.
+      string promote="";
+      if(sh>=g_cfg_st_n+1) promote="bar"+IntegerToString(g_cfg_st_n);
+      else if(g_cfg_st_early>0.0 && g_rows[i].st_anchor_risk>0.0 && sh>=1)
+        {
+         double lvl=(g_rows[i].direction>0 ? g_rows[i].st_anchor_entry+g_cfg_st_early*g_rows[i].st_anchor_risk
+                                            : g_rows[i].st_anchor_entry-g_cfg_st_early*g_rows[i].st_anchor_risk);
+         double bq=SymbolInfoDouble(_Symbol,SYMBOL_BID), aq=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+         if(g_rows[i].direction>0 ? bq>=lvl : aq<=lvl) promote="early";
+        }
+      if(promote=="") continue;                              // neither the early level nor the bar-N close yet
       changed=true;
       if(g_rows[i].closed || !PositionSelectByTicket((ulong)g_rows[i].posid)) { StagedSkip(i,"position_closed"); continue; }
       double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
@@ -5791,13 +5815,13 @@ void StagedAddTick()
       int dir=g_rows[i].direction;
       double csl=PositionGetDouble(POSITION_SL), ctp=PositionGetDouble(POSITION_TP);
       double px=(dir>0 ? SymbolInfoDouble(_Symbol,SYMBOL_ASK) : SymbolInfoDouble(_Symbol,SYMBOL_BID));
-      if(!g_trading_enabled) { StagedSkip(i,"trading_disabled"); continue; }
+      if(InpLiveMode && !g_trading_enabled) { StagedSkip(i,"trading_disabled"); continue; }
       double spr=(g_rows[i].st_anchor_risk>0.0 ? (SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID))/g_rows[i].st_anchor_risk : 0.0);
       if(g_cfg_max_spread_r>0.0 && spr>g_cfg_max_spread_r) { StagedSkip(i,StringFormat("spread_too_wide:%.3fR (max %.3fR)",spr,g_cfg_max_spread_r)); continue; }
       if(csl<=0.0) { StagedSkip(i,"first_tranche_has_no_stop"); continue; }
       if(dir>0 ? px<=csl : px>=csl) { StagedSkip(i,"price_through_stop"); continue; }
       string why="";
-      if(!FtmoHeadroomOK(add,px,csl,why,"staged_add")) { StagedSkip(i,why); continue; }
+      if(InpLiveMode && !FtmoHeadroomOK(add,px,csl,why,"staged_add")) { StagedSkip(i,why); continue; }
       string cap=StringFormat("Signal #%d add",g_rows[i].id);
       bool ok=(dir>0 ? g_trade.Buy(add,_Symbol,0.0,csl,ctp,cap) : g_trade.Sell(add,_Symbol,0.0,csl,ctp,cap));
       if(!ok) { StagedSkip(i,StringFormat("order_failed:%d",(int)g_trade.ResultRetcode())); continue; }
@@ -5823,7 +5847,7 @@ void StagedAddTick()
       g_rows[n].risk_px=g_rows[i].st_anchor_risk;            // R in the first tranche's 1R, so the two rows add up
       g_rows[n].sl=g_rows[i].sl;                             // the ORIGINAL stop stays the risk basis (the live SL is csl)
       g_rows[n].st_state=2; g_rows[n].st_tranche=2; g_rows[n].st_fill_time=TimeCurrent();
-      g_rows[n].entry_mode="staged_add"; g_rows[n].reject_why="";
+      g_rows[n].entry_mode="staged_add_"+promote; g_rows[n].reject_why="";   // promote = early | bar6
       g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=TimeCurrent();
       g_rows[n].closed=false; g_rows[n].closed_vol=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
       g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].terminal=""; g_rows[n].ratcheted=false;
@@ -5833,11 +5857,11 @@ void StagedAddTick()
       if(g_rows[i].banked) { g_rows[n].banked=true; g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0; }
       else { g_rows[n].banked=false; g_rows[n].tp1_done=false; }
       g_rows[i].st_state=2;
-      AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"ok","",
-                StringFormat("add=%.2f fill=%s sl=%s posid=%I64d first_posid=%I64d banked=%d",add,DoubleToString(fill,_Digits),DoubleToString(csl,_Digits),pid,g_rows[i].posid,(int)g_rows[i].banked));
+      if(InpLiveMode) AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"ok","",
+                StringFormat("promote=%s add=%.2f fill=%s sl=%s posid=%I64d first_posid=%I64d banked=%d",promote,add,DoubleToString(fill,_Digits),DoubleToString(csl,_Digits),pid,g_rows[i].posid,(int)g_rows[i].banked));
       Print("Signal #",g_rows[i].id," STAGED ADD -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
      }
-   if(changed) { WriteJournal(g_journal_part); LiveWritePositions(); }
+   if(changed) { WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions(); }
   }
 
 //+------------------------------------------------------------------+

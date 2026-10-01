@@ -79,6 +79,8 @@ mkdir -p "$SETDIR"
   [[ -n "${DELAY_MODE:-}" ]]    && echo "InpDelayMode=${DELAY_MODE}"   # 0=FREEZE(default) 1=SLIDE
   [[ -n "${TC_BANK:-}" ]]       && echo "InpTcBankFrac=${TC_BANK}"   # coach 2026-09-30: TrendCont bank share (tester study)
   [[ -n "${PYR:-}" ]]           && echo "InpPyramid=true"   # coach item 20: +1.5R pyramid (tester study)
+  [[ -n "${STAGED:-}" ]]        && echo "InpStaged=true"    # coach item 18: staged entry in AA runs (tester study)
+  [[ -n "${EARLY:-}" ]]         && echo "InpEarlyPromoteR=${EARLY}"   # coach item 18: early promotion at +R
   [[ -n "${STOP_FLOOR_ATR:-}" ]] && echo "InpStopFloorATR=${STOP_FLOOR_ATR}"     # §10.2 floor (window 15; default off)
   [[ -n "${STOP_FLOOR_SYM:-}" ]] && echo "InpStopFloorSymbol=${STOP_FLOOR_SYM}"
   [[ -n "${WEEKEND_FLAT:-}" ]]  && echo "InpWeekendFlat=${WEEKEND_FLAT}"          # §10.1 weekend-flat (broker Mon-Fri)
