@@ -140,11 +140,11 @@ class Monitor:
                 if tr == 1 and sst != 2 and full > 0 and li > 0:
                     # trial phase: only the first tranche was on, so the loss/gain is a fraction of a full position
                     share = li / full
-                    head = (f"CLOSED IN TRIAL: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · only {li:g} of {full:g} lots "
-                            f"({share:.0%}) were on · {C.r_fmt(tot)} on the trial = {C.r_fmt(tot * share)} of a full position")
+                    head = (f"CLOSED IN TRIAL: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {C.r_fmt(tot * share)} "
+                            f"(trial size: {li:g} of {full:g} lots = {share:.0%} of the position)")
                 elif tr in (1, 2) and full > 0 and li > 0:
-                    head = (f"CLOSED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · tranche {tr} of 2 ({li:g} of {full:g} lots) · "
-                            f"{C.r_fmt(tot)} on this tranche = {C.r_fmt(tot * li / full)} of a full position")
+                    head = (f"CLOSED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {C.r_fmt(tot * li / full)} "
+                            f"(tranche {tr} of 2: {li:g} of {full:g} lots)")
                 elif tr == 3:
                     head = f"CLOSED: pyramid add pos {p['posid']} {p['symbol']} {p['direction']} · {C.r_fmt(tot)} on the add ({li:g} lots)"
                 else:
