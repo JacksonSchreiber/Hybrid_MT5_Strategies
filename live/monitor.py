@@ -442,6 +442,19 @@ class Monitor:
                 self.send(f"COACH READ DUE - Inverse: {iv['closed']} closed fills, mean {iv['mean_R']:+.3f}R vs the backtest +0.20R. web/inverse_shadow.csv.")
         except Exception as e:
             self.log(f"inverse_shadow error: {e!r}")
+        mn, m_diff = shadow_bank.write_manual(self.cfg)                  # coach item 22: graded at n=20 manual sizings
+        if mn >= 20 and not self.st.get("manual_flag_20"):
+            self.st["manual_flag_20"] = True
+            self.send(f"COACH GRADING POINT - manual sizing (Full now / Promote now): {mn} closed trades, mean actual - bar-6 counterfactual "
+                      f"{m_diff:+.3f}R (pre-registered bar >= +0.10R or the lever is retired). web/manual_sizing.csv.")
+        try:                                                             # coach item 22: the advisor Size line, read at n=30 cards
+            lg = os.path.join(self.cfg["advisor"]["live_dir"], "verdicts.live.log")
+            with open(lg, encoding="utf-8", errors="replace") as fh:
+                ns = sum(1 for ln in fh if "| size:" in ln and "| size:-" not in ln)
+            if ns >= 30 and not self.st.get("size_line_flag_30"):
+                self.st["size_line_flag_30"] = True
+                self.send(f"COACH READ DUE - the advisor's Size line has been given on {ns} cards (verdicts.live.log 'size:' field).")
+        except OSError: pass
         fn_, f_mean = shadow_bank.pyramid_fill_watch(self.cfg)            # coach watch 2026-10-01: add fills vs the modelled +1.5R
         if fn_ >= 10 and f_mean is not None and f_mean < 1.55 and not self.st.get("pyr_fill_flag"):
             self.st["pyr_fill_flag"] = True

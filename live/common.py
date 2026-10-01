@@ -11,7 +11,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 VERBS_SIGNAL = ("approve", "skip", "delay")
-VERBS_POSITION = ("close", "close50", "sl_be", "ratchet_tp1")
+VERBS_POSITION = ("close", "close50", "sl_be", "ratchet_tp1", "promote")   # promote: coach item 22 (staged -> full now)
 VERBS_ADMIN = ("test_signal",)          # trader-issued synthetic signal (live only)
 VERBS_PENDING = ("cancel_pending", "fill_now")   # cancel a resting order, or take it at the market now (target: signal_id)
 SKIP_REASONS = {1: "Counter-trend", 2: "News / event", 3: "Ugly structure", 4: "Target blocked", 5: "Correlated", 6: "Gut / other"}

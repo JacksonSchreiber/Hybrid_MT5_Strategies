@@ -144,6 +144,15 @@ def inverse_card(s: dict) -> str:
             f'headroom and a 0.10R slippage guard run at the fill). Full size, no staging. State: {E(str(state))}</div></div>')
 
 
+def promote_button(p: dict) -> str:
+    """coach item 22: a waiting staged first tranche can be promoted to full at market during H4 bars 1-5."""
+    if int(p.get("tranche") or 0) != 1 or int(p.get("staged_state") or 0) != 1: return ""
+    k = f'{p["symbol"]}-{p["posid"]}'
+    return (f'<form method="post" action="/task" style="margin-top:8px"><input type="hidden" name="key" value="{E(k)}">'
+            f'<input type="hidden" name="verb" value="promote"><button class="btn go" style="width:100%">PROMOTE NOW - add the rest at market</button>'
+            f'<div class="k">H4 bars 1-5 only; kill switch, spread, lot floor and FTMO headroom apply; after a promotion the bar-6 add does not fire</div></form>')
+
+
 def staged_block(p: dict) -> str:
     """coach item 18: the two tranches of a staged entry - the first at the signal, the add at the close of H4 bar N."""
     tr = int(p.get("tranche") or 0)
@@ -164,7 +173,7 @@ def staged_block(p: dict) -> str:
                  2: "add placed - see the other position of this signal",
                  3: f'add skipped - {p.get("staged_note") or ""}'}.get(stt, "")
         return (f'<div class="card"><div class="k">Staged entry · tranche 1 of 2</div><div class="big">{p.get("lots_init")} of {full} lots at the signal</div>'
-                f'<div class="k">{E(state)}</div>{pyr}</div>')
+                f'<div class="k">{E(state)}</div>{pyr}{promote_button(p)}</div>')
     return (f'<div class="card"><div class="k">Staged entry · tranche 2 of 2 (the add)</div><div class="big">{p.get("lots_init")} lots added at {p.get("entry")}</div>'
             f'<div class="k">banks and moves to entry at the FIRST tranche\'s +1R and entry, as one position</div></div>')
 
@@ -632,6 +641,10 @@ def signal_page(key: str, q: dict) -> str:
         modes = s.get("entry_modes") or ["market"]
         out.append(f'<div class="card"><h2>Decide</h2><form method="post" action="/task"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="approve">'
                    + f'<select name="entry_mode"><option value="market">Enter NOW at market (SL/TP as shown)</option><option value="pending">Pending order at the original entry {lv.get("entry")} (waits for price to come back)</option></select>'
+                   + (('<div style="margin-top:8px"><span class="k">Size (market entries):</span> <select name="size">'
+                       '<option value="staged" selected>Staged - 25% now, the rest at the bar-6 close (default)</option>'
+                       '<option value="full">Full now - the whole ruled size at once</option></select></div>')
+                      if float((sz.get("lots") or 0)) >= 0.02 else '<input type="hidden" name="size" value="staged">')
                    + '<div style="margin-top:8px"><button class="btn go" style="width:100%">APPROVE</button></div></form>'
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
                    + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form>'
@@ -1086,6 +1099,8 @@ def do_task(form: dict) -> tuple[str, bool, str]:
             em = form.get("entry_mode", "market")
             if em not in (s.get("entry_modes") or ["market"]): return f"/signal/{key}", False, "entry mode not offered"
             params = {"entry_mode": em}
+            sz = form.get("size", "staged")                          # coach item 22: Staged (default) / Full now
+            if sz in ("staged", "full"): params["size"] = sz
         elif verb == "skip":
             try: rc = int(form.get("reason_code", "0"))
             except ValueError: rc = 0
@@ -1169,7 +1184,7 @@ class H(BaseHTTPRequestHandler):
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backup|{name}|{len(data)}B|{man['files']} files|by=web")
                 self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Disposition", f'attachment; filename="{name}"')
                 self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
-            if parts[0] in ("shadow_bank.csv", "staged_entry.csv", "inverse_shadow.csv"):   # coach items 8, 18, 21
+            if parts[0] in ("shadow_bank.csv", "staged_entry.csv", "inverse_shadow.csv", "manual_sizing.csv"):   # coach items 8, 18, 21, 22
                 try:
                     with open(os.path.join(CFG["root"], "web", parts[0]), "rb") as f: data = f.read()
                 except OSError: data = b"not built yet - the monitor writes it hourly\n"

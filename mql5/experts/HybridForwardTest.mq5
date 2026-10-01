@@ -514,6 +514,9 @@ double   g_cfg_tc_bank=0.5;       // live.json trendcont_bank_frac: share banked
 double   g_cfg_df_bank=0.5;       // live.json deepfib_bank_frac: the same for DeepFib (coach 2026-09-30 late: 0.25)
 //--- the live bank share per detector (SweepMSS / EMArevQ stay 50%); 0 = not a configurable detector
 bool     g_cfg_staged=false;      // live.json staged_entry: coach item 18 (trader override 2026-09-30)
+string   g_size_choice="";        // coach item 22: the approve task's params.size ("full" = enter in full now; else staged)
+int      g_promote_sid=0;         // coach item 22: the signal whose staged add is promoted NOW by the trader
+string   g_promote_note="";
 double   g_cfg_st_f0=0.25;        // live.json staged_first_frac: first tranche share of the ruled lots
 int      g_cfg_st_n=6;            // live.json staged_add_bar: add at the close of this H4 bar after the signal
 double   g_cfg_st_early=0.0;      // early promotion: RETIRED (coach 2026-10-01 - the H4 replay flattered it; M5 -0.002R, +11R DD).
@@ -1354,7 +1357,8 @@ void OnTick()
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
    if(!InpLiveMode && g_cfg_staged) StagedAddTick();   // coach item 18 tester study (live runs it on the timer)
-   if(g_cfg_inverse || InverseArmedCount()>0) { InverseArmTick(); InverseFireTick(); }   // coach item 21 (every tick: the fill is time-critical)
+   if(g_cfg_inverse && iTime(_Symbol,PERIOD_H4,0)!=g_inv_last_bar) { g_inv_last_bar=iTime(_Symbol,PERIOD_H4,0); InverseArmTick(); }   // once per H4 bar
+   if(InverseArmedCount()>0) InverseFireTick();          // coach item 21: the fill is time-critical - every tick while armed
    LiveDetectExternalEdits();  // live only: SL/TP moved in the trader's own terminal -> EXTERNAL_* action + audit
    TrackAllMfePath();          // Item 2: per-tick MFE + path (journal-only)
    //--- age out unfilled pending orders (edited-entry setups) every tick
@@ -2573,6 +2577,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
          reason="ok"; return "accepted";
         }
       if(HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
+      g_size_choice=JGet(k,v,"params.size","staged");   // coach item 22: staged (default) | full
       string em=JGet(k,v,"params.entry_mode",(g_delay_count>0 ? "pending" : "market"));
       if(em=="market_now") em="market";
       string entry_mode;
@@ -2615,6 +2620,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       //--- commit exactly as the tester would after an Accept click
       CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
                      true,0,DecisionMs(),false,false,entry_mode);
+      g_size_choice="";
       row_idx=RowIdxBySid(sid);
       if(row_idx>=0 && g_rows[row_idx].decision=="approved" && g_rows[row_idx].posid==0 && g_rows[row_idx].order_ticket==0)
         { WriteSignalJson("approved","order_failed"); LiveUnpark(); reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
@@ -2756,6 +2762,43 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       ParkStoreCurrent();
       row_idx=-1; reason="ok"; return "accepted";
      }
+   //--- coach item 22: PROMOTE NOW - the trader adds a staged position's remaining tranche at market during H4 bars 1-5.
+   //--- Kill switch, spread gate, lot floor and FTMO headroom apply; a refusal is final for that press (journaled on the
+   //--- row) and leaves the bar-6 add in place. After a promotion the bar-6 add does not fire (st_state 2).
+   if(verb=="promote")
+     {
+      long posid=StringToInteger(JGet(k,v,"position_id","0"));
+      int idx=RowIdxByPosid(posid); row_idx=idx;
+      if(idx<0){ reason="unknown_position"; return "rejected"; }
+      if(g_rows[idx].st_tranche!=1 || g_rows[idx].st_state!=1){ reason="not_a_waiting_staged_position"; return "rejected"; }
+      if(!PositionSelectByTicket((ulong)posid)){ reason="position_closed"; return "rejected"; }
+      int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[idx].time,false);
+      if(sh<1 || sh>5){ reason=StringFormat("outside_bars_1_5:bar%d",sh); return "rejected"; }
+      double ar=AnchorRisk(idx), csl=PositionGetDouble(POSITION_SL);
+      double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+      double px=(g_rows[idx].direction>0 ? ask : bid);
+      double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
+      double add=NormalizeDouble(MathFloor((g_rows[idx].st_full_lots-g_rows[idx].lots)/step+1e-9)*step,2);
+      string why="";
+      if(!g_trading_enabled) why="trading_disabled";
+      else if(g_cfg_max_spread_r>0.0 && ar>0.0 && (ask-bid)/ar>g_cfg_max_spread_r) why=StringFormat("spread_too_wide:%.3fR",(ask-bid)/ar);
+      else { double fr=0.0, frung=0.0; if(LotFloorExceedsRung(px,(csl>0.0?csl:g_rows[idx].sl),fr,frung)) why=StringFormat("lot_floor_exceeds_rung:%.2f%%",fr*100.0); }
+      if(why=="" && !FtmoHeadroomOK(add,px,(csl>0.0?csl:g_rows[idx].sl),why,task_id)) {}
+      double oR=OpenR(idx);
+      if(why!="")
+        {
+         g_rows[idx].reject_why=StringFormat("manual_promote refused at bar %d open_r %+.2f: %s",sh,oR,why);
+         AuditLine("promote",task_id,verb,StringFormat("pos:%I64d",posid),"rejected",why,StringFormat("bar=%d open_r=%+.2f",sh,oR));
+         WriteJournal(g_journal_part);
+         reason=why; return "rejected";
+        }
+      g_promote_sid=g_rows[idx].id; g_promote_note=StringFormat("promote=manual_promote bar=%d open_r=%+.2f",sh,oR);
+      StagedAddTick();
+      g_promote_sid=0; g_promote_note="";
+      if(g_rows[idx].st_state!=2){ reason=(g_rows[idx].reject_why!="" ? g_rows[idx].reject_why : "promote_failed"); return "rejected"; }
+      AuditLine("promote",task_id,verb,StringFormat("pos:%I64d",posid),"accepted","ok",StringFormat("bar=%d open_r=%+.2f add=%.2f",sh,oR,add));
+      reason="ok"; return "accepted";
+     }
    //--- position verbs --------------------------------------------------------
    if(verb=="close" || verb=="close50" || verb=="sl_be" || verb=="ratchet_tp1")
      {
@@ -2865,7 +2908,7 @@ void LiveProcessTasks()
       long target_id=StringToInteger(JGet(k,v,target_key,"0"));
       if(JGet(k,v,"schema_version","")!=(string)LIVE_SCHEMA_VERSION){ result="rejected"; reason="schema_version_unsupported"; }
       else if(tsym!=_Symbol){ result="rejected"; reason="symbol_mismatch"; }
-      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"&&verb!="cancel_pending"&&verb!="fill_now"){ result="rejected"; reason="unknown_verb"; }
+      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"&&verb!="cancel_pending"&&verb!="fill_now"&&verb!="promote"){ result="rejected"; reason="unknown_verb"; }
       else
         {
          datetime issued=IsoToTime(JGet(k,v,"issued_at",""));
@@ -3390,7 +3433,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
             //--- The ruled risk is the FULL position's at the original stop; a position that cannot split (under 0.05 lots,
             //--- or either tranche under the minimum lot) enters in full as before.
             bool staged=false; double full_lots=lots;
-            if((InpLiveMode || InpStaged) && g_cfg_staged && (entry_mode=="market" || entry_mode=="market_now"))
+            if((InpLiveMode || InpStaged) && g_cfg_staged && (entry_mode=="market" || entry_mode=="market_now") && g_size_choice!="full")
               {
                double stp=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(stp<=0) stp=0.01;
                double vmn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmn<=0) vmn=0.01;
@@ -3432,6 +3475,10 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                      if(fill>0.0) { g_rows[n].entry=fill; g_rows[n].risk_px=MathAbs(fill-cand.sl); }
                      bound=true; AuditLine("fill_bound","","",StringFormat("sig:%d",id),"ok","by_comment",StringFormat("posid=%I64d",g_rows[n].posid));
                     }
+                 }
+               if(InpLiveMode && g_size_choice=="full")
+                 {   // coach item 22: the trader chose FULL NOW on the approve dialog
+                  g_rows[n].entry_mode="manual_full"; g_rows[n].reject_why="promote=manual_full bar=0 open_r=+0.00";
                  }
                if(InpLiveMode || staged)
                  {   // every live row carries its own anchor (identical to entry/1R unless it is a staged add)
@@ -5890,7 +5937,8 @@ void StagedAddTick()
       //--- coach 2026-10-01: EARLY PROMOTION - during bars 1..N-1, price trading through +staged_early_promote_r (from the
       //--- first tranche's entry, in its 1R) adds the rest at once; otherwise the bar-N close add as before.
       string promote="";
-      if(sh>=g_cfg_st_n+1) promote="bar"+IntegerToString(g_cfg_st_n);
+      if(g_promote_sid>0 && g_rows[i].id==g_promote_sid) promote="manual_promote";        // coach item 22: the trader's Promote now
+      else if(sh>=g_cfg_st_n+1) promote="bar"+IntegerToString(g_cfg_st_n);
       else if(g_cfg_st_early>0.0 && g_rows[i].st_anchor_risk>0.0 && sh>=1)
         {
          double lvl=(g_rows[i].direction>0 ? g_rows[i].st_anchor_entry+g_cfg_st_early*g_rows[i].st_anchor_risk
@@ -5940,7 +5988,7 @@ void StagedAddTick()
       g_rows[n].risk_px=g_rows[i].st_anchor_risk;            // R in the first tranche's 1R, so the two rows add up
       g_rows[n].sl=g_rows[i].sl;                             // the ORIGINAL stop stays the risk basis (the live SL is csl)
       g_rows[n].st_state=2; g_rows[n].st_tranche=2; g_rows[n].st_fill_time=TimeCurrent();
-      g_rows[n].entry_mode="staged_add_"+promote; g_rows[n].reject_why="";   // promote = early | bar6
+      g_rows[n].entry_mode="staged_add_"+promote; g_rows[n].reject_why=(promote=="manual_promote" ? g_promote_note : "");   // promote = early | bar6 | manual_promote
       g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=TimeCurrent();
       g_rows[n].closed=false; g_rows[n].closed_vol=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
       g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].terminal=""; g_rows[n].ratcheted=false;
@@ -6038,6 +6086,7 @@ void PyramidCheck(int i,double bid,double ask,double step,double vmin)
 //--- switch, NO-ENTRY window, spread gate, lot floor, FTMO headroom and a 0.10R slippage guard. Cancelled when the parent
 //--- banks, is closed any other way, or passes bar 18. One per parent; never an Inverse of an Inverse.
 const double INV_SLIP_GUARD_R=0.10;
+datetime g_inv_last_bar=0;
 const int    INV_W0=7, INV_W1=18;
 
 void InverseParseComment(string c,int &psid,long &pposid,string &pstrat)

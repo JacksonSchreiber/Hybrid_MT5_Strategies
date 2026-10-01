@@ -10,7 +10,7 @@ Rows with a manual action (close, close 50%, SL to BE, ratchet) are logged but f
 Writes <root>/web/shadow_bank.csv (rewritten each run).
 """
 from __future__ import annotations
-import csv, glob, os
+import csv, glob, os, re
 
 from live import common as C
 from live import mt5feed
@@ -187,3 +187,86 @@ def pyramid_fill_watch(cfg: dict) -> tuple[int, float | None]:
     """-> (pyramid adds with a fill, their mean fill in R) - the coach wants a word if it averages worse than +1.55R after 10."""
     f = [x["pyramid_fill_R"] for x in staged(cfg) if x["pyramid_fill_R"] != ""]
     return len(f), (sum(f) / len(f) if f else None)
+
+
+# ----------------------------------------------------------------------------- coach item 22: manual sizing ledger
+MANUAL_COLS = ["symbol", "signal_id", "strategy", "signal_time", "promote", "promote_bar", "promote_open_r", "actual_R",
+               "counterfactual_bar6_R", "diff_R", "closed"]
+
+
+def _bar6_close(symbol: str, signal_time: str):
+    """the close price and broker epoch of the 6th H4 bar after the signal bar (the bar-6 add's price), from the feed."""
+    import bisect
+    from datetime import datetime, timezone
+    try: t0 = int(datetime.strptime(signal_time[:19], "%Y.%m.%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+    except (TypeError, ValueError): return None, None
+    bars = mt5feed.bars(symbol, "h4", 400) or []
+    ts = [int(b[0]) for b in bars]
+    i = bisect.bisect_left(ts, t0)
+    if i >= len(ts) or ts[i] != t0 or i + 6 >= len(bars): return None, None
+    return float(bars[i + 6][4]), ts[i + 6] + 4 * 3600          # close of bar 6, and the moment it closed
+
+
+def manual(cfg: dict) -> list[dict]:
+    """Every manually sized trade (Full now at the approve, or Promote now): actual R in full-position units against what
+    the default staged entry (25% now, 75% at the bar-6 close) would have made on the same path. The counterfactual uses the
+    first leg's realised R per lot, the bank level/time from the actions log and the bar-6 close from the feed - an
+    approximation of the replay (it assumes the add would have left with the position's runner at the same exit)."""
+    acts = actions(cfg); by: dict = {}
+    for r in C.journal_rows(cfg):
+        if r.get("decision") not in ("approved", "approved_pending"): continue
+        by.setdefault((r.get("symbol"), r.get("signal_id")), {})[int(_f(r.get("tranche")) or 0)] = r
+    out = []
+    for (sym, sid), d in by.items():
+        a = d.get(0) if (d.get(0) or {}).get("entry_mode") == "manual_full" else d.get(1)
+        add = d.get(2)
+        if not a: continue
+        mode = "manual_full" if a.get("entry_mode") == "manual_full" else ("manual_promote" if add and (add.get("entry_mode") or "").endswith("manual_promote") else None)
+        if not mode: continue
+        note = (add or a).get("reject_reason") or ""
+        bar = re.search(r"bar=(\d+)", note); orr = re.search(r"open_r=([+-]?\d+\.\d+)", note)
+        e, s_ = _f(a.get("entry")), _f(a.get("sl")); full = _f(a.get("full_lots")) or _f(a.get("lots")) or 0.0
+        r1 = _f(a.get("r_multiple")) if a.get("exit_time") else None
+        r2 = (_f(add.get("r_multiple")) if add.get("exit_time") else None) if add else None
+        closed = r1 is not None and (add is None or r2 is not None)
+        x = {"symbol": sym, "signal_id": sid, "strategy": a.get("strategy"), "signal_time": a.get("signal_time"), "promote": mode,
+             "promote_bar": bar.group(1) if bar else "", "promote_open_r": orr.group(1) if orr else "", "actual_R": "",
+             "counterfactual_bar6_R": "", "diff_R": "", "closed": int(closed)}
+        if closed and e and s_ and full:
+            l1 = _f(a.get("lots")) or 0.0; l2 = (_f(add.get("lots")) or 0.0) if add else 0.0
+            actual = (l1 * r1 + l2 * (r2 or 0.0)) / full if mode == "manual_promote" else r1
+            R0 = abs(e - s_); sg = 1.0 if e > s_ else -1.0
+            c6, t6 = _bar6_close(sym, a.get("signal_time"))
+            xp = _f(a.get("exit_price"))
+            from datetime import datetime, timezone
+            try: tx = int(datetime.strptime(a.get("exit_time")[:19], "%Y.%m.%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+            except (TypeError, ValueError): tx = None
+            r_add = 0.0
+            if c6 is not None and tx is not None and tx > t6 and xp is not None:
+                bank = next((ac for ac in acts.get((sym, sid), []) if (ac.get("action") or "").startswith("AUTO_")), None)
+                bf = _f(a.get("partial_frac")) or 0.25
+                if bank and bank.get("bar_time", "") > "":
+                    try: tb = int(datetime.strptime(bank["bar_time"][:19], "%Y.%m.%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+                    except ValueError: tb = None
+                    bank_px = _f(bank.get("price"))
+                    if tb is not None and tb > t6 and bank_px is not None:
+                        r_add = bf * (bank_px - c6) * sg / R0 + (1 - bf) * (xp - c6) * sg / R0
+                    else:
+                        r_add = (xp - c6) * sg / R0
+                else:
+                    r_add = (xp - c6) * sg / R0
+            cf = 0.25 * r1 + 0.75 * r_add
+            x.update({"actual_R": round(actual, 3), "counterfactual_bar6_R": round(cf, 3), "diff_R": round(actual - cf, 3)})
+        out.append(x)
+    return out
+
+
+def write_manual(cfg: dict) -> tuple[int, float | None]:
+    rows = manual(cfg)
+    p = os.path.join(cfg["root"], "web", "manual_sizing.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p + ".tmp", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=MANUAL_COLS); w.writeheader()
+        for x in rows: w.writerow(x)
+    os.replace(p + ".tmp", p)
+    d = [x["diff_R"] for x in rows if x["diff_R"] != ""]
+    return len(d), (sum(d) / len(d) if d else None)
