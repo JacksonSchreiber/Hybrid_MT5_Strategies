@@ -74,6 +74,16 @@ def parse_iso(s: str | None) -> datetime | None:
     if not s: return None
     try: return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError: return None
+def reoffer_line(sig: dict, cfg: dict) -> str:
+    """coach item 26: the card's extra line on a re-offered spread reject ('' for an ordinary signal)."""
+    ro = sig.get("reoffer") or {}
+    if not ro: return ""
+    t = _srv_to_utc(ro.get("signal_time"), cfg)                       # EA times are the broker clock labelled Z
+    return (f"Re-offered: signal {t.strftime('%H:%M UTC') if t else '?'}, spread then {float(ro.get('spread_r_at_signal') or 0):.2f}R, "
+            f"now {float(ro.get('spread_r_at_offer') or 0):.2f}R, price has moved {float(ro.get('drift_r') or 0):+.2f}R since "
+            f"(held {int(ro.get('held_minutes') or 0)} min; original entry {ro.get('original_entry')}; entry now = market, stop and targets original, "
+            f"lots re-sized). PROTOCOL: DISCRETION.")
+
 def clean_overlay(ov: dict | None, ref: float | None) -> dict:
     """2026-10-01: drop overlay geometry that is not a plausible price/time. A restored parked signal re-published random
     memory in zone2 / leg / swings (GBPJPY #1: zone2.hi 2.9e139, swing prices 1e43-1e276, year -708848736) and both charts

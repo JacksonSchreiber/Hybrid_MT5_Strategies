@@ -140,6 +140,7 @@ input bool   InpPyramid          = false;  // TESTER study (coach item 20): add 
 input double InpPyramidR         = 1.5;
 input double InpPyramidFrac      = 0.5;
 input double InpShortRaiseR      = 0.0;    // TESTER study (coach item 25): SELL - every leg's stop to +R at the +InpPyramidR touch (0 = off)
+input bool   InpSelfTestReoffer  = false;  // SELF-TEST only (coach item 26): every fresh signal is "spread-refused" (held), then re-offered next poll
 input bool   InpSelfTestStaged   = false;
 input int    InpSelfTestStagedN  = 6;      // TESTER ONLY: the add bar for the staged self-test (1 = add at the first bar close, so the path is exercised)  // TESTER ONLY: run the live self-test with staged entry on (coach item 18 check)
 input bool   InpLiveSelfTest     = false;  // LIVE self-test (TESTER ONLY): in-EA scripted task driver + assertions
@@ -356,10 +357,15 @@ struct JournalRow
    double   sr_from;            // THIS ticket's stop before the move (the stop-at-entry counterfactual's level)
    double   sr_vol;             // THIS ticket's volume when the stop was moved (the counterfactual's size)
    int      sr_tries;           // failed modify attempts (5 -> refused)
+   //--- coach item 26: re-offered spread rejects (journal columns reoffer, held_minutes, spread_r_at_signal, spread_r_at_offer, drift_r)
+   int      ro;
+   int      ro_held_min;
+   double   ro_spread0, ro_spread1, ro_drift;
   };
 void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0; r.st_anchor_entry=0.0; r.st_anchor_risk=0.0; r.st_fill_time=0; r.st_pyr=0;
                               r.inv_state=0; r.inv_parent_sid=0; r.inv_parent_posid=0; r.inv_parent_strategy=""; r.inv_bars_to_stop=0; r.inv_slip_r=0.0;
-                              r.sr_state=0; r.sr_time=0; r.sr_px=0.0; r.sr_stop=0.0; r.sr_from=0.0; r.sr_vol=0.0; r.sr_tries=0; }
+                              r.sr_state=0; r.sr_time=0; r.sr_px=0.0; r.sr_stop=0.0; r.sr_from=0.0; r.sr_vol=0.0; r.sr_tries=0;
+                              r.ro=0; r.ro_held_min=0; r.ro_spread0=0.0; r.ro_spread1=0.0; r.ro_drift=0.0; }
 JournalRow g_rows[];
 
 //--- mid-trade management panel state
@@ -505,6 +511,13 @@ struct LivePark
    int      implicit_streak;    // consecutive bar closes with no task (code 8 at max_age)
    bool     explicit_this_bar;  // an explicit delay task arrived this bar (resets the streak)
    double   lots;
+   //--- coach item 26: a spread-rejected signal re-offered once the spread normalised (0 = an ordinary signal)
+   int      ro;                 // 1 = this is a re-offer
+   int      ro_held_min;        // minutes held before the re-offer
+   double   ro_spread0;         // spread in R when the gate refused it
+   double   ro_spread1;         // spread in R at the re-offer (on the new entry-to-stop distance)
+   double   ro_drift;           // price move since the signal, in the original 1R, signed with the trade (+ = moved in favour)
+   datetime ro_sig_time;        // the original decision bar
   };
 LivePark g_park;
 //--- PARKING SLOTS (trader ruling 2026-09-16): several signals may be parked per symbol; detectors keep running while
@@ -538,6 +551,15 @@ bool     g_cfg_pyr_inverse=true;  // live.json pyramid_on_inverse: the +1.5R pyr
 double   g_cfg_pyr_r=1.5;         // live.json pyramid_trigger_r
 double   g_cfg_pyr_f=0.5;         // live.json pyramid_frac: share of the ORIGINAL full size added
 double   g_cfg_short_raise_r=0.0; // live.json short_raise_at_pyramid_r: coach item 25 - SELL stop to +R at +1.5R (0 = off)
+bool     g_cfg_reoffer=false;     // live.json reoffer_spread_rejects: coach item 26 - hold a spread-refused signal, re-offer it once
+//--- coach item 26: held spread-rejected candidates (one re-offer each), persisted as state\<SYM>\held_<sid>.json
+#define MAX_HELD 3
+struct HeldSlot { bool active; int sid; SignalCandidate cand; datetime sig_bar; datetime held_at; double spread0;
+                  string regime; string with_trend; string cls; double to_entry; double to_sl; double to_tp1; double to_tp2; };
+HeldSlot g_held[MAX_HELD];
+bool     g_reoffer_now=false;     // HandleSignal is publishing a re-offer (keeps the held id, DISCRETION, frozen true-orig)
+int      g_ro_sid=0, g_ro_held_min=0; double g_ro_spread0=0.0, g_ro_spread1=0.0, g_ro_drift=0.0; datetime g_ro_sig_time=0;
+string   g_ro_regime="", g_ro_with_trend=""; double g_ro_to_entry=0.0, g_ro_to_sl=0.0, g_ro_to_tp1=0.0, g_ro_to_tp2=0.0;
 double LiveBankFrac(string strat){ return strat=="TrendCont" ? g_cfg_tc_bank : (strat=="DeepFib" ? g_cfg_df_bank : 0.0); }
 int  ParkCount(){ int n=0; for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active) n++; return n; }
 int  ParkIndexBySid(int sid){ for(int i=0;i<MAX_PARKS;i++) if(g_slots[i].active && g_slots[i].park.sid==sid) return i; return -1; }
@@ -855,6 +877,7 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_pyr_inverse=(StringToInteger(JGet(k,v,"pyramid_on_inverse","1"))!=0);
       g_cfg_pyr_r=StringToDouble(JGet(k,v,"pyramid_trigger_r","1.5")); if(g_cfg_pyr_r<1.05 || g_cfg_pyr_r>5.0) g_cfg_pyr_r=1.5;
       g_cfg_pyr_f=StringToDouble(JGet(k,v,"pyramid_frac","0.5"));     if(g_cfg_pyr_f<0.05 || g_cfg_pyr_f>1.0) g_cfg_pyr_f=0.5;
+      g_cfg_reoffer=(StringToInteger(JGet(k,v,"reoffer_spread_rejects","0"))!=0);
       g_cfg_short_raise_r=StringToDouble(JGet(k,v,"short_raise_at_pyramid_r","0"));
       if(g_cfg_short_raise_r<0.0 || g_cfg_short_raise_r>=g_cfg_pyr_r) g_cfg_short_raise_r=0.0;      // nonsense -> off
       if(g_cfg_election_days<0) g_cfg_election_days=0;
@@ -862,6 +885,7 @@ void LiveLoadConfig(bool bootstrap=true)
      }
    if(InpLiveSelfTest && InpSelfTestStaged && (bool)MQLInfoInteger(MQL_TESTER)) { g_cfg_staged=true; g_cfg_st_n=MathMax(1,InpSelfTestStagedN); }   // coach item 18 self-test
    if(InpLiveSelfTest && InpPyramid && (bool)MQLInfoInteger(MQL_TESTER)) g_cfg_pyr=true;                 // coach item 20 self-test
+   if(InpLiveSelfTest && InpSelfTestReoffer && (bool)MQLInfoInteger(MQL_TESTER)) g_cfg_reoffer=true;     // coach item 26 self-test
    LiveLoadRiskMult();
   }
 
@@ -1030,6 +1054,7 @@ void OnTimer()
       LiveFtmoDayReset();      // no file I/O unless the FTMO day key changed
       LiveProcessTasks();
       StagedAddTick();         // coach item 18: add the second tranche at the close of H4 bar N (live, staged rows only)
+      ReofferTick();           // coach item 26: held spread rejects - re-offer once the spread normalises, or close the window
       if(g_cfg_inverse || InverseArmedCount()>0) { InverseArmTick(); InverseFireTick(); }   // coach item 21 (also every tick)
       if(LiveWeekendFlatOn() && LiveWeekendWindow(TimeCurrent())) LiveWeekendFlatten();   // §10.1 live: retries a refused close
      }
@@ -1698,6 +1723,8 @@ void JournalReject(int id,SignalCandidate &cand,string why)
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=(InpLiveMode && g_ladder_pct>0.0 ? g_ladder_pct : InpRiskPct); g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=0; g_rows[n].entry_mode="rejected";
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
    g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time);
+   if(g_reoffer_now && id==g_ro_sid)
+     { g_rows[n].ro=1; g_rows[n].ro_held_min=g_ro_held_min; g_rows[n].ro_spread0=g_ro_spread0; g_rows[n].ro_spread1=g_ro_spread1; g_rows[n].ro_drift=g_ro_drift; }
    g_rows[n].reject_why=why;
    Print("Signal #",id," ",cand.strategy," ",DirStr(cand.direction)," REJECTED: ",why);
    WriteJournal(g_journal_part);
@@ -1909,6 +1936,14 @@ void WriteSignalJson(string status,string auto_reason)
       j.KStr("rule","fills only if the parent is stopped before H4 bar 19 (EA-held stop-entry at the parent's stop)");
       j.EndObj();
      }
+   if(g_park.ro==1)
+     {   // coach item 26: the card's extra line
+      j.Key("reoffer"); j.BeginObj();
+      j.KTime("signal_time",g_park.ro_sig_time); j.KInt("held_minutes",g_park.ro_held_min);
+      j.KNum("spread_r_at_signal",g_park.ro_spread0,3); j.KNum("spread_r_at_offer",g_park.ro_spread1,3); j.KNum("drift_r",g_park.ro_drift,3);
+      j.KNum("original_entry",g_to_entry,_Digits);
+      j.EndObj();
+     }
    j.KStr("direction",DirStr(c.direction)); j.KInt("direction_sign",c.direction);
    j.Key("levels"); j.BeginObj();
      j.KNum("entry",c.entry,_Digits); j.KNum("sl",c.sl,_Digits); j.KNum("tp",c.tp,_Digits);
@@ -2002,6 +2037,142 @@ void ParkedOverlayLoad(SignalCandidate &c,string &pk[],string &pv[])
    for(int a=0;a<c.n_swing_hi;a++){ c.swing_hi_t[a]=IsoToTime(JGet(pk,pv,StringFormat("cand.swh_t%d",a),"")); c.swing_hi_p[a]=StringToDouble(JGet(pk,pv,StringFormat("cand.swh_p%d",a),"0")); }
    for(int a=0;a<c.n_swing_lo;a++){ c.swing_lo_t[a]=IsoToTime(JGet(pk,pv,StringFormat("cand.swl_t%d",a),"")); c.swing_lo_p[a]=StringToDouble(JGet(pk,pv,StringFormat("cand.swl_p%d",a),"0")); }
   }
+//+------------------------------------------------------------------+
+//| RE-OFFER SPREAD-REJECTED SIGNALS (coach item 26, 2026-10-01)      |
+//+------------------------------------------------------------------+
+//--- The spread gate HOLDS the candidate instead of discarding it (the detectors disarm at emit, so a refused setup never
+//--- returned). ReofferTick, at the poll cadence: cancel if price has traded through the stop or reached +1R (TP1 if
+//--- nearer) since the signal; final reject "spread never normalised (held N min)" once max_age_bars H4 bars have passed;
+//--- otherwise, the first time the spread is <= max_spread_r of the NEW entry-to-stop distance, publish it ONCE through
+//--- HandleSignal as a fresh signal (same id; every gate re-run; entry = market, stop/targets original, lots re-sized;
+//--- DISCRETION; the card carries the re-offer line). Held candidates persist as state\<SYM>\held_<sid>.json.
+string HeldPath(int sid){ return LivePath(StringFormat("state\\%s\\held_%d.json",_Symbol,sid)); }
+void HeldSave(int h)
+  {
+   SignalCandidate c=g_held[h].cand;
+   CJsonW j; j.BeginObj();
+   j.KInt("schema_version",LIVE_SCHEMA_VERSION); j.KInt("sid",g_held[h].sid); j.KTime("sig_bar",g_held[h].sig_bar); j.KTime("held_at",g_held[h].held_at);
+   j.KNum("spread0",g_held[h].spread0,4); j.KStr("regime",g_held[h].regime); j.KStr("with_trend",g_held[h].with_trend); j.KStr("cls",g_held[h].cls);
+   j.KNum("to_entry",g_held[h].to_entry,_Digits); j.KNum("to_sl",g_held[h].to_sl,_Digits); j.KNum("to_tp1",g_held[h].to_tp1,_Digits); j.KNum("to_tp2",g_held[h].to_tp2,_Digits);
+   j.Key("cand"); j.BeginObj();
+     j.KStr("strategy",c.strategy); j.KInt("direction",c.direction); j.KNum("entry",c.entry,_Digits); j.KNum("sl",c.sl,_Digits);
+     j.KNum("tp",c.tp,_Digits); j.KNum("tp1",c.tp1,_Digits); j.KNum("tp2",c.tp2,_Digits); j.KNum("rr",c.rr,3);
+     j.KNum("partial_fraction",c.partial_fraction,3); j.KTime("zone_from",c.zone_from); j.KTime("zone_to",c.zone_to);
+     j.KNum("zone_hi",c.zone_hi,_Digits); j.KNum("zone_lo",c.zone_lo,_Digits); j.KBool("stop_entry",c.stop_entry);
+     j.KBool("d1_context",c.d1_context); j.KStr("comment",c.comment);
+     j.KNum("zone2_hi",c.zone2_hi,_Digits); j.KNum("zone2_lo",c.zone2_lo,_Digits);
+     j.KTime("leg_t0",c.leg_t0); j.KNum("leg_p0",c.leg_p0,_Digits); j.KTime("leg_t1",c.leg_t1); j.KNum("leg_p1",c.leg_p1,_Digits);
+     int na=MathMin(MathMax(c.aux_count,0),8); j.KInt("aux_count",na);
+     for(int a=0;a<na;a++){ j.KNum(StringFormat("aux_p%d",a),c.aux_price[a],_Digits); j.KStr(StringFormat("aux_l%d",a),c.aux_label[a]); }
+     int nh=MathMin(MathMax(c.n_swing_hi,0),10), nl=MathMin(MathMax(c.n_swing_lo,0),10); j.KInt("n_swing_hi",nh); j.KInt("n_swing_lo",nl);
+     for(int a=0;a<nh;a++){ j.KTime(StringFormat("swh_t%d",a),c.swing_hi_t[a]); j.KNum(StringFormat("swh_p%d",a),c.swing_hi_p[a],_Digits); }
+     for(int a=0;a<nl;a++){ j.KTime(StringFormat("swl_t%d",a),c.swing_lo_t[a]); j.KNum(StringFormat("swl_p%d",a),c.swing_lo_p[a],_Digits); }
+   j.EndObj();
+   j.EndObj();
+   AtomicWriteText(HeldPath(g_held[h].sid),j.Text());
+  }
+bool HeldStore(int sid,SignalCandidate &cand,double spr)
+  {
+   int h=-1; for(int i=0;i<MAX_HELD;i++) if(!g_held[i].active){ h=i; break; }
+   if(h<0) return false;                                       // all hold slots busy: the old final reject applies
+   g_held[h].active=true; g_held[h].sid=sid; g_held[h].cand=cand; g_held[h].sig_bar=iTime(_Symbol,g_tf,0); g_held[h].held_at=TimeCurrent();
+   g_held[h].spread0=spr; g_held[h].regime=g_sig_regime; g_held[h].with_trend=g_sig_with_trend; g_held[h].cls=g_sig_class;
+   g_held[h].to_entry=g_to_entry; g_held[h].to_sl=g_to_sl; g_held[h].to_tp1=g_to_tp1; g_held[h].to_tp2=g_to_tp2;
+   HeldSave(h);
+   return true;
+  }
+void HeldFree(int h){ if(!g_held[h].active) return; FileDelete(HeldPath(g_held[h].sid),FILE_COMMON); g_held[h].active=false; }
+void HeldRestore()
+  {
+   string fn; long hf=FileFindFirst(LivePath("state\\"+_Symbol+"\\held_*.json"),fn,FILE_COMMON);
+   string files[]; int nf=0;
+   if(hf!=INVALID_HANDLE){ do { if(StringFind(fn,".tmp")<0){ ArrayResize(files,nf+1); files[nf++]=fn; } } while(FileFindNext(hf,fn)); FileFindClose(hf); }
+   for(int f=0;f<nf;f++)
+     {
+      string pk[],pv[],pe; string t=ReadTextFile(LivePath("state\\"+_Symbol+"\\"+files[f]));
+      if(t=="" || !JsonFlatParse(t,pk,pv,pe)) continue;
+      int sid=(int)StringToInteger(JGet(pk,pv,"sid","0"));
+      bool done=(ParkIndexBySid(sid)>=0);                      // already re-offered (published before the restart): never twice
+      for(int r=0;r<ArraySize(g_rows) && !done;r++) if(g_rows[r].id==sid) done=true;   // or already journaled
+      int h=-1; for(int i=0;i<MAX_HELD;i++) if(!g_held[i].active){ h=i; break; }
+      if(done || h<0 || sid<=0){ FileDelete(LivePath("state\\"+_Symbol+"\\"+files[f]),FILE_COMMON); continue; }
+      SignalCandidate c; ResetCandidate(c); c.valid=true;
+      c.strategy=JGet(pk,pv,"cand.strategy",""); c.direction=(int)StringToInteger(JGet(pk,pv,"cand.direction","0"));
+      c.entry=StringToDouble(JGet(pk,pv,"cand.entry")); c.sl=StringToDouble(JGet(pk,pv,"cand.sl")); c.tp=StringToDouble(JGet(pk,pv,"cand.tp"));
+      c.tp1=StringToDouble(JGet(pk,pv,"cand.tp1")); c.tp2=StringToDouble(JGet(pk,pv,"cand.tp2")); c.rr=StringToDouble(JGet(pk,pv,"cand.rr"));
+      c.partial_fraction=StringToDouble(JGet(pk,pv,"cand.partial_fraction")); c.zone_from=IsoToTime(JGet(pk,pv,"cand.zone_from","")); c.zone_to=IsoToTime(JGet(pk,pv,"cand.zone_to",""));
+      c.zone_hi=StringToDouble(JGet(pk,pv,"cand.zone_hi")); c.zone_lo=StringToDouble(JGet(pk,pv,"cand.zone_lo"));
+      c.stop_entry=(JGet(pk,pv,"cand.stop_entry")=="true"); c.d1_context=(JGet(pk,pv,"cand.d1_context")=="true"); c.comment=JGet(pk,pv,"cand.comment","");
+      ParkedOverlayLoad(c,pk,pv);
+      g_held[h].active=true; g_held[h].sid=sid; g_held[h].cand=c; g_held[h].sig_bar=IsoToTime(JGet(pk,pv,"sig_bar","")); g_held[h].held_at=IsoToTime(JGet(pk,pv,"held_at",""));
+      g_held[h].spread0=StringToDouble(JGet(pk,pv,"spread0","0")); g_held[h].regime=JGet(pk,pv,"regime",""); g_held[h].with_trend=JGet(pk,pv,"with_trend",""); g_held[h].cls=JGet(pk,pv,"cls","");
+      g_held[h].to_entry=StringToDouble(JGet(pk,pv,"to_entry")); g_held[h].to_sl=StringToDouble(JGet(pk,pv,"to_sl"));
+      g_held[h].to_tp1=StringToDouble(JGet(pk,pv,"to_tp1")); g_held[h].to_tp2=StringToDouble(JGet(pk,pv,"to_tp2"));
+      AuditLine("restore","","",StringFormat("sig:%d",sid),"held","","");
+     }
+  }
+//--- the window closed or the setup broke: ONE journal row, as the spread reject it would have been, with the re-offer reason
+void HeldFinal(int h,string why)
+  {
+   int sid=g_held[h].sid; SignalCandidate c=g_held[h].cand;
+   string sr=g_sig_regime, sw=g_sig_with_trend, sc=g_sig_class; double te=g_to_entry, ts=g_to_sl, t1=g_to_tp1, t2=g_to_tp2;
+   g_sig_regime=g_held[h].regime; g_sig_with_trend=g_held[h].with_trend; g_sig_class=g_held[h].cls;
+   g_to_entry=g_held[h].to_entry; g_to_sl=g_held[h].to_sl; g_to_tp1=g_held[h].to_tp1; g_to_tp2=g_held[h].to_tp2;
+   JournalReject(sid,c,StringFormat("spread %.3fR of the stop > max %.3fR - %s",g_held[h].spread0,g_cfg_max_spread_r,why));
+   int n=ArraySize(g_rows)-1;
+   if(n>=0 && g_rows[n].id==sid){ g_rows[n].ro=1; g_rows[n].ro_held_min=(int)((TimeCurrent()-g_held[h].held_at)/60); g_rows[n].ro_spread0=g_held[h].spread0; }
+   g_sig_regime=sr; g_sig_with_trend=sw; g_sig_class=sc; g_to_entry=te; g_to_sl=ts; g_to_tp1=t1; g_to_tp2=t2;
+   AuditLine("reoffer","","",StringFormat("sig:%d",sid),"rejected",why,"");
+   Print("Signal #",sid," re-offer closed: ",why);
+   HeldFree(h);
+   WriteJournal(g_journal_part);
+  }
+void ReofferTick()
+  {
+   for(int h=0;h<MAX_HELD;h++)
+     {
+      if(!g_held[h].active) continue;
+      SignalCandidate c=g_held[h].cand; int dir=c.direction; int sid=g_held[h].sid;
+      double R=MathAbs(c.entry-c.sl); if(R<=0.0 || dir==0){ HeldFinal(h,"degenerate stop"); continue; }
+      double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK); if(bid<=0.0 || ask<=0.0) continue;
+      double spx=ask-bid;
+      int held_min=(int)((TimeCurrent()-g_held[h].held_at)/60);
+      //--- rule 3: since the signal, has price traded through the stop or reached +1R (TP1 if nearer)? (M1 bid bars + the
+      //--- current spread for the short side's ask)
+      double hi=bid, lo=bid; MqlRates rr[];
+      int nr=CopyRates(_Symbol,PERIOD_M1,g_held[h].held_at,TimeCurrent(),rr);
+      for(int k=0;k<nr;k++){ hi=MathMax(hi,rr[k].high); lo=MathMin(lo,rr[k].low); }
+      double trig=(dir>0 ? c.entry+R : c.entry-R);
+      if(c.tp1>0.0 && (dir>0 ? c.tp1<trig : c.tp1>trig)) trig=c.tp1;
+      bool through=(dir>0 ? lo<=c.sl : hi+spx>=c.sl);
+      bool reached=(dir>0 ? hi>=trig : lo+spx<=trig);
+      if(through){ HeldFinal(h,StringFormat("re-offer cancelled: price traded through the stop (held %d min)",held_min)); continue; }
+      if(reached){ HeldFinal(h,StringFormat("re-offer cancelled: price reached +1R/TP1 before the spread normalised (held %d min)",held_min)); continue; }
+      int bars=iBarShift(_Symbol,g_tf,g_held[h].sig_bar,false);
+      if(bars>=g_cfg_max_age_bars){ HeldFinal(h,StringFormat("spread never normalised (held %d min)",held_min)); continue; }
+      double mkt=(dir>0 ? ask : bid), dist=MathAbs(mkt-c.sl);
+      if(dist<=0.0) continue;
+      double sprR=spx/dist;
+      if(g_cfg_max_spread_r>0.0 && sprR>g_cfg_max_spread_r) continue;           // still too wide: keep holding
+      if(HasActiveOrderOrPosition() || ParkCount()>=g_cfg_max_parks) continue;  // the one-setup lock / slots, as for a fresh signal
+      //--- publish ONCE as a fresh signal through every gate
+      g_ro_sid=sid; g_ro_held_min=held_min; g_ro_spread0=g_held[h].spread0; g_ro_spread1=sprR; g_ro_drift=(mkt-c.entry)*dir/R;
+      g_ro_sig_time=g_held[h].sig_bar; g_ro_regime=g_held[h].regime; g_ro_with_trend=g_held[h].with_trend;
+      g_ro_to_entry=g_held[h].to_entry; g_ro_to_sl=g_held[h].to_sl; g_ro_to_tp1=g_held[h].to_tp1; g_ro_to_tp2=g_held[h].to_tp2;
+      double tgt=(c.tp2>0.0 ? c.tp2 : c.tp);
+      c.entry=NormPrice(mkt); c.rr=(tgt>0.0 ? MathAbs(tgt-c.entry)/dist : c.rr);
+      AuditLine("reoffer","","",StringFormat("sig:%d",sid),"published","",
+                StringFormat("held %d min; spread %.3fR -> %.3fR; drift %+.3fR",held_min,g_held[h].spread0,sprR,g_ro_drift));
+      Print("Signal #",sid," RE-OFFERED after ",held_min," min: spread ",DoubleToString(g_held[h].spread0,3),"R -> ",DoubleToString(sprR,3),"R");
+      g_reoffer_now=true;
+      HandleSignal(c);
+      g_reoffer_now=false;
+      if(InpLiveMode && g_live_parked) ParkStoreCurrent();
+      bool row=false; for(int r=0;r<ArraySize(g_rows);r++) if(g_rows[r].id==sid) row=true;
+      if(!row && ParkIndexBySid(sid)<0) AuditLine("reoffer","","",StringFormat("sig:%d",sid),"dropped","not published (no row, no park)","");
+      HeldFree(h);
+     }
+  }
 //--- parked-signal state file (restored by Slice 4)
 void LiveSaveParked()
   {
@@ -2014,6 +2185,8 @@ void LiveSaveParked()
    j.KNum("orig_tp1",g_park.orig_tp1,_Digits); j.KNum("orig_tp2",g_park.orig_tp2,_Digits); j.KStr("caption",g_park.caption);
    j.KStr("regime",g_sig_regime); j.KStr("with_trend",g_sig_with_trend); j.KStr("decision_class",g_sig_class);
    j.KNum("to_entry",g_to_entry,_Digits); j.KNum("to_sl",g_to_sl,_Digits); j.KNum("to_tp1",g_to_tp1,_Digits); j.KNum("to_tp2",g_to_tp2,_Digits);
+   j.KInt("ro",g_park.ro); j.KInt("ro_held_min",g_park.ro_held_min); j.KNum("ro_spread0",g_park.ro_spread0,4); j.KNum("ro_spread1",g_park.ro_spread1,4);
+   j.KNum("ro_drift",g_park.ro_drift,4); j.KTime("ro_sig_time",g_park.ro_sig_time);
    j.Key("cand"); j.BeginObj();
      j.KStr("strategy",c.strategy); j.KInt("direction",c.direction); j.KNum("entry",c.entry,_Digits); j.KNum("sl",c.sl,_Digits);
      j.KNum("tp",c.tp,_Digits); j.KNum("tp1",c.tp1,_Digits); j.KNum("tp2",c.tp2,_Digits); j.KNum("rr",c.rr,3);
@@ -2055,6 +2228,8 @@ void LivePresent(int id,SignalCandidate &cand,double lots,bool is_replay,
       g_park.sid=id; g_park.orig_entry=orig_entry; g_park.orig_sl=orig_sl; g_park.orig_tp=orig_tp;
       g_park.orig_tp1=orig_tp1; g_park.orig_tp2=orig_tp2; g_park.caption=caption; g_park.lots=lots;
       g_park.published_bar=bar0; g_park.published_at=TimeCurrent(); g_park.implicit_streak=0; g_park.explicit_this_bar=false;
+      g_park.ro=(g_reoffer_now?1:0); g_park.ro_held_min=(g_reoffer_now?g_ro_held_min:0); g_park.ro_spread0=(g_reoffer_now?g_ro_spread0:0.0);
+      g_park.ro_spread1=(g_reoffer_now?g_ro_spread1:0.0); g_park.ro_drift=(g_reoffer_now?g_ro_drift:0.0); g_park.ro_sig_time=(g_reoffer_now?g_ro_sig_time:0);
       g_delayed=cand; g_delayed_id=id;
       //--- G1 election / NO-HOLD hard gate (entry refusal only; fail closed on no calendar)
       string evn=""; datetime evt=0;
@@ -2151,6 +2326,7 @@ void LiveSaveRowState(int i)
    j.KStr("inv_parent_strategy",r.inv_parent_strategy); j.KInt("inv_bars_to_stop",r.inv_bars_to_stop); j.KNum("inv_slip_r",r.inv_slip_r,4);
    j.KInt("sr_state",r.sr_state); j.KInt("sr_time",(long)r.sr_time); j.KNum("sr_px",r.sr_px,_Digits); j.KNum("sr_stop",r.sr_stop,_Digits);
    j.KNum("sr_from",r.sr_from,_Digits); j.KNum("sr_vol",r.sr_vol,2); j.KInt("sr_tries",r.sr_tries);
+   j.KInt("ro",r.ro); j.KInt("ro_held_min",r.ro_held_min); j.KNum("ro_spread0",r.ro_spread0,4); j.KNum("ro_spread1",r.ro_spread1,4); j.KNum("ro_drift",r.ro_drift,4);
    j.Key("actions"); j.BeginObj();
    int na=0;
    for(int a=0;a<ArraySize(g_actions);a++)
@@ -2271,6 +2447,8 @@ bool LiveLoadRowState(string rel)
    r.sr_state=(int)StringToInteger(JGet(k,v,"sr_state","0")); r.sr_time=(datetime)StringToInteger(JGet(k,v,"sr_time","0"));
    r.sr_px=StringToDouble(JGet(k,v,"sr_px","0")); r.sr_stop=StringToDouble(JGet(k,v,"sr_stop","0")); r.sr_from=StringToDouble(JGet(k,v,"sr_from","0"));
    r.sr_vol=StringToDouble(JGet(k,v,"sr_vol","0")); r.sr_tries=(int)StringToInteger(JGet(k,v,"sr_tries","0"));
+   r.ro=(int)StringToInteger(JGet(k,v,"ro","0")); r.ro_held_min=(int)StringToInteger(JGet(k,v,"ro_held_min","0"));
+   r.ro_spread0=StringToDouble(JGet(k,v,"ro_spread0","0")); r.ro_spread1=StringToDouble(JGet(k,v,"ro_spread1","0")); r.ro_drift=StringToDouble(JGet(k,v,"ro_drift","0"));
    g_rows[n]=r;
    int na=(int)StringToInteger(JGet(k,v,"actions.n","0"));
    for(int a=0;a<na;a++)
@@ -2433,11 +2611,15 @@ void LiveRestoreState()
       g_park.orig_tp1=StringToDouble(JGet(pk,pv,"orig_tp1")); g_park.orig_tp2=StringToDouble(JGet(pk,pv,"orig_tp2")); g_park.caption=JGet(pk,pv,"caption","");
       g_sig_regime=JGet(pk,pv,"regime",""); g_sig_with_trend=JGet(pk,pv,"with_trend",""); g_sig_class=JGet(pk,pv,"decision_class","");
       g_to_entry=StringToDouble(JGet(pk,pv,"to_entry")); g_to_sl=StringToDouble(JGet(pk,pv,"to_sl")); g_to_tp1=StringToDouble(JGet(pk,pv,"to_tp1")); g_to_tp2=StringToDouble(JGet(pk,pv,"to_tp2"));
+      g_park.ro=(int)StringToInteger(JGet(pk,pv,"ro","0")); g_park.ro_held_min=(int)StringToInteger(JGet(pk,pv,"ro_held_min","0"));
+      g_park.ro_spread0=StringToDouble(JGet(pk,pv,"ro_spread0","0")); g_park.ro_spread1=StringToDouble(JGet(pk,pv,"ro_spread1","0"));
+      g_park.ro_drift=StringToDouble(JGet(pk,pv,"ro_drift","0")); g_park.ro_sig_time=IsoToTime(JGet(pk,pv,"ro_sig_time",""));
       g_delay_pending=true; g_live_parked=true; parked=true;
       ParkStoreCurrent();
       if(pfiles[pf]=="parked.json"){ LiveSaveParked(); FileDelete(LivePath("state\\"+_Symbol+"\\parked.json"),FILE_COMMON); }   // migrate the legacy file
      }
    LiveRecomputeParked();
+   HeldRestore();             // coach item 26: held spread rejects (a held file whose signal is already parked is dropped)
    LiveReconcile();
    AdoptOrphans();
    LiveSeqFloor();
@@ -3131,6 +3313,7 @@ void HandleSignal(SignalCandidate &cand)
    int id;
    bool is_replay=g_delay_replaying;                                   // this call is a delay re-present
    if(g_delay_replaying){ id=g_delayed_id; g_delay_replaying=false; }  // re-present: keep id
+   else if(g_reoffer_now){ id=g_ro_sid; }                               // coach item 26: a re-offer keeps its signal's id (one row per signal)
    else                 { g_sig_seq++; id=g_sig_seq; if(InpLiveMode) LiveSaveSeq(); }   // persist NOW: a parked signal has no journal row yet (2026-09-21 id-collision fix)
 
    if(!is_replay) g_delay_count=0;   // fresh signal: reset the per-signal delay clock
@@ -3138,6 +3321,11 @@ void HandleSignal(SignalCandidate &cand)
    if(!is_replay) g_sig_class=ClassifyProtocol(cand.strategy,g_sig_regime);       // protocol class, FROZEN with the tag (same on every delay re-present)
    if(!is_replay){ g_to_entry=NormPrice(cand.entry); g_to_sl=NormPrice(cand.sl);
                    g_to_tp1=NormPrice(cand.tp1); g_to_tp2=NormPrice(cand.tp2); }  // (1a) TRUE-ORIG freeze
+   if(g_reoffer_now)
+     {   // coach item 26: regime / true-orig as frozen at the ORIGINAL signal; protocol DISCRETION for every detector
+      g_sig_regime=g_ro_regime; g_sig_with_trend=g_ro_with_trend; g_sig_class="DISCRETION";
+      g_to_entry=g_ro_to_entry; g_to_sl=g_ro_to_sl; g_to_tp1=g_ro_to_tp1; g_to_tp2=g_ro_to_tp2;
+     }
    //--- (b) DELAY MODE (coach 2026-09-08): SLIDE re-anchors the whole plan to market (below);
    //--- FREEZE (default) keeps the detector's original levels and enters via a PENDING order at
    //--- the original entry, so the SL stays anchored to the structure it was drawn from.
@@ -3182,6 +3370,14 @@ void HandleSignal(SignalCandidate &cand)
       //--- SPREAD GATE (trader 2026-09-23): the entry cost is paid the instant the trade opens, so a signal whose current
       //--- spread costs more than max_spread_r of the stop is never shown - the trader cannot judge that cost away.
       double spr=SpreadR(cand.entry,cand.sl);
+      bool st_ro=(InpLiveSelfTest && InpSelfTestReoffer && (bool)MQLInfoInteger(MQL_TESTER) && !g_reoffer_now && cand.strategy!="Inverse");
+      if((st_ro || (g_cfg_max_spread_r>0.0 && spr>g_cfg_max_spread_r)) && InpLiveMode && (g_cfg_reoffer || st_ro) && !g_reoffer_now && HeldStore(id,cand,spr))
+        {   // coach item 26: HOLD it instead of discarding - re-offered once the spread is back under the gate (ReofferTick)
+         AuditLine("spread_gate","","",StringFormat("sig:%d",id),"held","spread_too_wide",
+                   StringFormat("%s spread %.3fR > max %.3fR - held for re-offer (up to %d H4 bars)",cand.strategy,spr,g_cfg_max_spread_r,g_cfg_max_age_bars));
+         Print("Signal #",id," ",cand.strategy," HELD for re-offer: spread ",DoubleToString(spr,3),"R > max ",DoubleToString(g_cfg_max_spread_r,3),"R");
+         return;
+        }
       if(g_cfg_max_spread_r>0.0 && spr>g_cfg_max_spread_r)
         {
          AuditLine("spread_gate","","",StringFormat("sig:%d",id),"rejected","spread_too_wide",
@@ -3397,6 +3593,8 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    //--- PHASE 3 LIVE columns (never written in the tester; see WriteJournal)
    g_rows[n].live=InpLiveMode; g_rows[n].account_id=g_account_login; g_rows[n].risk_pct_gate=(InpLiveMode && g_ladder_pct>0.0 ? g_ladder_pct : InpRiskPct);
    g_rows[n].risk_mult_applied=g_risk_mult; g_rows[n].auto_skip=(g_live_auto?1:0); g_rows[n].entry_mode=entry_mode;
+   if(InpLiveMode && g_park.sid==id && g_park.ro==1)
+     { g_rows[n].ro=1; g_rows[n].ro_held_min=g_park.ro_held_min; g_rows[n].ro_spread0=g_park.ro_spread0; g_rows[n].ro_spread1=g_park.ro_spread1; g_rows[n].ro_drift=g_park.ro_drift; }
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
    g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time); g_rows[n].reject_why="";
 
@@ -5821,6 +6019,13 @@ string JournalRowLine(JournalRow &r)
 //--- coach item 25: the shorts-only stop raise, six columns appended to the live journal (and to the tester journal when
 //--- InpShortRaiseR > 0). Blank unless the stop was moved; short_raise_from / _vol are THIS ticket's stop and volume at the move.
 #define SR_HEADER ",short_raise,short_raise_time,short_raise_px,short_raise_stop,short_raise_from,short_raise_vol"
+//--- coach item 26: five re-offer columns, live journal only (after the short-raise columns)
+#define RO_HEADER ",reoffer,held_minutes,spread_r_at_signal,spread_r_at_offer,drift_r"
+string RoCols(JournalRow &r)
+  {
+   if(r.ro!=1) return(",,,,,");
+   return(StringFormat(",1,%d,%.3f,%.3f,%.3f",r.ro_held_min,r.ro_spread0,r.ro_spread1,r.ro_drift));
+  }
 string SrCols(JournalRow &r)
   {
    if(r.sr_state!=1) return(r.sr_state==2 ? ",2,,,,," : ",,,,,,");
@@ -5843,14 +6048,14 @@ void WriteLiveJournals()
        if(!have){ ArrayResize(months,nm+1); months[nm++]=m; } }
    for(int q=0;q<nm;q++)
      {
-      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason,entry_mode,tranche,full_lots,fill_time,parent_signal_id,bars_to_stop,inv_slip_r"+SR_HEADER+"\n";
+      string body=JOURNAL_HEADER ",live,account_id,risk_pct_gate,risk_mult_applied,auto"+FloorHeader()+",reject_reason,entry_mode,tranche,full_lots,fill_time,parent_signal_id,bars_to_stop,inv_slip_r"+SR_HEADER+RO_HEADER+"\n";
       for(int i=0;i<ArraySize(g_rows);i++)
         {
          if(StampMonth(g_rows[i].time)!=months[q]) continue;
          body+=JournalRowLine(g_rows[i])+StringFormat(",%d,%I64d,%.4f,%.3f,%d",(g_rows[i].live?1:0),g_rows[i].account_id,g_rows[i].risk_pct_gate,g_rows[i].risk_mult_applied,g_rows[i].auto_skip)+FloorCols(g_rows[i])+","+CsvSafe(g_rows[i].reject_why)
               +StringFormat(",%s,%d,%s,%s",CsvSafe(g_rows[i].entry_mode),g_rows[i].st_tranche,(g_rows[i].st_full_lots>0.0?DoubleToString(g_rows[i].st_full_lots,2):""),
                             (g_rows[i].st_fill_time>0?TimeToString(g_rows[i].st_fill_time,TIME_DATE|TIME_SECONDS):""))
-              +(g_rows[i].strategy=="Inverse" ? StringFormat(",%d,%d,%.3f",g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r) : ",,,")+SrCols(g_rows[i])+"\n";
+              +(g_rows[i].strategy=="Inverse" ? StringFormat(",%d,%d,%.3f",g_rows[i].inv_parent_sid,g_rows[i].inv_bars_to_stop,g_rows[i].inv_slip_r) : ",,,")+SrCols(g_rows[i])+RoCols(g_rows[i])+"\n";
         }
       AtomicWriteText(LivePath(StringFormat("journal\\%s_%s.csv",_Symbol,months[q])),body);
      }

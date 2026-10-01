@@ -38,6 +38,7 @@ mkdir -p "$SETDIR"
   [[ -n "${STAGED:-}" ]] && echo "InpSelfTestStaged=true"   # coach item 18: exercise the staged entry
   [[ -n "${STAGED_N:-}" ]] && echo "InpSelfTestStagedN=${STAGED_N}"
   [[ -n "${PYR:-}" ]] && echo "InpPyramid=true"             # coach item 20: exercise the +1.5R pyramid
+  [[ -n "${REOFFER:-}" ]] && echo "InpSelfTestReoffer=true"   # coach item 26: every fresh signal held, then re-offered
   echo "InpTaskPollSec=$POLL"; echo "InpHeartbeatSec=$BEAT"; echo "InpLiveMaxAgeBars=$MAXAGE"
   echo "InpUseSMC=true"; echo "InpUseFib=true"; echo "InpUseEMA=false"; echo "InpUseEMArevQ=true"; echo "InpUseTrendCont=true"
   echo "InpUseShock=false"; echo "InpUseEmaRevInv=false"

@@ -43,7 +43,8 @@ class Monitor:
             if prev == stt: continue
             if prev is None and stt == "open":
                 dl = C.parse_iso(s.get("deadline"))
-                self.send(f"NEW SIGNAL #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class')}]\n"
+                self.send(f"{'RE-OFFERED' if s.get('reoffer') else 'NEW'} SIGNAL #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class')}]\n"
+                          + (C.reoffer_line(s, self.cfg) + "\n" if s.get("reoffer") else "") +
                           f"entry {lv.get('entry')} SL {lv.get('sl')} TP1 {lv.get('tp1')} ({rr.get('tp1')}R) · {(s.get('sizing') or {}).get('lots')} lots\n"
                           f"{(s.get('regime') or {}).get('pretty', '')} · deadline {C.fmt_dt(dl)} ({C.rel_time(dl)})\n{self.base}/signal/{key}")
             elif prev == "open" and stt in ("expired", "rejected", "auto_skipped"):
@@ -523,6 +524,22 @@ class Monitor:
                               f"the guard holds. web/short_raise.csv.")
         except Exception as e:
             self.log(f"short_raise_shadow error: {e!r}")
+        try:                                                             # coach item 26: re-offered takes vs on-time takes at n=20
+            from live import reoffer_shadow
+            ro = reoffer_shadow.write(self.cfg)
+            if ro["taken"] >= 20 and not self.st.get("reoffer_flag_20"):
+                self.st["reoffer_flag_20"] = True
+                f_ = lambda v: "n/a" if v is None else f"{v:+.3f}R"
+                if ro["taken_mean"] < -0.10:
+                    self.send(f"COACH GUARD TRIPPED - re-offered spread rejects: {ro['taken']} re-offered takes average {f_(ro['taken_mean'])} (< -0.10R) vs "
+                              f"on-time takes {f_(ro['ontime_mean'])} (n={ro['ontime']}). The rule is OFF: set live.json reoffer_spread_rejects to 0 "
+                              f"(provisioning/live.json + deploy --config) and tell the coach. Skipped re-offers' shadow: {f_(ro['skipped_mean'])} (n={ro['skipped']}).")
+                else:
+                    self.send(f"COACH GRADING POINT - re-offered spread rejects: {ro['taken']} re-offered takes average {f_(ro['taken_mean'])} vs on-time "
+                              f"takes {f_(ro['ontime_mean'])} (n={ro['ontime']}); skipped re-offers' shadow {f_(ro['skipped_mean'])} (n={ro['skipped']}). "
+                              f"The -0.10R guard holds. web/reoffer.csv.")
+        except Exception as e:
+            self.log(f"reoffer_shadow error: {e!r}")
         mn, m_diff = shadow_bank.write_manual(self.cfg)                  # coach item 22: graded at n=20 manual sizings
         if mn >= 20 and not self.st.get("manual_flag_20"):
             self.st["manual_flag_20"] = True

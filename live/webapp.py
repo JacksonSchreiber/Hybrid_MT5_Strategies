@@ -571,7 +571,7 @@ def dashboard(q: dict) -> str:
     out.append("<h2>Pending signals</h2>")
     if not opn: out.append('<div class="card k">none</div>')
     for s in opn:
-        out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{cls_pill(s.get("decision_class"))}<span class="k">#{s["signal_id"]}</span></div>'
+        out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{cls_pill(s.get("decision_class"))}{'<span class="pill warn">RE-OFFERED</span>' if s.get("reoffer") else ""}<span class="k">#{s["signal_id"]}</span></div>'
                    f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span>'
                    + (f'<span class="k">D1 {ext[s["signal_key"]]:+.2f} ATR (obs)</span>' if ext.get(s["signal_key"]) is not None else '<span class="k">D1 ext n/a</span>')
                    + '</div>'
@@ -662,6 +662,7 @@ def signal_page(key: str, q: dict) -> str:
                + (f'<span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span>' if is_open else "") + f'<span class="k">{E(s.get("sigtime_text", ""))} · {E(s.get("session", ""))}</span></div>'
                f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>')
     if s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
+    if s.get("reoffer"): out.append(f'<div class="flash"><span class="pill warn">RE-OFFERED</span> {E(C.reoffer_line(s, CFG))}</div>')   # coach item 26
     d = s.get("delay_count", 0)
     out.append(chart_block(s, lv))
     out.append(f'<details><summary class="k">static EA charts (what the advisor saw)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')

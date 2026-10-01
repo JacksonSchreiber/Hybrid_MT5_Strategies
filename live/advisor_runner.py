@@ -198,7 +198,7 @@ _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the
 {slam_block(sig)}
 {d1_ext_line(sig)}
 - **Sizing:** {C.lots_line(sz)} · risk multiplier in effect {sz.get('risk_mult_applied', 1.0)} → effective {float(sz.get('risk_pct_effective', 0.01))*100:.2f}%{(' · recovery rung: ' + str(sz.get('ladder_rung'))) if sz.get('ladder_rung') else ''}
-- **Entry cost (spread) right now:** {sz.get('spread')} = **{float(sz.get('spread_r') or 0):.3f}R** of the stop{f" (gate: refused above {float(sz.get('max_spread_r') or 0):.2f}R)" if sz.get('max_spread_r') else ""} — you pay this the moment the trade opens
+{('- **' + C.reoffer_line(sig, cfg) + '** (coach item 26: a spread-rejected signal held until the spread normalised; judge it at the CURRENT price)' + chr(10)) if sig.get('reoffer') else ''}- **Entry cost (spread) right now:** {sz.get('spread')} = **{float(sz.get('spread_r') or 0):.3f}R** of the stop{f" (gate: refused above {float(sz.get('max_spread_r') or 0):.2f}R)" if sz.get('max_spread_r') else ""} — you pay this the moment the trade opens
 {EXP.build(sig, cfg)}
 - **Kill switch:** trading {'ENABLED' if sig.get('trading_enabled') else 'DISABLED (approve would be refused)'}
 - **Events (next 14 d, {'/'.join(sorted(C.symbol_ccys(sig.get('symbol', '')) - {'All'}))}):**
