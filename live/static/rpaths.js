@@ -16,7 +16,7 @@
   const DETS = ["TrendCont", "SweepMSS", "DeepFib", "EMArevQ"];
   const state = {
     show: "tp2", cmp: "none", time: "rt", dir: "all", det: "all", start: "all", period: "all", shade: "open",
-    heat: true, fan: true, samples: false, source: "backtest", brush: null,
+    heat: true, fan: true, samples: false, source: "backtest", brush: null, avgCarry: false, avgDays: 10,
   };
   let DATA = null, root = null;
 
@@ -150,6 +150,7 @@
       ro.querySelector(".rp-clear").onclick = () => { state.brush = null; render(); };
     } else ro.innerHTML = `<div class="k">Tip: <b>drag a box</b> on the chart to see what share of the trades passed through that area. Hover any cell for its numbers.</div>`;
     root.appendChild(ro);
+    root.appendChild(avgCard());
     // table view
     root.appendChild(tableView(S, G));
     root.appendChild(el("div", "k rp-foot", `${DATA.trades.length.toLocaleString()} historical trades (all four detectors, 7 symbols, 2012–2026) replayed on M1 with the live stop rules: bank at +1R → stop to entry, shorts' stop to +0.25R at +1.5R, runner to TP2. The line is the price in the trade's own R from the signal's entry. Built ${DATA.built}.`));
@@ -229,7 +230,9 @@
     else {
       const days = (G.ncol - 1) / 6, narrow = pw < 520, room = Math.max(2, Math.floor(pw / (narrow ? 38 : 60)));
       const step = [1, 2, 3, 5, 10, 15].find(k => days / k <= room) || 20;
-      for (let d = 0; d <= days + 1e-9; d += step) ctx.fillText(d === 0 ? (narrow ? "0" : "entry") : (narrow ? d + "d" : "day " + d), X(d * 6), pad.t + ph + 6);
+      for (let d = 0; d <= days + 1e-9; d += step) { const lb = d === 0 ? (narrow ? "0" : "entry") : (narrow ? d + "d" : "day " + d);
+        ctx.textAlign = X(d * 6) + ctx.measureText(lb).width / 2 > W - 2 ? "right" : "center"; ctx.fillText(lb, Math.min(X(d * 6), W - 2), pad.t + ph + 6); }
+      ctx.textAlign = "center";
     }
     // strip: share of the group still open at each moment (real time only - in progress time every trade is open until 100%)
     if (state.time === "rt") {
@@ -287,6 +290,78 @@
     function norm(a, p) { return { c0: Math.min(a.c, p.c), c1: Math.max(a.c, p.c), r0: Math.max(G.ymin, Math.min(a.r, p.r)), r1: Math.min(G.ymax, Math.max(a.r, p.r)) }; }
     function redrawAll() { document.querySelectorAll(".rp-chart canvas").forEach(x => x.__redraw && x.__redraw()); }
     cv.__redraw = () => draw(cv, tip, g, S, idx, G, vmax);
+  }
+
+  // ---------------------------------------------------------------- average R every half day, by outcome (trader 2026-10-02)
+  function avgCard() {
+    const card = el("div", "card rp-avg");
+    card.appendChild(el("div", "row", `<b>Average R every half day</b><span class="k">same filters as above · days since entry</span>`));
+    const ctl = el("div", "rp-grid");
+    const segs = el("div", "rp-ctl"); segs.appendChild(el("div", "rp-lbl", `After a trade exits <span class="rp-q" title="Still open only: the average at day 2 is over the trades not yet closed. Keep at exit level: a closed trade stays in the average at the level it exited (TP2, entry or -1R), so every line covers the whole group.">?</span>`));
+    const g1 = el("div", "rp-seg");
+    [[false, "Still open only"], [true, "Keep at exit level"]].forEach(([v, t]) => { const b = el("button", state.avgCarry === v ? "on" : "", t); b.type = "button"; b.onclick = () => { state.avgCarry = v; render(); }; g1.appendChild(b); });
+    segs.appendChild(g1); ctl.appendChild(segs);
+    const sd = el("div", "rp-ctl"); sd.appendChild(el("div", "rp-lbl", "Days shown")); const g2 = el("div", "rp-seg");
+    [5, 10, 20, 30].forEach(v => { const b = el("button", state.avgDays === v ? "on" : "", v + " days"); b.type = "button"; b.onclick = () => { state.avgDays = v; render(); }; g2.appendChild(b); });
+    sd.appendChild(g2); ctl.appendChild(sd); card.appendChild(ctl);
+    const groups = ["tp2", "be", "sl"].map(k => ({ key: k, trades: select(k) })).filter(g => g.trades.length);
+    const steps = Math.min(state.avgDays * 2, Math.floor(DATA.cap_bars / 3));
+    const series = groups.map(g => ({ key: g.key, pts: [...Array(steps + 1).keys()].map(i => {
+      const bar = i * 3; let sum = 0, n = 0;
+      for (const t of g.trades) {
+        let v = bar === 0 ? 0 : (bar - 1 < t.rt.length ? t.rt[bar - 1] / 100 : (state.avgCarry ? t.rt[t.rt.length - 1] / 100 : null));
+        if (v == null) continue; sum += v; n++;
+      }
+      return { day: i / 2, mean: n >= 5 ? sum / n : null, n, of: g.trades.length };
+    }) }));
+    const box = el("div", "rp-cv"); const cv = el("canvas"); cv.style.height = "clamp(260px,40vw,380px)"; const tip = el("div", "rp-tip"); box.appendChild(cv); box.appendChild(tip); card.appendChild(box);
+    const leg = el("div", "rp-leg"); series.forEach(sr => leg.appendChild(el("span", "rp-key", `<i style="background:${C.hueHex[sr.key]};height:3px"></i>${OUTCOME[sr.key]} (${sr.pts[0].of.toLocaleString()})`)));
+    card.appendChild(leg);
+    card.appendChild(el("div", "k", state.avgCarry ? "Every trade stays in its line after it closes, at its exit level - so the lines end where each group finishes on average."
+      : "Each point averages the trades of that group still open at that moment (points with fewer than 5 open trades are left out)."));
+    requestAnimationFrame(() => drawAvg(cv, tip, series, steps));
+    return card;
+  }
+  function drawAvg(cv, tip, series, steps) {
+    const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr; const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
+    const pad = { l: 44, r: 14, t: 12, b: 28 }, pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+    let lo = -1, hi = 1; series.forEach(sr => sr.pts.forEach(p => { if (p.mean != null) { lo = Math.min(lo, p.mean); hi = Math.max(hi, p.mean); } }));
+    lo = Math.floor(lo * 2) / 2 - 0.25; hi = Math.ceil(hi * 2) / 2 + 0.25;
+    const X = d => pad.l + (d / (steps / 2)) * pw, Y = r => pad.t + (1 - (r - lo) / (hi - lo)) * ph;
+    ctx.fillStyle = C.surface; ctx.fillRect(0, 0, W, H);
+    ctx.font = "11px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.textBaseline = "middle";
+    const ystep = hi - lo > 4 ? 1 : 0.5;
+    for (let r = Math.ceil(lo / ystep) * ystep; r <= hi + 1e-9; r += ystep) {
+      ctx.strokeStyle = Math.abs(r) < 1e-9 ? "#6e7681" : C.grid; ctx.lineWidth = Math.abs(r) < 1e-9 ? 1.2 : 1;
+      ctx.beginPath(); ctx.moveTo(pad.l, Y(r)); ctx.lineTo(W - pad.r, Y(r)); ctx.stroke();
+      ctx.fillStyle = C.dim; ctx.textAlign = "right"; ctx.fillText(fmtR(+r.toFixed(2)).replace("0R", "0R"), pad.l - 6, Y(r));
+    }
+    const days = steps / 2, narrow = pw < 520, room = Math.max(2, Math.floor(pw / (narrow ? 38 : 60)));
+    const xs = [0.5, 1, 2, 5, 10].find(k => days / k <= room) || 10;
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = C.dim;
+    for (let d = 0; d <= days + 1e-9; d += xs) { const lb = d === 0 ? (narrow ? "0" : "entry") : (narrow ? d + "d" : "day " + d);
+      ctx.textAlign = X(d) + ctx.measureText(lb).width / 2 > W - 2 ? "right" : "center"; ctx.fillText(lb, Math.min(X(d), W - 2), pad.t + ph + 8); }
+    series.forEach(sr => {
+      ctx.strokeStyle = C.hueHex[sr.key]; ctx.lineWidth = 2; ctx.beginPath(); let started = false;
+      sr.pts.forEach(p => { if (p.mean == null) { started = false; return; } if (!started) { ctx.moveTo(X(p.day), Y(p.mean)); started = true; } else ctx.lineTo(X(p.day), Y(p.mean)); });
+      ctx.stroke();
+      sr.pts.forEach(p => { if (p.mean == null) return; ctx.fillStyle = C.surface; ctx.beginPath(); ctx.arc(X(p.day), Y(p.mean), 4, 0, 7); ctx.fill();
+        ctx.fillStyle = C.hueHex[sr.key]; ctx.beginPath(); ctx.arc(X(p.day), Y(p.mean), 3, 0, 7); ctx.fill(); });
+    });
+    const show = e => {
+      const r = cv.getBoundingClientRect(), x = e.clientX - r.left;
+      const i = Math.max(0, Math.min(steps, Math.round((x - pad.l) / pw * steps)));
+      drawAvgBase(); ctx.strokeStyle = "rgba(240,246,252,0.35)"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(i / 2), pad.t); ctx.lineTo(X(i / 2), pad.t + ph); ctx.stroke(); ctx.setLineDash([]);
+      tip.innerHTML = `<b>${i === 0 ? "entry" : "day " + (i / 2).toFixed(1)}</b><br>` + series.map(sr => { const p = sr.pts[i];
+        return `<span class="rp-sw sm" style="background:${C.hueHex[sr.key]}"></span>${OUTCOME[sr.key]}: <b>${p.mean == null ? "–" : fmtR(+p.mean.toFixed(2))}</b> <span class="k">(${p.n} of ${p.of}${state.avgCarry ? "" : " still open"})</span>`; }).join("<br>");
+      tip.style.display = "block"; const tw = tip.offsetWidth;
+      tip.style.left = Math.min(W - tw - 4, Math.max(4, X(i / 2) + 12)) + "px"; tip.style.top = (pad.t + 6) + "px";
+    };
+    let base = null; const drawAvgBase = () => { if (base) ctx.putImageData(base, 0, 0); };
+    base = ctx.getImageData(0, 0, cv.width, cv.height);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.scale(dpr, dpr);
+    cv.onpointermove = show; cv.onpointerdown = show; cv.onpointerleave = () => { tip.style.display = "none"; drawAvgBase(); };
   }
 
   function tableView(S, G) {
