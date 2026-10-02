@@ -84,11 +84,40 @@ var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.que
 """
 
 def page(title: str, body: str, active: str = "", refresh: int | None = None) -> str:
-    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
+    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/paths", "Paths", "paths"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
     nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs) + '<span id="utc" class="k" style="margin-left:auto;align-self:center;white-space:nowrap;font-variant-numeric:tabular-nums"></span>'
     m = f'<meta name="autorefresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{E(title)}</title>{m}<style>{CSS}</style></head><body><nav>{nav}</nav><main>{body}</main><script>{JS}</script></body></html>')
+
+RPATHS_CSS = """
+.rp-ctls{padding:10px 12px}.rp-ctl{margin:6px 0}.rp-lbl{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:0 0 4px}
+.rp-q{display:inline-block;width:15px;height:15px;line-height:15px;text-align:center;border-radius:50%;background:#21262d;color:var(--dim);font-size:10px;cursor:help;text-transform:none}
+.rp-seg{display:flex;flex-wrap:wrap;gap:4px}.rp-seg button{background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:14px;cursor:pointer}
+.rp-seg button.on{background:#1f3b5c;border-color:#3987e5;color:#fff;font-weight:600}.rp-seg button:disabled{opacity:.35;cursor:not-allowed}
+.rp-tog{background:#0d1117;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:14px;cursor:pointer}.rp-tog.on{color:#fff;border-color:#8b949e;background:#21262d}
+.rp-more summary{cursor:pointer;margin:8px 0 2px}.rp-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px}@media(max-width:700px){.rp-grid{grid-template-columns:1fr}}
+.rp-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.rp-tile{display:flex;gap:10px;align-items:flex-start;margin:0}
+.rp-sw{display:inline-block;width:12px;height:12px;border-radius:3px;flex:none;margin-top:4px}.rp-sw.sm{width:10px;height:10px;margin:0 6px 0 0;vertical-align:-1px}
+.rp-panels{display:grid;grid-template-columns:1fr;gap:10px}@media(min-width:1100px){.rp-panels.two{grid-template-columns:1fr 1fr}}
+.rp-chart{margin:10px 0 0}.rp-cv{position:relative}.rp-cv canvas{width:100%;height:clamp(300px,52vw,460px);display:block;touch-action:none;cursor:crosshair;border-radius:6px;margin-top:6px}
+.rp-tip{position:absolute;display:none;pointer-events:none;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:8px 10px;font-size:13px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.45);max-width:300px;z-index:3}
+.rp-leg{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin-top:8px}.rp-ramp{display:inline-block;width:120px;height:10px;border-radius:5px;border:1px solid var(--line)}
+.rp-key{font-size:12px;color:var(--dim);display:inline-flex;align-items:center;gap:6px}.rp-key i{display:inline-block;width:18px;height:10px;border-radius:2px}
+.rp-key i.med{height:3px;background:#f0f6fc}.rp-key i.b50{background:rgba(230,237,243,.26)}.rp-key i.b80{background:rgba(230,237,243,.12)}
+.rp-readout b{font-variant-numeric:tabular-nums}.rp-tablewrap{overflow-x:auto}.rp-table td,.rp-table th{white-space:nowrap;font-variant-numeric:tabular-nums}.rp-foot{margin:8px 2px 20px}
+.rp-wide{max-width:1400px}
+"""
+
+def paths_page(q: dict) -> str:
+    """trader 2026-10-02: the R-path explorer - how trades travel to their exit (heatmap + typical path + drag-box share)."""
+    v = str(int(os.path.getmtime(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.js")))) if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.js")) else "0"
+    body = (f'<style>{RPATHS_CSS} main{{max-width:1400px}}</style>'
+            f'<h1>Trade paths</h1><div class="k">How trades travel from entry to their exit, in R. Pick a group, then read the shading: '
+            f'the brighter a cell, the more trades were there at that moment. The white line is the typical path.</div>'
+            f'<div id="rp-app"></div><script src="/static/rpaths.js?v={v}"></script>'
+            f'<script>window.addEventListener("DOMContentLoaded",function(){{RPaths.mount("rp-app","/static/rpaths.json?v={v}");}});</script>')
+    return page("Trade paths", body, "paths")
 
 def flash(msg: str | None, ok: bool = True) -> str:
     return f'<div class="flash {"ok" if ok else "bad"}">{E(msg)}</div>' if msg else ""
@@ -1218,8 +1247,16 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlsplit(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}; parts = [p for p in u.path.split("/") if p]
         try:
             if not parts: return self._send(dashboard(q))
-            if parts[0] == "static" and len(parts) == 2 and parts[1] in ("lw.js", "hybrid_chart.js"):
+            if parts[0] == "static" and len(parts) == 2 and parts[1] in ("lw.js", "hybrid_chart.js", "rpaths.js"):
                 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", parts[1]), "rb") as f: return self._send(f.read(), "application/javascript")
+            if parts[0] == "static" and len(parts) == 2 and parts[1] == "rpaths.json":    # the Paths tab's data (gzip when the client takes it)
+                base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.json")
+                if "gzip" in (self.headers.get("Accept-Encoding") or "") and os.path.exists(base + ".gz"):
+                    with open(base + ".gz", "rb") as f: data = f.read()
+                    self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "max-age=3600"); self.end_headers(); self.wfile.write(data); return
+                with open(base, "rb") as f: return self._send(f.read(), "application/json")
+            if parts[0] == "paths": return self._send(paths_page(q))
             if parts[0] == "api" and len(parts) == 3 and parts[1] == "bars":
                 from live import mt5feed
                 sym = parts[2]; tf = q.get("tf", "h4"); n = max(1, min(2000, int(q.get("n", "500") or 500)))
