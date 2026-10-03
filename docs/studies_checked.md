@@ -53,3 +53,7 @@ nothing is re-run by accident and the coach can see what was tried.
     changed (44 helped / 4 hurt), drawdown 27.4 -> 28.3; 2025-26 +0.013 on 5 trades. Shorts t 2.8 within it. Small, and picked
     from a 30-cell grid. Not forwarded unless the trader asks.
   - `late_breakout_raise_study.py <price> 0.25 <stop>`, `data/study/late_breakout_px*_avg0.25_sl*_report.txt`
+- **Day 7, average between +1R and +1.5R -> stop to +0.25 / +0.5 / +0.75 / +1R.**
+  - 2012-24: -0.003 / -0.012 / -0.011 / -0.015R (t to -2.3); 2025-26: -0.018 to -0.028R (4 trades).
+  - Only 20-50 trades are affected. The hurt trades (-0.4 to -0.8R each) are runners that dip and then reach TP2.
+  - Not forwarded. `day7_band_raise_study.py`, `data/study/day7_band_raise_report.txt`
