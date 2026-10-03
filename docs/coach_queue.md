@@ -107,115 +107,55 @@ top helped, double the hurt) before running it. Then an EA reproduction for whic
   +0.5R" is the cell to fix (it was also the first one tried, not picked from the grid). Run it with the add gate as a pair, with
   an EA reproduction.
 
-## 3. Add to proven runners at day 2 (added 2026-10-02)
+## 3. Add to improving longs at day 2 (added 2026-10-02, trigger revised 2026-10-03)
 
-**Rule.** At the close of H4 bar 12 (~48h), if the trade is still open and its average R since entry is above +1R, add X% of the
-full size at market (it shares the position's stop and runs to TP2).
+**Rule (I).** At the close of H4 bar 12 (~48h), a LONG still open whose second-day average R (mean of M1 bid closes from the bar-6
+close to the bar-12 close) is above its first-day average (entry to the bar-6 close) gets +50% of the full size at market. The add
+shares the position's stop and runs to TP2.
 
-| add | 2012-24 vs base | worst DD | 2025-26 vs base | worst DD |
+| | adds | 2012-24 vs base | worst DD | 2025-26 vs base |
 |---|---|---|---|---|
-| +25% | +0.005 (t 2.2) | 26.7 | +0.000 | 21.9 |
-| **+50%** | **+0.010 (t 2.2)** | **26.1** | +0.000 | 23.4 |
-| +75% | +0.015 | 27.7 | +0.000 | 24.9 |
-| +100% | +0.020 | 30.0 | +0.000 | 26.4 |
+| I (longs, +50%) | 517 | +0.023 (t 3.2) | 31.9 | +0.013 |
+| improving by more than +0.5R | 230 | +0.015 (t 2.8) | 29.5 | +0.015 |
 
-- **Population:** 165 adds in 2012-24 (111 long / 54 short); 23 in 2025-26.
-- **The gain is mostly LONGS** (t 2.1); shorts add +0.001-0.003, about nothing.
-- **Price constraint at the moment of the add:** requiring price below +2R (or +1..+2R, or 0..+1R) roughly halves the gain. The
-  value is in adding to trades that are averaging above +1R AND still running above +2R, i.e. the strongest runners.
-- **Drawdown:** +50% is the best cell (27.4 -> 26.1R). Above that, drawdown climbs.
-- **Caveats:**
-  - 2025-26 is flat on only 23 adds, so there is no holdout support.
-  - It is a size increase, so its risk shows in the FTMO headroom, not just in R.
-  - The same family as the bigger-trial-pyramid and promote-fast-starters results: more size on winners earns more. This
-    version is the most drawdown-efficient seen so far.
-- **Checkpoint sweep, days 1-5** (+50%, average > +1R, any price; change vs base, 2012-24 | 2025-26):
+- **Longer streaks are weaker.** Daily averages rising 2 / 3 / 4 / 5 days in a row give +0.023 / +0.014 / +0.009 / +0.003R in
+  2012-24 and +0.013 / -0.002 / -0.004 / +0.001 in 2025-26. Two days is the best, and the only length positive in both periods.
+- **Longs only.** The same add on shorts is about 0 in 2012-24 and -0.033 (t -3.3) in 2025-26.
+- **Alone it raises drawdown** (27.4 -> 31.9R): it adds to many trades. Inside the package (entry 4) that cost mostly disappears.
+- **Replaces** the earlier trigger (48h average > +1R: +0.008R, t 2.1, 111 adds), which the trader withdrew on 2026-10-03.
+- **Scripts:** `pipeline/trend_of_avg_study.py`, `pipeline/streak_avg_study.py`; reports `data/study/trend_of_avg_report.txt`,
+  `streak_avg_report.txt`.
+- **Ask:** pre-register I as defined above (longs only), with an EA reproduction.
 
-  | checkpoint | all trades | worst DD (2012-24) | longs only | shorts only |
-  |---|---|---|---|---|
-  | day 1 | +0.005 \| -0.001 | 28.0 | +0.005 \| -0.002 | +0.000 \| +0.002 |
-  | **day 2** | **+0.010 (t 2.2) \| +0.000** | **26.1** | **+0.008 (t 2.1) \| +0.006** | +0.002 \| -0.006 |
-  | day 3 | +0.005 \| +0.008 | 29.2 | +0.004 \| +0.008 | +0.001 \| -0.001 |
-  | day 4 | +0.006 \| +0.004 | 30.5 | +0.006 \| +0.008 | -0.001 \| -0.004 |
-  | day 5 | +0.007 \| +0.004 | 32.3 | +0.009 (t 2.4) \| +0.001 | -0.002 \| +0.003 |
-
-  - **Positive at every checkpoint in 2012-24, and mostly positive in 2025-26 for longs**, so day 2 is not a lucky pick of the
-    timing. Day 2 is the best balance: the strongest t, and the only checkpoint where drawdown falls (later checkpoints add on
-    trades that are about to finish, and drawdown rises to 29-32R).
-  - **Shorts are about zero at every checkpoint.** This is a longs rule.
-- **Script / report:** `pipeline/day2_avg_add_study.py` (argv = checkpoint in H4 bars), `data/study/day2_avg_add_report.txt` and
-  `avg_add_bar{6,18,24,30}_report.txt`.
-- **Alternative trigger: IMPROVING longs (added 2026-10-03).** At day 2, add +50% to a long whose second-day average beats its
-  first-day average (delta = day-2 average - day-1 average). `pipeline/trend_of_avg_study.py`, `data/study/trend_of_avg_report.txt`:
-
-  | trigger (longs) | adds | 2012-24 vs base | worst DD | 2025-26 vs base | R per R of DD (2012-24) |
-  |---|---|---|---|---|---|
-  | improving, delta > 0 | 517 | **+0.023 (t 3.2)** | 31.9 | +0.013 | 11.9 |
-  | improving, delta > +0.5R | 230 | +0.015 (t 2.8) | 29.5 | +0.015 | 12.2 |
-  | C: 48h average > +1R | 111 | +0.008 (t 2.1) | 26.6 | +0.006 | 12.8 |
-  | C and improving | 105 | +0.006 | 26.6 | +0.006 | 12.7 |
-
-  - **"Improving" earns about 3x C's R** with the strongest t of any rule in this queue, and it is positive in both periods.
-  - **But it adds to many more trades** (517 vs 111), so drawdown rises (27.4 -> 31.9R). Return per unit of drawdown is a little
-    below C's.
-  - **The choice:** C is the drawdown-efficient version, improving is the return-maximising one.
-  - **Longer streaks are weaker** (`pipeline/streak_avg_study.py`). Daily averages rising 2 / 3 / 4 / 5 days in a row, then add
-    +50% (longs): +0.023 / +0.014 / +0.009 / +0.003R in 2012-24; +0.013 / -0.002 / -0.004 / +0.001 in 2025-26. Two days (the
-    trigger above) is the best and the only one positive in both periods. The same add on SHORTS is about 0 in 2012-24 and -0.033
-    (t -3.3) in 2025-26, so it stays a longs-only rule.
-- **Ask:** pre-register "+50% at day 2 when the 48h average > +1R" (longs only, or both sides) and run an EA reproduction.
-
-## 4. The three rules together (added 2026-10-02)
+## 4. The three rules together (added 2026-10-02, revised 2026-10-03)
 
 A = entry 1 (24h average < 0 holds the add until +1R, all trades). B = entry 2 (shorts: close at day 2 if the 48h average is not
-above +0.5R). C = entry 3 (day 2: 48h average > +1R adds +50%, longs only; C* = both sides).
+above +0.5R). I = entry 3 (longs: day-2 average above day-1 average -> +50%).
 
-| rules | 2012-24 vs base | worst DD | total R / DD | 2025-26 vs base | worst DD | total R / DD |
-|---|---|---|---|---|---|---|
-| base | | 27.4 | 11.6 | | 20.4 | 1.0 |
-| A | +0.006 | 25.9 | 12.9 | +0.015 | 15.8 | 1.6 |
-| B | +0.006 | 22.2 | 15.1 | +0.078 | 14.2 | 3.3 |
-| C | +0.008 (t 2.1) | 26.6 | 12.8 | +0.006 | 22.5 | 1.0 |
-| A+B | +0.009 | 21.1 | 16.2 | +0.092 | 13.5 | 3.8 |
-| A+C | +0.014 (t 2.1) | 25.5 | 14.0 | +0.021 | 15.8 | 1.7 |
-| B+C | +0.014 | 22.9 | 15.6 | +0.084 | 16.3 | 3.0 |
-| **A+B+C** | **+0.017 (t 1.6)** | **22.4** | **16.3** | **+0.098 (t 4.5)** | **13.5** | **4.0** |
-| A+B+C* | +0.019 | 23.5 | 15.7 | +0.092 | 13.5 | 3.8 |
+| rules | 2012-24 vs base | t | worst DD | total R / DD | 2025-26 vs base | worst DD | total R / DD |
+|---|---|---|---|---|---|---|---|
+| base | | | 27.4 | 11.6 | | 20.4 | 1.0 |
+| A | +0.006 | 1.1 | 25.9 | 12.9 | +0.015 | 15.8 | 1.6 |
+| B | +0.006 | 0.7 | 22.2 | 15.1 | +0.078 | 14.2 | 3.3 |
+| I | +0.023 | 3.2 | 31.9 | 11.9 | +0.013 | 22.9 | 1.1 |
+| A+B | +0.009 | 0.9 | 21.1 | 16.2 | +0.092 | 13.5 | 3.8 |
+| A+I | +0.029 | 3.2 | 30.0 | 13.2 | +0.028 | 17.7 | 1.7 |
+| B+I | +0.029 | 2.5 | 23.4 | 17.0 | +0.091 | 16.7 | 3.1 |
+| **A+B+I** | **+0.032** | **2.6** | **23.5** | **17.3** | **+0.105** | **15.4** | **3.7** |
 
-- **A+B+C is the best package in both periods:**
-  - R per trade +15% (2012-24: +0.115 -> +0.132);
-  - worst drawdown down 18% (27.4 -> 22.4R);
-  - return per unit of drawdown 11.6 -> 16.3.
-  - In 2025-26: +0.060 -> +0.158 per trade, with drawdown 20.4 -> 13.5R.
-  - Bid-only gives the same picture (+0.019, DD 30.8 -> 23.2; 2025-26 +0.097).
-- **The rules are nearly additive.**
-  - 2012-24: the sum of the three separate gains is +0.020 vs +0.017 together; 2025-26: +0.099 vs +0.098.
-  - They act on different trades and moments: A on weak trades at 24h (withholds size), B on stalled shorts at 48h (exits), C on
-    strong longs at 48h (adds size).
-- **With the improving trigger I in place of C (added 2026-10-03; I = day 2: second-day average > first-day average -> +50%,
-  longs):**
-
-  | package | 2012-24 vs base | t | worst DD | R / DD | 2025-26 vs base | worst DD | R / DD |
-  |---|---|---|---|---|---|---|---|
-  | A+B+C | +0.017 | 1.6 | 22.4 | 16.3 | +0.098 | 13.5 | 4.0 |
-  | **A+B+I** | **+0.032** | **2.6** | 23.5 | **17.3** | **+0.105** | 15.4 | 3.7 |
-
-  - **Inside the package, I's drawdown cost mostly disappears:** I alone takes drawdown to 31.9R, A+B+I to 23.5R, because A and
-    B cut the trades that drove it.
-  - **A+B+I nearly doubles A+B+C's 2012-24 gain** (+15% -> +28% on R per trade) at about the same drawdown, and has the better R
-    per unit of drawdown in 2012-24.
-  - **2025-26 is close:** A+B+I has more R; A+B+C slightly less drawdown.
-  - **Bid-only agrees on R** (+0.033 vs +0.019). Bid-only R/DD: 13.9 vs 14.5, slightly favouring C.
-- **C on longs only is better than on both sides** (shorts' adds are about zero and cost drawdown), consistent with the
-  long-runner / short-take-profit picture.
+- **A+B+I in 2012-24:** R per trade +28% (+0.115 -> +0.146), worst drawdown -14% (27.4 -> 23.5R), return per unit of drawdown
+  11.6 -> 17.3.
+- **A+B+I in 2025-26:** R per trade +0.060 -> +0.165, drawdown 20.4 -> 15.4R.
+- **Bid-only agrees:** +0.033 in 2012-24, DD 30.8 -> 26.8.
+- **A and B take out most of I's drawdown cost** (31.9 -> 23.5R). The three rules act on different trades and moments: A on weak
+  trades at 24h (withholds size), B on stalled shorts at 48h (exits), I on strengthening longs at 48h (adds size).
 - **Caveats:**
   - Each rule came from the trader's exploration on this record, so the package inherits the selection bias of all three.
-  - The 2012-24 t is 1.6.
   - Most of the 2025-26 gain is B (a bad period for shorts).
   - All three touch sizing or exits intrabar-adjacent, so an EA real-tick reproduction is required.
 - **Script / report:** `pipeline/combo3_study.py`, `data/study/combo3_report.txt`.
-- **Ask:** if the coach takes these forward, test A+B+C as one pre-registered package (fixed parameters as above), with a
-  fragility check per rule and an EA reproduction on two symbols.
+- **Ask:** test A+B+I as one pre-registered package (fixed parameters as above), with a fragility check per rule and an EA
+  reproduction on two symbols.
 
 ---
 
@@ -229,9 +169,11 @@ Rules tested, exactly as below, with no re-tuning on these symbols:
 - **A.** At the bar-6 close, a trial average R (mean of M1 bid closes since entry, first tranche's 1R) below 0 holds the 75% add
   until the bid reaches +1R (added at market then). All trades.
 - **B.** At the bar-12 close, a SHORT whose average R since entry is not above +0.5R is closed (100%) at market.
-- **C.** At the bar-12 close, a LONG whose average R since entry is above +1R gets +50% of the full size at market (shares the stop,
-  runs to TP2).
-- The package is A+B+C; each rule is also reported alone.
+- **I.** At the bar-12 close, a LONG whose second-day average R (bar-6 close -> bar-12 close) is above its first-day average (entry
+  -> bar-6 close) gets +50% of the full size at market (shares the stop, runs to TP2).
+- The package is A+B+I; each rule is also reported alone.
+- (Revised 2026-10-03: I replaced the earlier rule C (48h average > +1R). This was still before any new-symbol data was looked at,
+  so the pre-registration stands.)
 
 Read-out, decided now:
 - The change vs base in R per trade and worst drawdown, for 2012-24 and 2025-26 separately, by symbol and pooled, with longs and
