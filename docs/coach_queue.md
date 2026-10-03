@@ -146,3 +146,41 @@ full size at market (it shares the position's stop and runs to TP2).
 - **Script / report:** `pipeline/day2_avg_add_study.py` (argv = checkpoint in H4 bars), `data/study/day2_avg_add_report.txt` and
   `avg_add_bar{6,18,24,30}_report.txt`.
 - **Ask:** pre-register "+50% at day 2 when the 48h average > +1R" (longs only, or both sides) and run an EA reproduction.
+
+## 4. The three rules together (added 2026-10-02)
+
+A = entry 1 (24h average < 0 holds the add until +1R, all trades). B = entry 2 (shorts: close at day 2 if the 48h average is not
+above +0.5R). C = entry 3 (day 2: 48h average > +1R adds +50%, longs only; C* = both sides).
+
+| rules | 2012-24 vs base | worst DD | total R / DD | 2025-26 vs base | worst DD | total R / DD |
+|---|---|---|---|---|---|---|
+| base | | 27.4 | 11.6 | | 20.4 | 1.0 |
+| A | +0.006 | 25.9 | 12.9 | +0.015 | 15.8 | 1.6 |
+| B | +0.006 | 22.2 | 15.1 | +0.078 | 14.2 | 3.3 |
+| C | +0.008 (t 2.1) | 26.6 | 12.8 | +0.006 | 22.5 | 1.0 |
+| A+B | +0.009 | 21.1 | 16.2 | +0.092 | 13.5 | 3.8 |
+| A+C | +0.014 (t 2.1) | 25.5 | 14.0 | +0.021 | 15.8 | 1.7 |
+| B+C | +0.014 | 22.9 | 15.6 | +0.084 | 16.3 | 3.0 |
+| **A+B+C** | **+0.017 (t 1.6)** | **22.4** | **16.3** | **+0.098 (t 4.5)** | **13.5** | **4.0** |
+| A+B+C* | +0.019 | 23.5 | 15.7 | +0.092 | 13.5 | 3.8 |
+
+- **A+B+C is the best package in both periods:**
+  - R per trade +15% (2012-24: +0.115 -> +0.132);
+  - worst drawdown down 18% (27.4 -> 22.4R);
+  - return per unit of drawdown 11.6 -> 16.3.
+  - In 2025-26: +0.060 -> +0.158 per trade, with drawdown 20.4 -> 13.5R.
+  - Bid-only gives the same picture (+0.019, DD 30.8 -> 23.2; 2025-26 +0.097).
+- **The rules are nearly additive.**
+  - 2012-24: the sum of the three separate gains is +0.020 vs +0.017 together; 2025-26: +0.099 vs +0.098.
+  - They act on different trades and moments: A on weak trades at 24h (withholds size), B on stalled shorts at 48h (exits), C on
+    strong longs at 48h (adds size).
+- **C on longs only is better than on both sides** (shorts' adds are about zero and cost drawdown), consistent with the
+  long-runner / short-take-profit picture.
+- **Caveats:**
+  - Each rule came from the trader's exploration on this record, so the package inherits the selection bias of all three.
+  - The 2012-24 t is 1.6.
+  - Most of the 2025-26 gain is B (a bad period for shorts).
+  - All three touch sizing or exits intrabar-adjacent, so an EA real-tick reproduction is required.
+- **Script / report:** `pipeline/combo3_study.py`, `data/study/combo3_report.txt`.
+- **Ask:** if the coach takes these forward, test A+B+C as one pre-registered package (fixed parameters as above), with a
+  fragility check per rule and an EA reproduction on two symbols.
