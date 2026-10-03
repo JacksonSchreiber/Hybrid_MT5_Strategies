@@ -180,3 +180,16 @@ Read-out, decided now:
   shorts split.
 - **Support** = pooled 2012-24 increment > 0 AND worst DD not higher than base, for the package and for each rule.
 - Anything else is reported as it comes out. The new symbols are looked at once; no parameter changes after the first look.
+
+## Coach ruling 2026-10-03 and build status
+- Pre-registration stands (one look). Bars on the new symbols: B increment >= 0 (2012-24) and DD not above base; A DD not above base and
+  increment >= -0.005R in both periods; I increment > 0 (2012-24) with t >= 1.5 and positive on FX longs alone. I ships only with A and B on.
+- EA real-tick reproduction per rule (on vs off, +-0.02R) before live: pipeline/queue_repro_run.sh -> pipeline/queue_repro_check.py.
+- Live grading: web/queue_rules.csv (live/queue_shadow.py), one counter per rule vs its counterfactual, read at n=30.
+  Trader 2026-10-03: never retired automatically - the monitor tells the trader; the rules stay on.
+- Built into the EA 2026-10-03, OFF: live.json staged_add_gate (A, 1 = on), short_day2_cut_avg (B, 0.5), improving_add_frac (I, 0.5).
+  Averages match the study: M1 bid closes from the entry-bar open, against the card entry (signal-bar close) in the card's R.
+  I: shares the position's stop (original stop before the bank, entry after); spread, lot-floor and FTMO headroom gates at the add;
+  total size capped at 200% of full. None of the three acts on Inverse rows (not in the study population).
+- FX-only split of the original seven (data/study/combo3_class_report.txt): I on FX longs 2012-24 +0.023R (t 1.2, DD 16.2 -> 21.5),
+  2025-26 -0.036R (t -0.9); I's edge sits in index longs (+0.055, t 2.9) and gold longs (+0.058).
