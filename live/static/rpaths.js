@@ -98,6 +98,10 @@
     if (state.cmp !== "none") groups.push({ key: state.cmp, trades: select(state.cmp) });
     // controls
     const ctl = el("div", "card rp-ctls");
+    const nLive = DATA.trades.filter(t => t.src === "live").length;
+    ctl.appendChild(seg("Data", "source", [["backtest", "Historical"], ["live", `Live only (${nLive})`, nLive ? null : "no closed live trades yet - they appear here automatically"],
+      ["all", "Combined", nLive ? null : "no closed live trades yet"]],
+      "Historical: 13 years of backtest trades. Live only: your closed live trades, added automatically every hour. Combined: both together."));
     ctl.appendChild(seg("Show", "show", Object.entries(OUTCOME).map(([k, v]) => [k, v])));
     ctl.appendChild(seg("Compare with", "cmp", [["none", "Nothing"]].concat(Object.entries(OUTCOME).filter(([k]) => k !== "all").map(([k, v]) => [k, v, k === state.show ? "already shown" : null])),
       "Draws a second panel with the same filters, and each group's typical path on both panels"));
@@ -114,8 +118,6 @@
     mg.appendChild(seg("Period", "period", [["all", "All"], ["dev", "2012–24"], ["hold", "2025–26"]]));
     mg.appendChild(seg("Shading", "shade", [["open", "% of trades still open"], ["all", "% of all trades shown"]],
       "Still open: each time column adds up to 100% of the trades not yet exited. All: share of every trade in the selection (exited trades drop out)"));
-    const srcs = [...new Set(DATA.trades.map(t => t.src))];
-    mg.appendChild(seg("Data", "source", [["backtest", "Backtest"], ["live", "Live", srcs.includes("live") ? null : "live trades will appear here once they are recorded"], ["all", "Both", srcs.includes("live") ? null : "no live trades yet"]]));
     const lay = el("div", "rp-ctl"); lay.appendChild(el("div", "rp-lbl", "Layers"));
     const lg = el("div", "rp-seg"); lg.appendChild(toggle("Heatmap", "heat")); lg.appendChild(toggle("Typical path", "fan")); lg.appendChild(toggle("Sample paths", "samples"));
     lay.appendChild(lg); mg.appendChild(lay);
@@ -153,7 +155,9 @@
     root.appendChild(avgCard());
     // table view
     root.appendChild(tableView(S, G));
-    root.appendChild(el("div", "k rp-foot", `${DATA.trades.length.toLocaleString()} historical trades (all four detectors, 7 symbols, 2012–2026) replayed on M1 with the live stop rules: bank at +1R → stop to entry, shorts' stop to +0.25R at +1.5R, runner to TP2. The line is the price in the trade's own R from the signal's entry. Built ${DATA.built}.`));
+    const nh = DATA.trades.filter(t => t.src !== "live").length, nl = DATA.trades.length - nh;
+    root.appendChild(el("div", "k rp-foot", `Historical: ${nh.toLocaleString()} trades (all four detectors, 7 symbols, 2012–2026) replayed on M1 with the live stop rules (bank at +1R → stop to entry, shorts' stop to +0.25R at +1.5R, runner to TP2), built ${DATA.built}. ` +
+      `Live: ${nl} closed live trade${nl === 1 ? "" : "s"} from the journal and the MT5 feed${DATA.live_built ? ", updated " + DATA.live_built : ""} (refreshed hourly). The line is the price in the trade's own R from the signal's entry.`));
   }
   function maxShare(st, G) {
     let m = 0.0001;

@@ -540,6 +540,11 @@ class Monitor:
                               f"The -0.10R guard holds. web/reoffer.csv.")
         except Exception as e:
             self.log(f"reoffer_shadow error: {e!r}")
+        try:                                                             # trader 2026-10-03: live trades into the Data visualizers tab
+            from live import rpaths_live
+            self.st["rpaths_live_n"] = rpaths_live.write(self.cfg)
+        except Exception as e:
+            self.log(f"rpaths_live error: {e!r}")
         mn, m_diff = shadow_bank.write_manual(self.cfg)                  # coach item 22: graded at n=20 manual sizings
         if mn >= 20 and not self.st.get("manual_flag_20"):
             self.st["manual_flag_20"] = True

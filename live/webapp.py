@@ -209,6 +209,24 @@ def wiki_page(q: dict) -> str:
     return page("Wiki", body, "wiki")
 
 
+_RP_CACHE: dict = {}
+def rpaths_merged() -> tuple[bytes, bytes]:
+    """the historical trade paths (live/static/rpaths.json) + the live ones (<root>/web/rpaths_live.json, live/rpaths_live.py,
+    rebuilt hourly by the monitor), merged; cached until either file changes."""
+    import gzip
+    hist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.json")
+    live_p = os.path.join(CFG["root"], "web", "rpaths_live.json")
+    key = tuple(os.path.getmtime(p) if os.path.exists(p) else 0 for p in (hist, live_p))
+    if _RP_CACHE.get("key") != key:
+        doc = json.load(open(hist))
+        lv = C.load_json(live_p, {}) or {}
+        doc["trades"] = doc.get("trades", []) + (lv.get("trades") or [])
+        doc["live_built"] = lv.get("built")
+        raw = json.dumps(doc, separators=(",", ":")).encode()
+        _RP_CACHE.update(key=key, raw=raw, gz=gzip.compress(raw, 6))
+    return _RP_CACHE["raw"], _RP_CACHE["gz"]
+
+
 def paths_page(q: dict) -> str:
     """trader 2026-10-02: the R-path explorer - how trades travel to their exit (heatmap + typical path + drag-box share)."""
     v = str(int(os.path.getmtime(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.js")))) if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.js")) else "0"
@@ -1349,13 +1367,12 @@ class H(BaseHTTPRequestHandler):
             if not parts: return self._send(dashboard(q))
             if parts[0] == "static" and len(parts) == 2 and parts[1] in ("lw.js", "hybrid_chart.js", "rpaths.js"):
                 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", parts[1]), "rb") as f: return self._send(f.read(), "application/javascript")
-            if parts[0] == "static" and len(parts) == 2 and parts[1] == "rpaths.json":    # the Paths tab's data (gzip when the client takes it)
-                base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.json")
-                if "gzip" in (self.headers.get("Accept-Encoding") or "") and os.path.exists(base + ".gz"):
-                    with open(base + ".gz", "rb") as f: data = f.read()
+            if parts[0] == "static" and len(parts) == 2 and parts[1] == "rpaths.json":    # the visualizers' data: historical + live, gzip
+                raw, gz = rpaths_merged()
+                if "gzip" in (self.headers.get("Accept-Encoding") or ""):
                     self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Encoding", "gzip")
-                    self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "max-age=3600"); self.end_headers(); self.wfile.write(data); return
-                with open(base, "rb") as f: return self._send(f.read(), "application/json")
+                    self.send_header("Content-Length", str(len(gz))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(gz); return
+                return self._send(raw, "application/json")
             if parts[0] == "paths": return self._send(paths_page(q))
             if parts[0] == "wiki": return self._send(wiki_page(q))
             if parts[0] == "api" and len(parts) == 3 and parts[1] == "bars":
