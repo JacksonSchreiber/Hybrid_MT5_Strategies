@@ -5,8 +5,8 @@ trade in the same format as the historical file (live/static/rpaths.json, pipeli
   path = the price in the trade's original 1R (first tranche's entry -> its original stop), signed with the trade, bid side;
   rt   = the close of every H4 bar after entry (feed bars), last point = the final exit level; capped at 180 bars;
   pg   = 41 points from entry to the final exit (feed M5 closes), last = the final exit level;
-  o    = "tp2" (final exit within 0.05R of TP2), "be" (final exit above -0.5R: back to entry / the +0.25R shorts stop / a manual exit
-         near entry) or "sl" (stopped below -0.5R);  f6 = best R in the first 6 H4 bars;  xb = exit time in H4 bars.
+  o    = "tp2" (final exit within 0.05R of TP2), "be" (final exit at or above -0.15R: back to entry / the +0.25R shorts stop), "sl"
+         (at or below -0.85R: the stop) or "manual" (anything in between - a manual exit; counted under "All trades" only);  f6 = best R in the first 6 H4 bars;  xb = exit time in H4 bars.
 Written to <root>/web/rpaths_live.json by the monitor (hourly); the webapp merges it with the historical file.
 Journal times are the broker clock ('YYYY.MM.DD HH:MM:SS'), the same clock as the feed's bar epochs.
 """
@@ -60,7 +60,7 @@ def _trade(sym: str, rs: list[dict]) -> dict | None:
     first6 = after[:6]
     f6 = max((toR(float(b[2])) if up else toR(float(b[3]))) for b in first6) if first6 else 0.0
     tp2R = toR(tp2) if tp2 else None
-    o = "tp2" if (tp2R is not None and x_out >= tp2R - 0.05) else ("be" if x_out > -0.5 else "sl")
+    o = ("tp2" if (tp2R is not None and x_out >= tp2R - 0.05) else "be" if x_out >= -0.15 else "sl" if x_out <= -0.85 else "manual")
     return {"s": sym.split(".")[0], "d": first.get("strategy"), "l": 1 if up else 0, "y": int(first.get("signal_time", "0000")[:4] or 0),
             "o": o, "tp": round(tp2R, 2) if tp2R is not None else None, "f6": round(f6, 2), "xb": round((t_out - t_in) / 14400.0, 2),
             "src": "live", "rt": rt, "pg": pg, "key": f"{sym}-{first.get('signal_id')}"}
