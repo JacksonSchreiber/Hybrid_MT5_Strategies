@@ -78,3 +78,8 @@ nothing is re-run by accident and the coach can see what was tried.
   - Longs, 2-day streak: clearly negative (-0.030R at 100%, t -3.1; -0.007 at 25%). 3+ day streaks are rare (2-39 trades), about 0.
   - Shorts: about 0 at every length (-0.002..+0.001).
   - Not forwarded. Improving streaks -> add are summarised in queue entry 3. `streak_avg_study.py`, `data/study/streak_avg_report.txt`
+- **Rule C: day-2 add +50% when the 48h average > +1R (longs)** - withdrawn from the coach queue by the trader on 2026-10-03 and
+  replaced by I (improving longs).
+  - Alone: +0.008R (t 2.1), drawdown 26.6R.
+  - In the package, A+B+C gave +0.017 / DD 22.4R against A+B+I's +0.032 / 23.5R.
+  - `day2_avg_add_study.py`, `combo3_study.py`
