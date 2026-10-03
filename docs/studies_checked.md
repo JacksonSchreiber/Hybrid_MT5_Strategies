@@ -64,3 +64,13 @@ nothing is re-run by accident and the coach can see what was tried.
   - Even the late breakouts (low average) pay off from the pyramid: skipped trades lose about -0.12R each.
   - Shorts: the pyramid is worth +0.009 in 2012-24 but -0.034 in 2025-26 (the usual short-side split).
   - Not forwarded. `pyramid_gate_study.py`, `data/study/pyramid_gate_report.txt`
+- **Fading shorts cut at day 2** (second-day average below the first by more than 0 / 0.25 / 0.5R; also B restricted to fading
+  shorts).
+  - All weaker than the existing B (48h average <= +0.5R): fading-only -0.001..+0.002R in 2012-24; "B and fading" +0.004 vs B
+    +0.006.
+  - B stays the short-side rule. `trend_of_avg_study.py`
+- **Bigger bank for weak shorts** (bank 50% / 75% instead of the detector share when a short reaches +1R with its average below 0
+  / +0.25 / +0.5R, or all shorts).
+  - 2012-24: slightly negative in every cell (-0.001..-0.003R), drawdown a little lower (to 24.7R).
+  - 2025-26: positive (+0.002..+0.021, t 2-4), the usual bad-period-for-shorts pattern.
+  - Not forwarded. `short_bank_avg_study.py`, `data/study/short_bank_avg_report.txt`

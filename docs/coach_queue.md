@@ -145,6 +145,20 @@ full size at market (it shares the position's stop and runs to TP2).
   - **Shorts are about zero at every checkpoint.** This is a longs rule.
 - **Script / report:** `pipeline/day2_avg_add_study.py` (argv = checkpoint in H4 bars), `data/study/day2_avg_add_report.txt` and
   `avg_add_bar{6,18,24,30}_report.txt`.
+- **Alternative trigger: IMPROVING longs (added 2026-10-03).** At day 2, add +50% to a long whose second-day average beats its
+  first-day average (delta = day-2 average - day-1 average). `pipeline/trend_of_avg_study.py`, `data/study/trend_of_avg_report.txt`:
+
+  | trigger (longs) | adds | 2012-24 vs base | worst DD | 2025-26 vs base | R per R of DD (2012-24) |
+  |---|---|---|---|---|---|
+  | improving, delta > 0 | 517 | **+0.023 (t 3.2)** | 31.9 | +0.013 | 11.9 |
+  | improving, delta > +0.5R | 230 | +0.015 (t 2.8) | 29.5 | +0.015 | 12.2 |
+  | C: 48h average > +1R | 111 | +0.008 (t 2.1) | 26.6 | +0.006 | 12.8 |
+  | C and improving | 105 | +0.006 | 26.6 | +0.006 | 12.7 |
+
+  - **"Improving" earns about 3x C's R** with the strongest t of any rule in this queue, and it is positive in both periods.
+  - **But it adds to many more trades** (517 vs 111), so drawdown rises (27.4 -> 31.9R). Return per unit of drawdown is a little
+    below C's.
+  - **The choice:** C is the drawdown-efficient version, improving is the return-maximising one.
 - **Ask:** pre-register "+50% at day 2 when the 48h average > +1R" (longs only, or both sides) and run an EA reproduction.
 
 ## 4. The three rules together (added 2026-10-02)
