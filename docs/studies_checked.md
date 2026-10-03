@@ -30,3 +30,10 @@ nothing is re-run by accident and the coach can see what was tried.
   - Too late to act: by day 5 the stalled trades left are the ones that recover often enough. Not forwarded.
   - `day3_weak_study.py 30 <bar>`, `data/study/weak_bar30_{0.25,0.5,0.75,1}_report.txt`
 - **Gate decision-time grid (12-72h):** withdrawn by the trader, because the add is fixed at 24h by design. `gate_grid_study.py`
+- **Day 4, stop to +0.25R** (all open trades, closed at market if already below; or only if price > +1R; or only if the average
+  since entry > +1R).
+  - 2012-24, all trades: -0.035 (t -2.6) / -0.015 / -0.011.
+  - 2025-26: -0.015 / -0.033 / -0.007.
+  - Longs pay all of it. Shorts are about 0, as most are already at +0.25R from the live shorts rule. Many trades are helped,
+    but the few hurt are TP2 misses worth several R.
+  - Not forwarded. `day4_raise_study.py`, `data/study/day4_raise_report.txt`
