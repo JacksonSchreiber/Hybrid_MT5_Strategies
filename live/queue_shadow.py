@@ -50,9 +50,9 @@ def _rule_a(sym, rs, first, sg, R):
     if full <= l1: return None, "no add size"
     t6 = _ts(first.get("signal_time"))
     if not t6: return None, "no signal time"
-    h4 = [b for b in (mt5feed.bars_range(sym, "h4", t6 + 6 * 14400 - 60, t6 + 6 * 14400 + 60) or []) if int(b[0]) == t6 + 6 * 14400]
-    if not h4: return None, "no bar-6 bar in the feed"
-    add_px = float(h4[0][4]); e1 = _f(first.get("entry")); s1 = _f(first.get("sl"))
+    h4 = [b for b in (mt5feed.bars_range(sym, "h4", t6, t6 + 14 * 86400) or []) if int(b[0]) >= t6]   # bar counting (weekends have no bars)
+    if len(h4) < 7: return None, "bar 6 not in the feed yet"
+    add_px = float(h4[6][4])                                                                  # the close of bar signal+6; e1 = _f(first.get("entry")); s1 = _f(first.get("sl"))
     fin = _f(first.get("exit_price"))
     if None in (e1, s1, fin): return None, "first tranche incomplete"
     pf = _f(first.get("partial_frac")) or 0.0

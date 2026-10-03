@@ -24,6 +24,7 @@ from pipeline.exit_s025_study import load, DRAG                  # noqa: E402
 D = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "study", "queue_repro")
 f = lambda x: float(x) if x not in (None, "") else None
 RULES = {"A": "A", "B": "B", "I": "I"}
+K.BANKF = dict(K.BANKF, DeepFib=0.5)          # the TESTER banks every non-TrendCont detector at 50% (InpTcBankFrac is TrendCont-only)
 
 
 def journal(p):

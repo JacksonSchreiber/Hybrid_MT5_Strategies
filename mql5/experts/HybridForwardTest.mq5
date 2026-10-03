@@ -6342,7 +6342,16 @@ double AvgRSince(int i,datetime t0,datetime t1)
    double sum=0.0; for(int k=0;k<n;k++) sum+=c[k];
    return (sum/n-e)*g_rows[i].direction/r;
   }
-bool QueueRuleRow(int i){ return !(g_rows[i].strategy=="Inverse" || g_rows[i].strategy=="ADOPTED" || g_rows[i].strategy=="TEST"); }   // the studies' population
+//--- the studies' population: not Inverse / ADOPTED / TEST, not a re-offered card (item 26) and not an entry filled after the entry bar
+//--- (a delayed decision recomputes the card at reopen - the AA studies have neither, so the averages would measure something else)
+bool QueueRuleRow(int i)
+  {
+   if(g_rows[i].strategy=="Inverse" || g_rows[i].strategy=="ADOPTED" || g_rows[i].strategy=="TEST") return false;
+   if(g_rows[i].ro==1) return false;
+   datetime ft=(g_rows[i].st_fill_time>0 ? g_rows[i].st_fill_time : g_rows[i].placed_time), b2=BarOpen(i,2);
+   if(ft>0 && b2>0 && ft>=b2) return false;
+   return true;
+  }
 //--- the first tranche's bank trigger (same as ManageOpenPositions: +1R from the anchor, or TP1 when nearer)
 bool BankReached(int i)
   {
@@ -6363,7 +6372,7 @@ void Day2Tick()
    int nrows=ArraySize(g_rows);
    for(int i=0;i<nrows;i++)
      {
-      if(g_rows[i].d2_state!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) continue;
+      if((g_rows[i].d2_state!=0 && g_rows[i].d2_state!=5) || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) continue;   // 5 = cut waiting (trading disabled / close failed)
       if(!QueueRuleRow(i)) continue;
       if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending") || g_rows[i].posid<=0) continue;
       int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
@@ -6371,7 +6380,7 @@ void Day2Tick()
       int sid=g_rows[i].id; string tag=StringFormat("sig:%d",sid);
       bool open_any=false;
       for(int k=0;k<nrows;k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid)) open_any=true;
-      int st=2; changed=true;
+      int st=2;
       if(open_any && sh<=16)                                        // act within a day of the checkpoint (a late restart does not act on stale data)
         {
          datetime t0=BarOpen(i,1), t6=BarOpen(i,7), t12=BarOpen(i,13);   // entry-bar open, bar-6 close, bar-12 close
@@ -6380,11 +6389,22 @@ void Day2Tick()
             double av=AvgRSince(i,t0,t12);
             if(av!=AVG_NA && av<=g_cfg_short_cut)
               {
-               if(InpLiveMode && !g_trading_enabled) { AuditLine("day2_cut","","",tag,"skipped","trading_disabled",StringFormat("avg=%+.3f",av)); continue; }   // d2_state stays 0: retried next tick until bar 16
+               if(InpLiveMode && !g_trading_enabled)
+                 {   //--- retried every tick until bar 16; audited once
+                  if(g_rows[i].d2_state!=5) { AuditLine("day2_cut","","",tag,"waiting","trading_disabled",StringFormat("avg=%+.3f",av)); for(int k=0;k<nrows;k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) g_rows[k].d2_state=5; changed=true; }
+                  continue;
+                 }
                st=1;
                for(int k=0;k<nrows;k++)
                   if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid))
                      ManualClose(k,"DAY2_CUT");
+               bool left=false;
+               for(int k=0;k<nrows;k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid)) left=true;
+               if(left)
+                 {   //--- a close failed: not marked done - retried next tick (until bar 16), audited once
+                  if(g_rows[i].d2_state!=5) { AuditLine("day2_cut","","",tag,"waiting","close_failed",StringFormat("avg=%+.3f",av)); for(int k=0;k<nrows;k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) g_rows[k].d2_state=5; changed=true; }
+                  continue;
+                 }
                if(InpLiveMode) AuditLine("day2_cut","","",tag,"ok","",StringFormat("avg=%+.3f <= %.2f",av,g_cfg_short_cut));
                Print("Signal #",sid," DAY-2 SHORT CUT: 48h average ",DoubleToString(av,2),"R <= ",DoubleToString(g_cfg_short_cut,2),"R");
               }
@@ -6396,6 +6416,7 @@ void Day2Tick()
            }
         }
       for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) g_rows[k].d2_state=st;
+      changed=true;
      }
    if(changed) { WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions(); }
   }

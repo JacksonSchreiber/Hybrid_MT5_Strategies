@@ -638,7 +638,7 @@ class Monitor:
     def guard_error(self, name: str, e: Exception):
         """coach 2026-10-03 item 7: a guard module that fails (import error, crash) is ALERTED, not swallowed - once per name+error per day."""
         self.log(f"{name} error: {e!r}")
-        key = f"{name}|{type(e).__name__}|{str(e)[:80]}|{time.strftime('%Y-%m-%d')}"
+        key = f"{name}|{type(e).__name__}|{time.strftime('%Y-%m-%d')}"
         sent = self.st.setdefault("guard_err_sent", [])
         if key in sent: return
         self.st["guard_err_sent"] = (sent + [key])[-200:]
