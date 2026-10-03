@@ -4,6 +4,8 @@
   B  SHORT CUT   at the bar-12 close (~48h) a SHORT whose average since entry is not above +0.5R is closed (100%) at market.
   C  RUNNER ADD  at the bar-12 close a trade whose average since entry is above +1R gets +50% of the full size at market (shares
                  the stop, runs to TP2). Main = LONGS only; C* = both sides.
+  I  IMPROVING   (alternative to C, trader 2026-10-03) at the bar-12 close a LONG whose second-day average (bar-6 close -> bar-12
+                 close) beats its first-day average (entry -> bar-6 close) gets +50% of the full size at market.
 Averages: mean of every M1 bid close since entry, first tranche's 1R. Live stack otherwise (staged 25%/bar-6, bank per detector at
 +1R/TP1 -> stop to entry, pyramid 50% at +1.5R, shorts stop to +0.25R at +1.5R). Engine pipeline/ask_side_study (M1; SCALED =
 ask-corrected, BID = bid-only + DRAG). All four detectors, 7 symbols, pinned record; 2012-24 / 2025-26; full-position R; worst DD.
@@ -19,7 +21,7 @@ from pipeline.exit_s025_study import aa_rows                                # no
 from pipeline.inverse_study import BANKF                                    # noqa: E402
 
 MODES = ("SCALED", "BID"); SR = 0.25; GATE_LVL = 1.0; CUT_BAR = 0.5; ADD_BAR = 1.0; ADD_F = 0.5; CHK = 12
-COMBOS = ["base", "A", "B", "C", "C*", "A+B", "A+C", "B+C", "A+B+C", "A+B+C*"]
+COMBOS = ["base", "A", "B", "C", "C*", "I", "A+B", "A+C", "B+C", "A+B+C", "A+B+C*", "A+I", "B+I", "A+B+I"]
 REPORT = os.path.join(A.STUDY, "combo3_report.txt")
 
 
@@ -72,9 +74,13 @@ def trade(S, x, mode):
     cut = k if (avg2 is not None and not u["up"] and avg2 <= CUT_BAR) else None
     add_l = k if (avg2 is not None and u["up"] and avg2 > ADD_BAR) else None
     add_b = k if (avg2 is not None and avg2 > ADD_BAR) else None
+    add_i = None
+    if avg2 is not None and u["up"] and ka is not None and 0 <= ka < k:
+        if (cum[k] - cum[ka]) / (k - ka) > cum[ka] / (ka + 1): add_i = k
     args = (F, e0, be, u["bank_R"], u["tp2_R"], bankf, A.F0, ka, u["up"])
     spec = {"base": (False, None, None), "A": (gate, None, None), "B": (False, cut, None), "C": (False, None, add_l), "C*": (False, None, add_b),
-            "A+B": (gate, cut, None), "A+C": (gate, None, add_l), "B+C": (False, cut, add_l), "A+B+C": (gate, cut, add_l), "A+B+C*": (gate, cut, add_b)}
+            "A+B": (gate, cut, None), "A+C": (gate, None, add_l), "B+C": (False, cut, add_l), "A+B+C": (gate, cut, add_l), "A+B+C*": (gate, cut, add_b),
+            "I": (False, None, add_i), "A+I": (gate, None, add_i), "B+I": (False, cut, add_i), "A+B+I": (gate, cut, add_i)}
     out = {}
     for name, (g, c, a) in spec.items():
         r, units = run_v(*args, g, c, a)

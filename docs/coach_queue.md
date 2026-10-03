@@ -192,6 +192,20 @@ above +0.5R). C = entry 3 (day 2: 48h average > +1R adds +50%, longs only; C* = 
   - 2012-24: the sum of the three separate gains is +0.020 vs +0.017 together; 2025-26: +0.099 vs +0.098.
   - They act on different trades and moments: A on weak trades at 24h (withholds size), B on stalled shorts at 48h (exits), C on
     strong longs at 48h (adds size).
+- **With the improving trigger I in place of C (added 2026-10-03; I = day 2: second-day average > first-day average -> +50%,
+  longs):**
+
+  | package | 2012-24 vs base | t | worst DD | R / DD | 2025-26 vs base | worst DD | R / DD |
+  |---|---|---|---|---|---|---|---|
+  | A+B+C | +0.017 | 1.6 | 22.4 | 16.3 | +0.098 | 13.5 | 4.0 |
+  | **A+B+I** | **+0.032** | **2.6** | 23.5 | **17.3** | **+0.105** | 15.4 | 3.7 |
+
+  - **Inside the package, I's drawdown cost mostly disappears:** I alone takes drawdown to 31.9R, A+B+I to 23.5R, because A and
+    B cut the trades that drove it.
+  - **A+B+I nearly doubles A+B+C's 2012-24 gain** (+15% -> +28% on R per trade) at about the same drawdown, and has the better R
+    per unit of drawdown in 2012-24.
+  - **2025-26 is close:** A+B+I has more R; A+B+C slightly less drawdown.
+  - **Bid-only agrees on R** (+0.033 vs +0.019). Bid-only R/DD: 13.9 vs 14.5, slightly favouring C.
 - **C on longs only is better than on both sides** (shorts' adds are about zero and cost drawdown), consistent with the
   long-runner / short-take-profit picture.
 - **Caveats:**
