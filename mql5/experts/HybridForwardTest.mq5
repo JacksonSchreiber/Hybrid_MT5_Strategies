@@ -6251,18 +6251,18 @@ void StagedAddTick()
       if(g_rows[i].st_state==4 && promote!="manual_promote") promote="gate_1R";      // coach queue A: released at +1R
       if(promote=="") continue;                              // neither the early level nor the bar-N close yet
       changed=true;
+      if(g_rows[i].closed || !PositionSelectByTicket((ulong)g_rows[i].posid)) { StagedSkip(i,"position_closed"); continue; }
       if(promote=="bar"+IntegerToString(g_cfg_st_n) && g_cfg_add_gate && g_rows[i].st_state==1 && QueueRuleRow(i))
         {   //--- coach queue A: a weak trial (average R from the entry-bar open to the bar-N close below 0) holds the add until +1R
          double av=AvgRSince(i,BarOpen(i,1),BarOpen(i,g_cfg_st_n+1));
          if(av!=AVG_NA && av<ADD_GATE_AVG)
            {
             g_rows[i].st_state=4; g_rows[i].reject_why=StringFormat("add held: trial average %+.2fR < 0 - goes in at +1R",av);
-            if(InpLiveMode) AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"held","gate",StringFormat("avg=%+.3f posid=%I64d",av,g_rows[i].posid));
+            if(InpLiveMode) AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"held","trial_avg_below_0",StringFormat("avg=%+.3f posid=%I64d",av,g_rows[i].posid));
             Print("Signal #",g_rows[i].id," STAGED ADD HELD (gate): trial average ",DoubleToString(av,2),"R < 0");
             continue;
            }
         }
-      if(g_rows[i].closed || !PositionSelectByTicket((ulong)g_rows[i].posid)) { StagedSkip(i,"position_closed"); continue; }
       double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
       double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0) vmin=0.01;
       double add=NormalizeDouble(MathFloor((g_rows[i].st_full_lots-g_rows[i].lots)/step+1e-9)*step,2);
