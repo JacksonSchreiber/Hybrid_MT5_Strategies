@@ -193,3 +193,15 @@ Read-out, decided now:
   total size capped at 200% of full. None of the three acts on Inverse rows (not in the study population).
 - FX-only split of the original seven (data/study/combo3_class_report.txt): I on FX longs 2012-24 +0.023R (t 1.2, DD 16.2 -> 21.5),
   2025-26 -0.036R (t -0.9); I's edge sits in index longs (+0.055, t 2.9) and gold longs (+0.058).
+
+## Coach ruling 2026-10-03 (second) - pre-registered before the look
+- I: bar unchanged (new symbols: increment > 0 at t >= 1.5 AND a positive FX-long cell). If it fails, I is CLOSED - never narrowed to
+  indices/gold after the fact (the original-seven edge is index + gold longs = drift, the coach's concern).
+- A: if A's FX-short cell is negative on the new symbols too (original seven: -0.029R, t -2.0), A ships for LONGS ONLY. Other bars unchanged.
+- B: unchanged.
+- Accepted: I's spec, the average-R definition, the monitor guard alerts, no automatic retirement (counters report to the trader at n=30),
+  the double-bank fix (confirmed: no reproduction before item 25 was affected - bank/pyramid/promote/inverse repros ran 30 Sep - 1 Oct
+  01:10, before the bug landed 1 Oct 13:58; the pinned AA study journals pre-date staging; only the item-25 repro had it, in both arms -
+  its corrected increment comes from data/study/queue_repro/<SYM>_off vs _nosr).
+- Graders: touched signals are NOT excluded. Each counterfactual = the full live stack with only the grader's own rule off; every signal
+  is tagged with the rules that touched it (live/rule_tags.py -> web/rule_tags.csv + a 'rules' column on every grader file).
