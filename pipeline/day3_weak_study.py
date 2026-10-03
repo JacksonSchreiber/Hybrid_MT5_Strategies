@@ -18,9 +18,11 @@ from pipeline.exit_mgmt_study import load_rows, maxdd, paired_t             # no
 from pipeline.exit_s025_study import aa_rows                                # noqa: E402
 from pipeline.inverse_study import BANKF                                    # noqa: E402
 
-MODE = "SCALED"; SR = 0.25; CHK = 18; BAR = 0.5
+MODE = "SCALED"; SR = 0.25
+CHK = int(sys.argv[1]) if len(sys.argv) > 1 else 18             # checkpoint in H4 bars (18 = day 3, 30 = day 5)
+BAR = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5          # weak = average below this
 VARS = [(f"sell {int(f * 100)}%", "sell", f) for f in (1.0, 0.75, 0.5, 0.25)] + [(f"stop -> {l:+g}R", "stop", l) for l in (-0.5, -0.25, 0.0, 0.25)]
-REPORT = os.path.join(A.STUDY, "day3_weak_report.txt")
+REPORT = os.path.join(A.STUDY, "day3_weak_report.txt" if (CHK, BAR) == (18, 0.5) else f"weak_bar{CHK}_{BAR:g}_report.txt")
 
 
 def run_v(F, e0, be, bank_R, tp2_R, bankf, F0_, k_add, up, kc, act, p):
@@ -95,7 +97,7 @@ def main():
         b = [z[4]["base"] for z in zs]; mb = st.mean(b)
         wz = [z for z in zs if z[4]["weak"]]
         L.append(f"\n{'=' * 100}\n{'2012-24' if per == 'dev' else '2025-26'}: n={len(zs)}  base {mb:+.4f}R  worst DD {maxdd(b):.1f}R   "
-                 f"still open at day 3 with an average < +0.5R: {len(wz)} ({sum(1 for z in wz if z[3])} long / {sum(1 for z in wz if not z[3])} short)")
+                 f"still open at bar {CHK} (day {CHK // 6}) with an average < {BAR:+g}R: {len(wz)} ({sum(1 for z in wz if z[3])} long / {sum(1 for z in wz if not z[3])} short)")
         L.append(f"  {'rule':14} | {'ALL: vs base [t] / DD':>26} | {'LONGS only':>26} | {'SHORTS only':>26} | {'per weak trade L / S':>22}")
         for name, *_ in VARS:
             cells = []
