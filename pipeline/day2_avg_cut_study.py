@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """day2_avg_cut_study.py - trader 2026-10-02: cut trades whose 48-hour AVERAGE is weak. At the close of H4 bar 12 (2 trading days,
 ~48h after entry) the trade's average R over that time (mean of every M1 bid close from entry to that close, first tranche's 1R)
-is computed. If it is NOT above +0.5R, SELL X% of every open ticket at market (a short at the ask); the rest runs on under the
+is computed. If it is NOT above THR (argv[1]; default +0.5R), SELL X% of every open ticket at market (a short at the ask); the rest runs on under the
 live stack (the +1.5R pyramid still adds 50% of the ORIGINAL full size). X = 100 / 75 / 50 / 25%. Base = live (no cut).
 Live stack: staged 25%/bar-6, bank per detector at +1R/TP1 -> stop to entry, pyramid 50% at +1.5R, shorts stop to +0.25R at
 +1.5R. Engine pipeline/ask_side_study (M1; BID = bid-only + DRAG, SCALED = ask-corrected). All four detectors, 7 symbols, pinned
@@ -17,9 +17,10 @@ from pipeline.exit_mgmt_study import load_rows, maxdd, paired_t             # no
 from pipeline.exit_s025_study import aa_rows                                # noqa: E402
 from pipeline.inverse_study import BANKF                                    # noqa: E402
 
-MODES = ("BID", "SCALED"); SR = 0.25; BARS = 12; THR = 0.5
+MODES = ("BID", "SCALED"); SR = 0.25; BARS = 12
+THR = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5          # the 48h-average bar (trader: +0.5, then +0.25 and 0)
 VARS = [("base", None)] + [(f"sell {int(f * 100)}%", f) for f in (1.0, 0.75, 0.5, 0.25)]
-REPORT = os.path.join(A.STUDY, "day2_avg_cut_report.txt")
+REPORT = os.path.join(A.STUDY, "day2_avg_cut_report.txt" if THR == 0.5 else f"day2_avg_cut_{THR:g}_report.txt")
 
 
 def run_v(F, e0, be, bank_R, tp2_R, bankf, F0_, k_add, up, kc, frac):
@@ -93,7 +94,7 @@ def main():
             b = [z[4][md]["base"] for z in zs]
             wz = [z for z in zs if z[4][md]["weak"]]
             lines.append(f"\n[{md}] {'2012-24' if per == 'dev' else '2025-26'}: n={len(zs)}. Base {st.mean(b):+.4f}R, worst DD {maxdd(b):.1f}R. "
-                         f"Still open at day 2 with a 48h average <= +0.5R: {len(wz)} ({sum(1 for z in wz if z[3])} long / {sum(1 for z in wz if not z[3])} short)")
+                         f"Still open at day 2 with a 48h average <= {THR:+g}R: {len(wz)} ({sum(1 for z in wz if z[3])} long / {sum(1 for z in wz if not z[3])} short)")
             lines.append(f"  {'rule':10} {'R/trade':>8} {'vs base':>8} {'t':>6} {'DD':>6} | {'on cut trades':>13} {'longs':>8} {'shorts':>8} {'helped/hurt':>11}")
             for name, _ in VARS[1:]:
                 v = [z[4][md][name] for z in zs]; d = [p - q for p, q in zip(v, b)]
@@ -102,6 +103,13 @@ def main():
                 dl = [z[4][md][name] - z[4][md]["base"] for z in wz if z[3]]; ds = [z[4][md][name] - z[4][md]["base"] for z in wz if not z[3]]
                 lines.append(f"  {name:10} {st.mean(v):+8.4f} {st.mean(d):+8.4f} {paired_t(b, v):+6.2f} {maxdd(v):6.1f} | "
                              f"{mm(dw):+13.4f} {mm(dl):+8.4f} {mm(ds):+8.4f} {sum(1 for e in dw if e > 1e-9):5d}/{sum(1 for e in dw if e < -1e-9):<5d}")
+            for side, lab in ((False, "SHORTS ONLY"), (True, "LONGS ONLY")):        # the rule applied to one side, the other at base
+                lines.append(f"  -- rule on {lab} (account R and DD; the other side at base)")
+                for name, _ in VARS[1:]:
+                    v = [z[4][md][name] if z[3] == side else z[4][md]["base"] for z in zs]
+                    cz = [z for z in wz if z[3] == side]; dc = [z[4][md][name] - z[4][md]["base"] for z in cz]
+                    lines.append(f"  {name:10} {st.mean(v):+8.4f} {st.mean(v) - st.mean(b):+8.4f} {paired_t(b, v):+6.2f} {maxdd(v):6.1f} | cut {len(cz):4d}  "
+                                 f"helped/hurt {sum(1 for e in dc if e > 1e-9)}/{sum(1 for e in dc if e < -1e-9)}")
     open(REPORT, "w").write("\n".join(lines) + "\n"); print("\n".join(lines))
 
 

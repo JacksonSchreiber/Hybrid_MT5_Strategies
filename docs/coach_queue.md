@@ -48,6 +48,20 @@ close it at market (longs untouched).
 
 - **Population:** 252 shorts cut in 2012-24 (helped 193 / hurt 59) and 30 in 2025-26 (27 / 3).
 - **The same rule on ALL trades loses** in 2012-24 (-0.039R, t -2.3): cutting weak longs costs -0.28R each.
+- **Threshold sweep (added 2026-10-02),** close 100% of shorts whose 48h average is not above the bar:
+
+  | bar | 2012-24 vs base | worst DD | 2025-26 vs base | shorts cut (dev / hold) |
+  |---|---|---|---|---|
+  | 0R | -0.0105 (t -1.6) | 27.9 | +0.010 | 108 / 7 |
+  | +0.25R | -0.0008 | 25.2 | +0.053 (t 3.9) | 193 / 22 |
+  | +0.5R | +0.006 | 22.2 | +0.078 (t 4.8) | 252 / 30 |
+
+  - **The gain rises steadily with the bar, in both periods** (no zig-zag). It comes from closing shorts that are only *mildly*
+    positive (48h average +0.25..+0.5R), i.e. banking a modest gain early. Cutting deep losers (average < 0) at day 2 costs
+    money: they recover often enough.
+  - **Longs-only loses at every bar** (0R: -0.017, +0.25R: -0.042, +0.5R: -0.04 in 2012-24).
+  - The +0.5R bar was the first one tried; a higher bar (+0.75, +1R) is the natural next probe.
+  - Reports: `data/study/day2_avg_cut_{0,0.25}_report.txt`.
 - **Script:** `pipeline/day2_avg_cut_study.py`. The shorts-only cut was computed from the same engine on 2026-10-02.
 
 **b) Supporting results (all point the same way):**
