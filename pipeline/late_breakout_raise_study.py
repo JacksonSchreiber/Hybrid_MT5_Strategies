@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """late_breakout_raise_study.py - trader 2026-10-02: protect LATE BREAKOUTS. At the close of H4 bar 6T (T = 1..5 trading days), a
-trade still open whose average R since entry (mean of every M1 bid close) is BELOW 0 while its price (bid close) is ABOVE +1R gets
+trade still open whose average R since entry (mean of every M1 bid close) is BELOW 0 while its price (bid close) is ABOVE PX (argv; +1R
+default) gets
 every ticket's stop raised to +0.25R (tighten-only). Base = live (staged 25%/bar-6, bank per detector at +1R/TP1 -> stop to
 entry, pyramid 50% at +1.5R, shorts stop to +0.25R at +1.5R). Engine pipeline/ask_side_study, SCALED. All four detectors, 7
 symbols, pinned record; 2012-24 / 2025-26; all / longs / shorts; full-position R; worst DD.
@@ -17,7 +18,8 @@ from pipeline.inverse_study import BANKF                                    # no
 from pipeline.day3_weak_study import run_v                                  # noqa: E402
 
 MODE = "SCALED"; TS = (1, 2, 3, 4, 5); LVL = 0.25
-REPORT = os.path.join(A.STUDY, "late_breakout_raise_report.txt")
+PX = float(sys.argv[1]) if len(sys.argv) > 1 else 1.0           # the price must be above this (trader: +1, then +0.25 / +0.5 / +0.75R)
+REPORT = os.path.join(A.STUDY, "late_breakout_raise_report.txt" if PX == 1.0 else f"late_breakout_raise_px{PX:g}_report.txt")
 
 
 def trade(S, x):
@@ -30,7 +32,7 @@ def trade(S, x):
     for T in TS:
         ib = u["i0"] + 6 * T
         k = (int(np.searchsorted(S.t, S.h4t[ib])) - u["k0"] - 1) if ib < len(S.h4) else None
-        hit = k is not None and 0 <= k < F["n"] and cum[k] / (k + 1) < 0 and F["bc"][k] > 1.0
+        hit = k is not None and 0 <= k < F["n"] and cum[k] / (k + 1) < 0 and F["bc"][k] > PX
         out[T] = run_v(*args, k, "stop", LVL)[0] if hit else out["base"]
         out[("hit", T)] = hit and out[T] != out["base"]
         out[("q", T)] = hit

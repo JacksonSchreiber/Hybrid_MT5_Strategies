@@ -19,10 +19,10 @@ from pipeline.exit_s025_study import aa_rows                                # no
 from pipeline.inverse_study import BANKF                                    # noqa: E402
 
 MODE = "SCALED"; SR = 0.25
-CHK = int(sys.argv[1]) if len(sys.argv) > 1 else 18             # checkpoint in H4 bars (18 = day 3, 30 = day 5)
-BAR = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5          # weak = average below this
+CHK = 18; BAR = 0.5             # checkpoint in H4 bars (18 = day 3, 30 = day 5) and the weak bar; argv overrides in main() only
+                                # (other studies import run_v from here - module import must not read their argv)
 VARS = [(f"sell {int(f * 100)}%", "sell", f) for f in (1.0, 0.75, 0.5, 0.25)] + [(f"stop -> {l:+g}R", "stop", l) for l in (-0.5, -0.25, 0.0, 0.25)]
-REPORT = os.path.join(A.STUDY, "day3_weak_report.txt" if (CHK, BAR) == (18, 0.5) else f"weak_bar{CHK}_{BAR:g}_report.txt")
+REPORT = None
 
 
 def run_v(F, e0, be, bank_R, tp2_R, bankf, F0_, k_add, up, kc, act, p):
@@ -86,7 +86,10 @@ def do_symbol(sym):
 
 
 def main():
-    global ALL
+    global ALL, CHK, BAR, REPORT
+    if len(sys.argv) > 1: CHK = int(sys.argv[1])
+    if len(sys.argv) > 2: BAR = float(sys.argv[2])
+    REPORT = os.path.join(A.STUDY, "day3_weak_report.txt" if (CHK, BAR) == (18, 0.5) else f"weak_bar{CHK}_{BAR:g}_report.txt")
     T0 = time.time()
     ALL = sorted([dict(x, strat="TrendCont") for x in load_rows()] + [x for x in aa_rows({"SweepMSS", "DeepFib", "EMArevQ"}) if x["sym"] != "BTCUSD.dk"],
                  key=lambda x: x["t"])

@@ -40,3 +40,9 @@ nothing is re-run by accident and the coach can see what was tried.
 - **Late breakout: average since entry < 0 but price > +1R -> stop to +0.25R** (checked at days 1-5).
   - It almost never happens on a trade that is still open: 0-2 trades changed per checkpoint in 2012-24, 0 in 2025-26.
   - Effect +0.0000..+0.0003R. No signal either way. `late_breakout_raise_study.py`, `data/study/late_breakout_raise_report.txt`
+- **Same, with price > +0.25 / +0.5 / +0.75R** (average < 0 -> stop +0.25R, days 1-5).
+  - Rare: 1-35 trades changed per cell in 2012-24, 0-3 in 2025-26.
+  - Mostly small negatives in 2012-24: worst -0.008R at +0.25R / day 3, where the hurt trades average -1.06R each because the
+    tight stop cuts recoveries. Day 1 / price > +0.5R is +0.001 on 9 trades.
+  - Longs pay; shorts are about 0. Nothing usable.
+  - `late_breakout_raise_study.py <price>`, `data/study/late_breakout_raise_px{0.25,0.5,0.75}_report.txt`
