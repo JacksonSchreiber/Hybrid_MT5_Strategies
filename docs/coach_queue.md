@@ -29,25 +29,7 @@ add enters with the stop moving to entry).
   rule, so a real-tick EA reproduction is needed before any number counts. The EA already has the parts (staged add, a
   level-triggered promote).
 - **Script / report:** `pipeline/trial_avg_gate_study.py`, `data/study/trial_avg_gate_report.txt`.
-- **Timing/bar grid (added 2026-10-02;** `pipeline/gate_grid_study.py`, `data/study/gate_grid_report.txt`). Decision at
-  12/24/36/48/72h; average below -0.25/0/+0.25/+0.5R holds the add until +1R; change in R/trade vs base (2012-24 | 2025-26):
-
-  | decision | avg < -0.25R | avg < 0R | avg < +0.25R | avg < +0.5R |
-  |---|---|---|---|---|
-  | 12h | +0.000 \| +0.011 | **+0.009 (t 1.4) \| -0.001** | +0.009 \| -0.007 | +0.009 \| +0.002 |
-  | 24h | -0.000 \| +0.002 | **+0.006 (t 1.1) \| +0.015** | -0.003 \| -0.011 | -0.003 \| +0.000 |
-  | 36h | -0.010 \| -0.019 | -0.009 \| -0.012 | -0.016 \| -0.025 | -0.012 \| -0.017 |
-  | 48h | -0.005 \| -0.030 | -0.009 \| -0.024 | -0.013 \| -0.023 | -0.014 \| -0.022 |
-  | 72h | -0.024 \| -0.072 | -0.026 \| -0.066 | -0.025 \| -0.051 | -0.028 \| -0.042 |
-
-  - **A bar at 0R is the sweet spot.** Gating at +0.25R or +0.5R holds back too many eventual winners, and drawdown rises to
-    31-36R.
-  - **The decision must come early (12-24h).** From 36h on every cell loses. The "add delayed, no gate" reference shows why:
-    simply adding later costs -0.005 to -0.024R, and the gate cannot buy that back.
-  - **24h / avg < 0 stays the most robust cell:** it is the only one positive in both periods with lower drawdown in both
-    (25.9 / 15.8R). 12h / avg < 0 is slightly better in 2012-24 (+0.009) but flat in 2025-26.
-  - Longs and shorts both gain at 24h/0 in 2012-24 (+0.003 / +0.003 per account trade).
-- **Ask:** pre-register "24h, average < 0, hold until +1R" as the single variant, with a bar, then run the EA reproduction.
+- **Ask:** pre-register "+1R" as the single variant, with a bar, then run the EA reproduction.
 
 ## 2. Shorts: take profit fast (the pattern behind several results; added 2026-10-02)
 
