@@ -46,3 +46,10 @@ nothing is re-run by accident and the coach can see what was tried.
     tight stop cuts recoveries. Day 1 / price > +0.5R is +0.001 on 9 trades.
   - Longs pay; shorts are about 0. Nothing usable.
   - `late_breakout_raise_study.py <price>`, `data/study/late_breakout_raise_px{0.25,0.5,0.75}_report.txt`
+- **Average < +0.25R and price > +0.5 / +0.75 / +1R -> stop to breakeven or +0.25R** (days 1-5).
+  - Days 2-5 mostly small negatives in 2012-24 (longs pay; shorts slightly positive in every cell, +0.000..+0.002).
+  - Price > +1R with stop to breakeven never changes anything: those trades are banked and already at breakeven.
+  - The one consistent cell is **day 1 (the bar-6 close), price > +0.5R, stop to +0.25R**: 2012-24 +0.0048 (t 1.4), 48 trades
+    changed (44 helped / 4 hurt), drawdown 27.4 -> 28.3; 2025-26 +0.013 on 5 trades. Shorts t 2.8 within it. Small, and picked
+    from a 30-cell grid. Not forwarded unless the trader asks.
+  - `late_breakout_raise_study.py <price> 0.25 <stop>`, `data/study/late_breakout_px*_avg0.25_sl*_report.txt`
