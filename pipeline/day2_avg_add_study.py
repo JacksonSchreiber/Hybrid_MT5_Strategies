@@ -17,10 +17,11 @@ from pipeline.exit_mgmt_study import load_rows, maxdd, paired_t             # no
 from pipeline.exit_s025_study import aa_rows                                # noqa: E402
 from pipeline.inverse_study import BANKF                                    # noqa: E402
 
-MODE = "SCALED"; SR = 0.25; BARS = 12; AVG = 1.0; FRACS = (0.25, 0.5, 0.75, 1.0)
+MODE = "SCALED"; SR = 0.25; AVG = 1.0; FRACS = (0.25, 0.5, 0.75, 1.0)
+BARS = int(sys.argv[1]) if len(sys.argv) > 1 else 12            # checkpoint in H4 bars (12 = day 2; trader also asked 6..30)
 CONS = [("any price", lambda p: True), ("price 0..+1R", lambda p: 0.0 <= p < 1.0), ("price +1..+2R", lambda p: 1.0 <= p < 2.0),
         ("price < +2R", lambda p: p < 2.0)]
-REPORT = os.path.join(A.STUDY, "day2_avg_add_report.txt")
+REPORT = os.path.join(A.STUDY, "day2_avg_add_report.txt" if BARS == 12 else f"avg_add_bar{BARS}_report.txt")
 
 
 def run_v(F, e0, be, bank_R, tp2_R, bankf, F0_, k_add, up, ka2, frac):

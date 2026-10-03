@@ -129,6 +129,20 @@ full size at market (it shares the position's stop and runs to TP2).
   - It is a size increase, so its risk shows in the FTMO headroom, not just in R.
   - The same family as the bigger-trial-pyramid and promote-fast-starters results: more size on winners earns more. This
     version is the most drawdown-efficient seen so far.
-- **Script / report:** `pipeline/day2_avg_add_study.py`, `data/study/day2_avg_add_report.txt`.
-- **Ask:** low priority. If the coach wants a long-side sizing study, "+50% at day 2 when the 48h average > +1R" is the
-  candidate, longs only.
+- **Checkpoint sweep, days 1-5** (+50%, average > +1R, any price; change vs base, 2012-24 | 2025-26):
+
+  | checkpoint | all trades | worst DD (2012-24) | longs only | shorts only |
+  |---|---|---|---|---|
+  | day 1 | +0.005 \| -0.001 | 28.0 | +0.005 \| -0.002 | +0.000 \| +0.002 |
+  | **day 2** | **+0.010 (t 2.2) \| +0.000** | **26.1** | **+0.008 (t 2.1) \| +0.006** | +0.002 \| -0.006 |
+  | day 3 | +0.005 \| +0.008 | 29.2 | +0.004 \| +0.008 | +0.001 \| -0.001 |
+  | day 4 | +0.006 \| +0.004 | 30.5 | +0.006 \| +0.008 | -0.001 \| -0.004 |
+  | day 5 | +0.007 \| +0.004 | 32.3 | +0.009 (t 2.4) \| +0.001 | -0.002 \| +0.003 |
+
+  - **Positive at every checkpoint in 2012-24, and mostly positive in 2025-26 for longs**, so day 2 is not a lucky pick of the
+    timing. Day 2 is the best balance: the strongest t, and the only checkpoint where drawdown falls (later checkpoints add on
+    trades that are about to finish, and drawdown rises to 29-32R).
+  - **Shorts are about zero at every checkpoint.** This is a longs rule.
+- **Script / report:** `pipeline/day2_avg_add_study.py` (argv = checkpoint in H4 bars), `data/study/day2_avg_add_report.txt` and
+  `avg_add_bar{6,18,24,30}_report.txt`.
+- **Ask:** pre-register "+50% at day 2 when the 48h average > +1R" (longs only, or both sides) and run an EA reproduction.
