@@ -143,7 +143,8 @@ input double InpShortRaiseR      = 0.0;    // TESTER study (coach item 25): SELL
 input bool   InpAddGate          = false;  // TESTER study (coach queue A): trial average < 0 at the bar-6 add holds the add until +1R
 input double InpShortCutAvg      = 0.0;    // TESTER study (coach queue B): SELL closed at the bar-12 close if its average R <= this (0 = off; queue: 0.5)
 input double InpImprovingAdd     = 0.0;    // TESTER study (coach queue I): BUY whose day-2 average > day-1 average adds this share of full size at the bar-12 close (0 = off; queue: 0.5)
-input bool   InpSelfTestReoffer  = false;  // SELF-TEST only (coach item 26): every fresh signal is "spread-refused" (held), then re-offered next poll
+input bool   InpSelfTestReoffer  = false;
+input bool   InpSelfTestQueue    = false;  // live self-test (tester only): coach queue A/B/I all ON (staged_add_gate 1, short_day2_cut_avg 0.5, improving_add_frac 0.5)  // SELF-TEST only (coach item 26): every fresh signal is "spread-refused" (held), then re-offered next poll
 input bool   InpSelfTestStaged   = false;
 input int    InpSelfTestStagedN  = 6;      // TESTER ONLY: the add bar for the staged self-test (1 = add at the first bar close, so the path is exercised)  // TESTER ONLY: run the live self-test with staged entry on (coach item 18 check)
 input bool   InpLiveSelfTest     = false;  // LIVE self-test (TESTER ONLY): in-EA scripted task driver + assertions
@@ -898,6 +899,7 @@ void LiveLoadConfig(bool bootstrap=true)
       if(g_cfg_election_days<0) g_cfg_election_days=0;
       if(g_cfg_max_age_bars<1)  g_cfg_max_age_bars=1;
      }
+   if(InpLiveSelfTest && InpSelfTestQueue && (bool)MQLInfoInteger(MQL_TESTER)) { g_cfg_add_gate=true; g_cfg_short_cut=0.5; g_cfg_impr_add=0.5; }   // coach queue self-test
    if(InpLiveSelfTest && InpSelfTestStaged && (bool)MQLInfoInteger(MQL_TESTER)) { g_cfg_staged=true; g_cfg_st_n=MathMax(1,InpSelfTestStagedN); }   // coach item 18 self-test
    if(InpLiveSelfTest && InpPyramid && (bool)MQLInfoInteger(MQL_TESTER)) g_cfg_pyr=true;                 // coach item 20 self-test
    if(InpLiveSelfTest && InpSelfTestReoffer && (bool)MQLInfoInteger(MQL_TESTER)) g_cfg_reoffer=true;     // coach item 26 self-test

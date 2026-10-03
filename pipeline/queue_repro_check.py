@@ -43,9 +43,11 @@ def journal(p):
         full = f(first.get("full_lots")) or f(first["lots"])
         tot = sum(f(r["r_multiple"]) * (f(r["lots"]) / full if full and f(r["lots"]) else 1.0) for r in rs)
         rj = first.get("reject_reason") or ""
+        em = [r.get("entry_mode") or "" for r in rs]
         out[k] = {"tot": tot, "up": first["direction"].upper().startswith("B"), "first": first,
-                  "held": ("add held" in rj or "held (gate)" in rj), "cut": any(r.get("posid") in acts for r in rs),
-                  "impr": any(r.get("tranche") == "4" for r in rs)}
+                  # the tester journal has no reject_reason column: a held add shows as a +1R release, or (vs the off run) a missing bar-6 add
+                  "held": ("add held" in rj or "held (gate)" in rj or "staged_add_gate_1R" in em), "bar6": "staged_add_bar6" in em,
+                  "cut": any(r.get("posid") in acts for r in rs), "impr": any(r.get("tranche") == "4" for r in rs)}
     return out
 
 
@@ -69,7 +71,9 @@ def study(sym, sigs):
         avg2 = cum[kk] / (kk + 1) if (kk is not None and 0 <= kk < n) else None
         cut = avg2 is not None and not u["up"] and avg2 <= K.CUT_BAR
         impr = bool(avg2 is not None and u["up"] and ka is not None and 0 <= ka < kk and (cum[kk] - cum[ka]) / (kk - ka) > cum[ka] / (ka + 1))
-        out[k] = {"res": res, "held": gate, "cut": cut, "impr": impr}
+        # a trigger counts only if the trade was still open at the checkpoint, i.e. the rule changed the trade's result
+        ch = lambda rule: abs(res[rule] - res["base"]) > 1e-9
+        out[k] = {"res": res, "held": gate and ch("A"), "cut": cut and ch("B"), "impr": impr and ch("I")}
     return out
 
 
@@ -88,6 +92,9 @@ for sym in (sys.argv[1:] or ["EURUSD.dk", "US100.dk"]):
         p1 = os.path.join(D, f"{sym}_{rule}.csv")
         if not os.path.exists(p1): print(f"  {rule}: journal missing"); continue
         ON = journal(p1); both = sorted(set(OFF) & set(ON) & set(STU))
+        if rule == "A":
+            for k in both:
+                if OFF[k]["bar6"] and not ON[k]["bar6"]: ON[k]["held"] = True
         ea_d = [ON[k]["tot"] - OFF[k]["tot"] for k in both]
         st_d = [STU[k]["res"][rule] - STU[k]["res"]["base"] for k in both]
         ea_f = {k for k in both if ON[k][flag]}; st_f = {k for k in both if STU[k][flag]}
