@@ -106,3 +106,29 @@ top helped, double the hurt) before running it. Then an EA reproduction for whic
 - **Ask:** if the coach wants one short-side rule pre-registered, "shorts: close at the day-2 close if the 48h average is not above
   +0.5R" is the cell to fix (it was also the first one tried, not picked from the grid). Run it with the add gate as a pair, with
   an EA reproduction.
+
+## 3. Add to proven runners at day 2 (added 2026-10-02)
+
+**Rule.** At the close of H4 bar 12 (~48h), if the trade is still open and its average R since entry is above +1R, add X% of the
+full size at market (it shares the position's stop and runs to TP2).
+
+| add | 2012-24 vs base | worst DD | 2025-26 vs base | worst DD |
+|---|---|---|---|---|
+| +25% | +0.005 (t 2.2) | 26.7 | +0.000 | 21.9 |
+| **+50%** | **+0.010 (t 2.2)** | **26.1** | +0.000 | 23.4 |
+| +75% | +0.015 | 27.7 | +0.000 | 24.9 |
+| +100% | +0.020 | 30.0 | +0.000 | 26.4 |
+
+- **Population:** 165 adds in 2012-24 (111 long / 54 short); 23 in 2025-26.
+- **The gain is mostly LONGS** (t 2.1); shorts add +0.001-0.003, about nothing.
+- **Price constraint at the moment of the add:** requiring price below +2R (or +1..+2R, or 0..+1R) roughly halves the gain. The
+  value is in adding to trades that are averaging above +1R AND still running above +2R, i.e. the strongest runners.
+- **Drawdown:** +50% is the best cell (27.4 -> 26.1R). Above that, drawdown climbs.
+- **Caveats:**
+  - 2025-26 is flat on only 23 adds, so there is no holdout support.
+  - It is a size increase, so its risk shows in the FTMO headroom, not just in R.
+  - The same family as the bigger-trial-pyramid and promote-fast-starters results: more size on winners earns more. This
+    version is the most drawdown-efficient seen so far.
+- **Script / report:** `pipeline/day2_avg_add_study.py`, `data/study/day2_avg_add_report.txt`.
+- **Ask:** low priority. If the coach wants a long-side sizing study, "+50% at day 2 when the 48h average > +1R" is the
+  candidate, longs only.
