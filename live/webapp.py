@@ -94,7 +94,7 @@ RPATHS_CSS = """
 .rp-ctls{padding:10px 12px}.rp-ctl{margin:6px 0}.rp-lbl{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:0 0 4px}
 .rp-q{display:inline-block;width:15px;height:15px;line-height:15px;text-align:center;border-radius:50%;background:#21262d;color:var(--dim);font-size:10px;cursor:help;text-transform:none}
 .rp-seg{display:flex;flex-wrap:wrap;gap:4px}.rp-seg button{background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:14px;cursor:pointer}
-.rp-seg button.on{background:#1f3b5c;border-color:#3987e5;color:#fff;font-weight:600}.rp-seg button:disabled{opacity:.35;cursor:not-allowed}
+.rp-seg button.on{background:#1f3b5c;border-color:#3987e5;color:#fff;font-weight:600}.rp-seg button.part{border-color:#3987e5;border-style:dashed}.rp-groups button i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:0}.rp-seg button:disabled{opacity:.35;cursor:not-allowed}
 .rp-tog{background:#0d1117;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:14px;cursor:pointer}.rp-tog.on{color:#fff;border-color:#8b949e;background:#21262d}
 .rp-more summary{cursor:pointer;margin:8px 0 2px}.rp-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px}@media(max-width:700px){.rp-grid{grid-template-columns:1fr}}
 .rp-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.rp-tile{display:flex;gap:10px;align-items:flex-start;margin:0}
@@ -129,6 +129,11 @@ WIKI_CSS = """
 .wk .note{color:var(--dim);font-size:13px;margin-top:10px}
 .wk details{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-top:10px}
 .wk details summary{cursor:pointer;font-weight:600}.wk details li{margin:5px 0;font-size:14px}.wk details li span{color:var(--dim)}
+.wk .grp{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.wk .grp .r{display:grid;grid-template-columns:minmax(150px,200px) 1fr;gap:4px 16px;padding:10px 14px;border-top:1px solid var(--line)}.wk .grp .r:first-child{border-top:0}
+.wk .grp .n{font-weight:600;display:flex;align-items:flex-start;gap:8px;grid-row:span 2}.wk .grp .n i{margin-top:6px}.wk .grp .n i{width:10px;height:10px;border-radius:50%;background:var(--c);flex:none}
+.wk .grp .sy{font-size:13px;font-variant-numeric:tabular-nums}.wk .grp .h{grid-column:2;color:var(--dim);font-size:13px}
+@media(max-width:600px){.wk .grp .r{grid-template-columns:1fr}.wk .grp .n{grid-row:auto}.wk .grp .h{grid-column:1}}
 """
 
 WIKI_STRATEGIES = [
@@ -168,14 +173,13 @@ WIKI_RAILS = [("Risk ladder", "0.10% / 0.25% / full size per trade, set by FTMO 
 
 WIKI_PENDING = [
     ("Hold the add until a weak trade proves itself", "If a trade's average over its first 24 hours is below 0R, the 75% add waits until price reaches +1R.",
-     "+0.006R a trade, less drawdown in both periods"),
+     "passed on 6 symbols never used in development: +0.008R a trade, drawdown 170 -> 145R"),
     ("Shorts: close stalled ones at day 2", "A short whose average over 48 hours isn't above +0.5R is closed.",
-     "Worst drawdown 27.4 -> 22.2R at no cost over 13 years; strongly positive in 2025-26"),
-    ("Longs: add to improving trades at day 2", "If a long's second day averages better than its first, add 50% more.",
-     "+0.023R a trade (the strongest single result)"),
+     "passed on the new symbols: +0.007R a trade, drawdown 170 -> 145R"),
 ]
 
 WIKI_DROPPED = [
+    ("Longs: add 50% to improving trades at day 2", "strongest result on the original seven, but it lost on the six new symbols (-0.004R) - closed by the coach's pre-registered rule"),
     ("Raising the stop after the bank", "every level and timing tested costs more than it saves - pullbacks on the way to TP2 get cut"),
     ("Cutting trades that are underwater after 1-5 days", "the ones that recover pay for the rest"),
     ("Selling part of the position at +1.5R", "each slice sold costs about 0.015R a trade"),
@@ -197,14 +201,20 @@ def wiki_page(q: dict) -> str:
     pend = "".join(f'<div class="pend"><h3>{E_(a)} <span class="star">*</span></h3><div>{E_(b)}</div><div class="note">Backtest: <span class="num">{E_(c)}</span></div></div>'
                    for a, b, c in WIKI_PENDING)
     dropped = "".join(f"<li><b>{E_(a)}</b> <span>- {E_(b)}</span></li>" for a, b in WIKI_DROPPED)
+    from live import symbol_groups as SG
+    groups = "".join(f'<div class="r" style="--c:{c}"><div class="n"><i></i>{E_(n)}</div><div class="sy">{E_(", ".join(sy))}</div><div class="h">{E_(h)}</div></div>'
+                     for _, n, c, sy, h in SG.GROUPS)
     body = (f'<style>{WIKI_CSS}</style><div class="wk">'
             f'<h1>Wiki</h1><p class="lead">The system on one page: what each strategy looks for, and what happens to every trade after you approve it.</p>'
             f'<h2>The strategies</h2><div class="grid">{cards}</div>'
             f'<h2>How every trade is managed</h2><div class="steps">{steps}</div>'
             f'<h2>Safety rails</h2><div class="rails">{rails}</div>'
+            f'<h2>Symbol groups</h2><div class="grp">{groups}</div>'
+            f'<div class="note">Proposed: the 49 symbols grouped by what drives their price. Each group will get its own tuning of the same strategies, '
+            f'after behaviour measures confirm the grouping. Toggle groups on the Data visualizers charts.</div>'
             f'<h2>Being studied</h2><div class="grid">{pend}</div>'
-            f'<div class="note"><span class="star" style="color:var(--warn)">*</span> Not live yet - tested on 13 years of history and waiting for the coach. '
-            f'Together the three add about +28% R per trade with about 14% less drawdown in the backtest.</div>'
+            f'<div class="note"><span class="star" style="color:var(--warn)">*</span> Built into the EA and switched off, waiting to go live. '
+            f'Together on the six new symbols: +0.016R a trade and a third less worst drawdown.</div>'
             f'<details><summary>Tried and dropped</summary><ul>{dropped}</ul></details></div>')
     return page("Wiki", body, "wiki")
 
@@ -222,6 +232,8 @@ def rpaths_merged() -> tuple[bytes, bytes]:
         lv = C.load_json(live_p, {}) or {}
         doc["trades"] = doc.get("trades", []) + (lv.get("trades") or [])
         doc["live_built"] = lv.get("built")
+        from live import symbol_groups as SG
+        doc["groups"] = SG.as_json()
         raw = json.dumps(doc, separators=(",", ":")).encode()
         _RP_CACHE.update(key=key, raw=raw, gz=gzip.compress(raw, 6))
     return _RP_CACHE["raw"], _RP_CACHE["gz"]

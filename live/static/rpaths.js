@@ -406,7 +406,8 @@
   function symList() {
     const orig = DATA.symbols_orig || [], part = DATA.partial || [], seen = new Map();
     DATA.trades.forEach(t => { if (!seen.has(t.s)) seen.set(t.s, { s: t.s, n: 0, hist: false }); const r = seen.get(t.s); r.n++; if (t.src !== "live") r.hist = true; });
-    return [...seen.values()].map(r => ({ ...r, orig: orig.includes(r.s), part: part.includes(r.s) }))
+    const grp = s => (DATA.groups || []).find(g => g.syms.includes(s)) || null;
+    return [...seen.values()].map(r => ({ ...r, orig: orig.includes(r.s), part: part.includes(r.s), grp: grp(r.s) }))
       .sort((a, b) => (b.orig - a.orig) || (b.hist - a.hist) || a.s.localeCompare(b.s));
   }
   function symbolControl() {
@@ -419,11 +420,25 @@
     [["All", x => true], ["Original 7", x => x.orig], ["New 9", x => x.hist && !x.orig], ["None", x => false]].forEach(([t, f]) => {
       const b = el("button", isSet(f) ? "on" : "", t); b.type = "button"; b.onclick = () => set(f); quick.appendChild(b); });
     wrap.appendChild(quick);
+    // groups (live/symbol_groups.py): a button turns every symbol of the group on or off; half-lit = some of it hidden
+    if ((DATA.groups || []).length) {
+      const gl = el("div", "rp-seg rp-groups"); gl.style.marginBottom = "4px";
+      DATA.groups.forEach(G => {
+        const mine = L.filter(x => G.syms.includes(x.s)), on = mine.filter(x => !state.hide.has(x.s)).length;
+        const b = el("button", on && on === mine.length ? "on" : on ? "part" : "", `<i style="background:${G.col}"></i>${G.name}${mine.length ? ` <span class="k">${on}/${mine.length}</span>` : ""}`);
+        b.type = "button"; b.title = G.how + (mine.length ? "" : " - no data yet") + " · " + G.syms.join(", ");
+        if (!mine.length) b.disabled = true;
+        b.onclick = () => { const all = on === mine.length; mine.forEach(x => all ? state.hide.add(x.s) : state.hide.delete(x.s)); saveHide(); state.brush = null; render(); };
+        gl.appendChild(b);
+      });
+      wrap.appendChild(gl);
+    }
     const g = el("div", "rp-seg");
     L.forEach(x => {
       const b = el("button", state.hide.has(x.s) ? "" : "on", x.s + (x.part ? "*" : "") + (x.hist ? "" : " (live)")); b.type = "button";
-      b.title = `${x.orig ? "original seven" : x.hist ? "new - never used in development" : "live trades only"} · ${x.n} trades${x.part ? " · partial years" : ""}`;
+      b.title = `${x.grp ? x.grp.name + " · " : ""}${x.orig ? "original seven" : x.hist ? "new - never used in development" : "live trades only"} · ${x.n} trades${x.part ? " · partial years" : ""}`;
       if (!x.orig && x.hist) b.style.borderStyle = "dashed";
+      if (x.grp) b.style.boxShadow = `inset 4px 0 0 ${x.grp.col}`;
       b.onclick = () => { state.hide.has(x.s) ? state.hide.delete(x.s) : state.hide.add(x.s); saveHide(); state.brush = null; render(); };
       g.appendChild(b);
     });
@@ -446,7 +461,7 @@
     rows.forEach(t => { if (!by.has(t.s)) by.set(t.s, []); by.get(t.s).push(t); });
     const st = [...by.entries()].map(([s, ts]) => {
       const b = ts.map(t => t.rb / 1000), a = ts.map(t => t.ra / 1000), sum = v => v.reduce((x, y) => x + y, 0), info = L.find(x => x.s === s) || {};
-      return { s, n: ts.length, orig: info.orig, part: info.part, y0: ts[0].dt.slice(0, 4), y1: ts[ts.length - 1].dt.slice(0, 4),
+      return { s, n: ts.length, orig: info.orig, part: info.part, grp: info.grp, y0: ts[0].dt.slice(0, 4), y1: ts[ts.length - 1].dt.slice(0, 4),
                bm: sum(b) / b.length, bt: sum(b), bd: maxDD(b), win: b.filter(x => x > 0).length / b.length, am: sum(a) / a.length, at: sum(a), ad: maxDD(a) };
     });
     // controls
@@ -476,9 +491,9 @@
     // table
     const d = el("details", "rp-table"); d.appendChild(el("summary", "k", "Table: every symbol shown"));
     const f3 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3), f1 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
-    let h = "<table><tr><th>symbol</th><th>years</th><th>trades</th><th>live R/trade</th><th>win%</th><th>live total</th><th>live DD</th><th>+ABI R/trade</th><th>+ABI total</th><th>+ABI DD</th><th>change</th></tr>";
+    let h = "<table><tr><th>symbol</th><th>group</th><th>years</th><th>trades</th><th>live R/trade</th><th>win%</th><th>live total</th><th>live DD</th><th>+ABI R/trade</th><th>+ABI total</th><th>+ABI DD</th><th>change</th></tr>";
     st.slice().sort((x, y) => (y.orig - x.orig) || (y.bm - x.bm)).forEach(r => {
-      h += `<tr><td>${r.orig ? "" : "<i>"}${r.s}${r.part ? "*" : ""}${r.orig ? "" : "</i>"}</td><td>${r.y0}–${r.y1}</td><td>${r.n}</td><td>${f3(r.bm)}</td><td>${(r.win * 100).toFixed(0)}%</td><td>${f1(r.bt)}</td><td>${r.bd.toFixed(1)}</td>` +
+      h += `<tr><td>${r.orig ? "" : "<i>"}${r.s}${r.part ? "*" : ""}${r.orig ? "" : "</i>"}</td><td>${r.grp ? r.grp.name : "–"}</td><td>${r.y0}–${r.y1}</td><td>${r.n}</td><td>${f3(r.bm)}</td><td>${(r.win * 100).toFixed(0)}%</td><td>${f1(r.bt)}</td><td>${r.bd.toFixed(1)}</td>` +
            `<td>${f3(r.am)}</td><td>${f1(r.at)}</td><td>${r.ad.toFixed(1)}</td><td class="${r.am >= r.bm ? "ok" : "bad"}">${f3(r.am - r.bm)}</td></tr>`;
     });
     d.appendChild(el("div", "rp-tablewrap", h + "</table>")); card.appendChild(d);
