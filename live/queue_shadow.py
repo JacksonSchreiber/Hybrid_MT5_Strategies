@@ -20,6 +20,11 @@ import csv, glob, os
 from datetime import datetime, timezone
 
 from live import common as C
+
+
+def _rule_tags(cfg):
+    from live import rule_tags
+    return rule_tags.tags_for(cfg)
 from live import mt5feed
 
 COLS = ["rule", "symbol", "signal_id", "strategy", "direction", "signal_time", "status", "actual_R", "cf_R", "increment_R", "note"]
@@ -64,20 +69,30 @@ def _rule_a(sym, rs, first, sg, R):
     return (actual, cf_unit * (full - l1) / full), ""
 
 
-def _replay(sym, up, e, R, stop_px, tp2, banked, bankf, t_from, px0):
-    """remaining ticket from the cut: -> exit price-R per unit (in the anchor's R, from px0) or None while still open"""
+PYR_R, PYR_F, SR_R = 1.5, 0.5, 0.25
+
+
+def _replay(sym, up, e, R, stop_px, tp2, banked, bankf, t_from, px0, pyr_left=0.0):
+    """remaining ticket from the cut, the full live stack (coach 2026-10-03 item 7): bank at +1R if not yet banked, the pyramid
+    (pyr_left = its share per unit of this ticket, 0 if it already went in) at +1.5R after the bank with the shorts stop raise to
+    +0.25R (B is shorts-only). -> exit price-R per unit of the ticket (in the anchor's R, from px0) or None while still open"""
     bars = mt5feed.bars_range(sym, "m15", t_from, t_from + 30 * 86400) or []
     bars = [b for b in bars if int(b[0]) >= t_from]
     if not bars: return None
     sg = 1.0 if up else -1.0; toR = lambda p: (p - px0) * sg / R
-    r1 = e + sg * R; locked, size, stop = 0.0, 1.0, stop_px
+    r1 = e + sg * R; rp = e + sg * PYR_R * R; locked, size, stop = 0.0, 1.0, stop_px
+    legs = []                                                          # [size, entry price] of the pyramid leg once it goes in
+    val = lambda p: locked + size * toR(p) + sum(sz * (p - ep) * sg / R for sz, ep in legs)
     for b in bars:
         o, hi, lo = float(b[1]), float(b[2]), float(b[3])
         adv, fav = (lo, hi) if up else (hi, lo)
-        if (adv <= stop) if up else (adv >= stop): return locked + size * toR(o if ((o < stop) if up else (o > stop)) else stop)
+        if (adv <= stop) if up else (adv >= stop): return val(o if ((o < stop) if up else (o > stop)) else stop)
         if not banked and ((fav >= r1) if up else (fav <= r1)):
             banked = True; locked += bankf * toR(r1); size *= 1 - bankf; stop = e
-        if tp2 and ((fav >= tp2) if up else (fav <= tp2)): return locked + size * toR(tp2)
+        if banked and pyr_left > 0 and ((fav >= rp) if up else (fav <= rp)):
+            legs.append([pyr_left, rp]); pyr_left = 0.0
+            if not up: stop = e - SR_R * R                                # shorts: every ticket's stop to +0.25R
+        if tp2 and ((fav >= tp2) if up else (fav <= tp2)): return val(tp2)
     return None
 
 
@@ -128,7 +143,9 @@ def build(cfg: dict) -> list[dict]:
                         full = _f(r.get("full_lots")) or _f(first.get("lots")) or 0.0
                         if not px or not slp or full <= 0: continue
                         tp2 = _f(r.get("tp2")) or _f(r.get("tp"))
-                        rem = _replay(sym, up, e1, R, slp, tp2, r.get("tp1_done") == "1", BANKF.get(first.get("strategy"), 0.5), _ts(a.get("bar_time")) or 0, px)
+                        is_first = int(_f(r.get("tranche")) or 0) <= 1
+                        pyr_left = (PYR_F * full / lots_b) if (is_first and lots_b > 0 and not any(q.get("tranche") == "3" for q in rs)) else 0.0
+                        rem = _replay(sym, up, e1, R, slp, tp2, r.get("tp1_done") == "1", BANKF.get(first.get("strategy"), 0.5), _ts(a.get("bar_time")) or 0, px, pyr_left)
                         if rem is None: pend = True; break
                         act += 0.0; cf += rem * lots_b / full                     # actual: closed at px (0 from px); cf: the replay's exit from px
                     res = None if pend else (act, cf)
@@ -147,8 +164,9 @@ def write(cfg: dict) -> dict:
     rows = build(cfg)
     p = os.path.join(cfg["root"], "web", "queue_rules.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p + ".tmp", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS); w.writeheader()
-        for x in rows: w.writerow(x)
+        w = csv.DictWriter(f, fieldnames=COLS + ["rules"]); w.writeheader()
+        tg = _rule_tags(cfg)              # coach 2026-10-03 item 7: the rules that touched each signal
+        for x in rows: w.writerow(dict(x, rules=tg.get((x.get("symbol"), str(x.get("signal_id"))), "")))
     os.replace(p + ".tmp", p)
     out = {}
     for rule in ("A", "B", "I"):

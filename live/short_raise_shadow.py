@@ -19,6 +19,11 @@ import csv, os, statistics as st
 from datetime import datetime, timezone
 
 from live import common as C
+
+
+def _rule_tags(cfg):
+    from live import rule_tags
+    return rule_tags.tags_for(cfg)
 from live import mt5feed
 
 COLS = ["symbol", "signal_id", "strategy", "signal_time", "raise_time", "raise_stop", "status", "tickets", "tickets_stopped_at_raise",
@@ -102,8 +107,9 @@ def write(cfg: dict) -> tuple[int, float | None]:
     rows = build(cfg)
     p = os.path.join(cfg["root"], "web", "short_raise.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p + ".tmp", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS); w.writeheader()
-        for x in rows: w.writerow(x)
+        w = csv.DictWriter(f, fieldnames=COLS + ["rules"]); w.writeheader()
+        tg = _rule_tags(cfg)              # coach 2026-10-03 item 7: the rules that touched each signal
+        for x in rows: w.writerow(dict(x, rules=tg.get((x.get("symbol"), str(x.get("signal_id"))), "")))
     os.replace(p + ".tmp", p)
     res = [x for x in rows if x["status"] == "resolved"]
     return len(res), (sum(float(x["diff_R"]) for x in res) if res else None)

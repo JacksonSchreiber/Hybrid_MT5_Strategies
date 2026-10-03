@@ -13,6 +13,11 @@ from __future__ import annotations
 import csv, glob, os, re
 
 from live import common as C
+
+
+def _rule_tags(cfg):
+    from live import rule_tags
+    return rule_tags.tags_for(cfg)
 from live import mt5feed
 
 AUTO = ("AUTO_1R", "AUTO_TP1", "AUTO_1R_BE_ONLY", "AUTO_TP1_BE_ONLY")
@@ -92,8 +97,9 @@ def write(cfg: dict) -> tuple[int, int, int]:
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
     with open(tmp, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS); w.writeheader()
-        for x in rows: w.writerow(x)
+        w = csv.DictWriter(f, fieldnames=COLS + ["rules"]); w.writeheader()
+        tg = _rule_tags(cfg)              # coach 2026-10-03 item 7: the rules that touched each signal
+        for x in rows: w.writerow(dict(x, rules=tg.get((x.get("symbol"), str(x.get("signal_id"))), "")))
     os.replace(tmp, p)
     be = [x for x in rows if x["runner_exit"] == "BE" and not x["manual"]]
     ok = [x for x in be if abs(float(x["runner_gap_R"])) <= 0.05]
@@ -126,7 +132,7 @@ def staged(cfg: dict) -> list[dict]:
         by.setdefault((r.get("symbol"), r.get("signal_id")), {})[t] = r
     out = []
     for (sym, sid), d in sorted(by.items(), key=lambda kv: (kv[1].get(1) or kv[1].get(2) or {}).get("signal_time", "")):
-        a, b, py = d.get(1), d.get(2), d.get(3)
+        a, b, py, im = d.get(1), d.get(2), d.get(3), d.get(4)
         if not a and py: a = d.get(0)                       # not staged (too small to split) but pyramided: the first row is tranche 0
         if not a: continue
         full = _f(a.get("full_lots")) or _f(a.get("lots")) or 0.0
@@ -135,16 +141,22 @@ def staged(cfg: dict) -> list[dict]:
         r2 = (_f(b.get("r_multiple")) if b.get("exit_time") else None) if b else None
         l3 = (_f(py.get("lots")) or 0.0) if py else 0.0
         r3 = (_f(py.get("r_multiple")) if py.get("exit_time") else None) if py else None
-        closed = r1 is not None and (b is None or r2 is not None) and (py is None or r3 is not None)
-        noadd = ((l1 * r1 + (l2 * r2 if b else 0.0)) / full) if (closed and full) else None
+        l4 = (_f(im.get("lots")) or 0.0) if im else 0.0
+        r4 = (_f(im.get("r_multiple")) if im.get("exit_time") else None) if im else None
+        closed = r1 is not None and (b is None or r2 is not None) and (py is None or r3 is not None) and (im is None or r4 is not None)
+        imp = (l4 * r4 / full) if (im and r4 is not None and full) else 0.0          # coach queue I's add: in BOTH sides (full live stack)
+        noadd = ((l1 * r1 + (l2 * r2 if b else 0.0)) / full + imp) if (closed and full) else None
         st_R = (noadd + (l3 * r3 / full if py else 0.0)) if noadd is not None else None
+        # coach 2026-10-03 item 7: each grader's counterfactual = the full live stack with only its own rule off. Staging off = all
+        # 100% at the signal riding the first tranche's path (r1 per unit), WITH the pyramid and the improving add as they happened.
+        cf_full = (r1 + (l3 * r3 / full if py else 0.0) + imp) if (closed and full) else None
         out.append({"symbol": sym, "signal_id": sid, "strategy": a.get("strategy"), "signal_time": a.get("signal_time"),
                     "full_lots": full, "first_lots": l1, "add_lots": l2 or "",
                     "add_state": "added" if b else ("skipped: " + (a.get("reject_reason") or "") if a.get("reject_reason") else "pending"),
                     "add_fill": b.get("entry") if b else "", "add_time": b.get("fill_time") if b else "",
                     "R_first_per_lot": "" if r1 is None else round(r1, 3), "R_add_per_lot": "" if r2 is None else round(r2, 3),
                     "staged_R": "" if st_R is None else round(st_R, 3),
-                    "counterfactual_full_R": "" if r1 is None else round(r1, 3),
+                    "counterfactual_full_R": "" if cf_full is None else round(cf_full, 3),
                     "pyramid_lots": l3 or "", "pyramid_fill": py.get("entry") if py else "", "pyramid_fill_R": _fill_r(a, py), "pyramid_time": py.get("fill_time") if py else "",
                     "R_pyramid_per_lot": "" if r3 is None else round(r3, 3),
                     "counterfactual_noadd_R": "" if noadd is None else round(noadd, 3), "closed": int(closed)})
@@ -156,8 +168,9 @@ def write_staged(cfg: dict) -> tuple[int, float | None, float | None]:
     rows = staged(cfg)
     p = os.path.join(cfg["root"], "web", "staged_entry.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p + ".tmp", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=STAGED_COLS); w.writeheader()
-        for x in rows: w.writerow(x)
+        w = csv.DictWriter(f, fieldnames=STAGED_COLS + ["rules"]); w.writeheader()
+        tg = _rule_tags(cfg)              # coach 2026-10-03 item 7: the rules that touched each signal
+        for x in rows: w.writerow(dict(x, rules=tg.get((x.get("symbol"), str(x.get("signal_id"))), "")))
     os.replace(p + ".tmp", p)
     done = [x for x in rows if x["closed"]]
 
@@ -265,8 +278,9 @@ def write_manual(cfg: dict) -> tuple[int, float | None]:
     rows = manual(cfg)
     p = os.path.join(cfg["root"], "web", "manual_sizing.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p + ".tmp", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=MANUAL_COLS); w.writeheader()
-        for x in rows: w.writerow(x)
+        w = csv.DictWriter(f, fieldnames=MANUAL_COLS + ["rules"]); w.writeheader()
+        tg = _rule_tags(cfg)              # coach 2026-10-03 item 7: the rules that touched each signal
+        for x in rows: w.writerow(dict(x, rules=tg.get((x.get("symbol"), str(x.get("signal_id"))), "")))
     os.replace(p + ".tmp", p)
     d = [x["diff_R"] for x in rows if x["diff_R"] != ""]
     return len(d), (sum(d) / len(d) if d else None)

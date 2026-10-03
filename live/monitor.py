@@ -576,6 +576,11 @@ class Monitor:
             self.st["queue_counts"] = {k: v[0] for k, v in qs.items()}
         except Exception as e:
             self.guard_error("queue_shadow", e)
+        try:                                                             # coach 2026-10-03 item 7: the rules that touched every signal
+            from live import rule_tags
+            self.st["rule_tags_n"] = rule_tags.write(self.cfg)
+        except Exception as e:
+            self.guard_error("rule_tags", e)
         try:                                                             # trader 2026-10-03: live trades into the Data visualizers tab
             from live import rpaths_live
             self.st["rpaths_live_n"] = rpaths_live.write(self.cfg)

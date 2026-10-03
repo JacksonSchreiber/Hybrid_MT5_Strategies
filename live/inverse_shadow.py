@@ -13,6 +13,11 @@ import csv, os
 from datetime import datetime, timezone
 
 from live import common as C
+
+
+def _rule_tags(cfg):
+    from live import rule_tags
+    return rule_tags.tags_for(cfg)
 from live import mt5feed
 
 BANKF = {"TrendCont": 0.25, "DeepFib": 0.25}
@@ -90,8 +95,9 @@ def write(cfg: dict) -> dict:
     rows = build(cfg)
     p = os.path.join(cfg["root"], "web", "inverse_shadow.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p + ".tmp", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS); w.writeheader()
-        for x in rows: w.writerow(x)
+        w = csv.DictWriter(f, fieldnames=COLS + ["rules"]); w.writeheader()
+        tg = _rule_tags(cfg)              # coach 2026-10-03 item 7: the rules that touched each signal
+        for x in rows: w.writerow(dict(x, rules=tg.get((x.get("symbol"), str(x.get("signal_id"))), "")))
     os.replace(p + ".tmp", p)
     fills = [x for x in rows if x["decision"] == "approved" and _f(x["fill_slip_R"]) is not None]
     closed = [_f(x["actual_R"]) for x in fills if _f(x["actual_R"]) is not None]

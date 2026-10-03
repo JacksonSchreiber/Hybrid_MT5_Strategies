@@ -14,6 +14,11 @@ from __future__ import annotations
 import csv, os
 
 from live import common as C
+
+
+def _rule_tags(cfg):
+    from live import rule_tags
+    return rule_tags.tags_for(cfg)
 from live import inverse_shadow as IS
 
 COLS = ["symbol", "signal_id", "strategy", "direction", "decision", "held_minutes", "spread_r_at_signal", "spread_r_at_offer", "drift_r",
@@ -65,8 +70,9 @@ def write(cfg: dict) -> dict:
     rows, ontime = build(cfg)
     p = os.path.join(cfg["root"], "web", "reoffer.csv"); os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p + ".tmp", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLS); w.writeheader()
-        for x in rows: w.writerow(x)
+        w = csv.DictWriter(f, fieldnames=COLS + ["rules"]); w.writeheader()
+        tg = _rule_tags(cfg)              # coach 2026-10-03 item 7: the rules that touched each signal
+        for x in rows: w.writerow(dict(x, rules=tg.get((x.get("symbol"), str(x.get("signal_id"))), "")))
     os.replace(p + ".tmp", p)
     tk = [float(x["actual_R"]) for x in rows if x["status"] == "taken_closed"]
     sk = [float(x["shadow_R"]) for x in rows if x["status"] == "skipped" and x["shadow_R"] != ""]
