@@ -57,3 +57,10 @@ nothing is re-run by accident and the coach can see what was tried.
   - 2012-24: -0.003 / -0.012 / -0.011 / -0.015R (t to -2.3); 2025-26: -0.018 to -0.028R (4 trades).
   - Only 20-50 trades are affected. The hurt trades (-0.4 to -0.8R each) are runners that dip and then reach TP2.
   - Not forwarded. `day7_band_raise_study.py`, `data/study/day7_band_raise_report.txt`
+- **Pyramid gated on the average** (add the +1.5R pyramid only if the average since entry > 0 / +0.25 / +0.5 / +0.75 / +1R;
+  reference: no pyramid).
+  - 2012-24: every gate loses, -0.001 / -0.011 / -0.021 / -0.034 / -0.041R. No pyramid at all costs -0.043R (t -4.1), so the
+    pyramid is worth about +0.04R a trade.
+  - Even the late breakouts (low average) pay off from the pyramid: skipped trades lose about -0.12R each.
+  - Shorts: the pyramid is worth +0.009 in 2012-24 but -0.034 in 2025-26 (the usual short-side split).
+  - Not forwarded. `pyramid_gate_study.py`, `data/study/pyramid_gate_report.txt`
