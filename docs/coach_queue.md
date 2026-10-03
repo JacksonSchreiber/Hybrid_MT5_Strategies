@@ -184,3 +184,25 @@ above +0.5R). C = entry 3 (day 2: 48h average > +1R adds +50%, longs only; C* = 
 - **Script / report:** `pipeline/combo3_study.py`, `data/study/combo3_report.txt`.
 - **Ask:** if the coach takes these forward, test A+B+C as one pre-registered package (fixed parameters as above), with a
   fragility check per rule and an EA reproduction on two symbols.
+
+---
+
+## Pre-registration for the out-of-sample symbol test (frozen 2026-10-02, BEFORE any new-symbol data is looked at)
+
+New symbols (never used in any study): US30, XAGUSD, AUDUSD, USDCAD, USDCHF, NZDUSD, EURJPY, GBPJPY, EURGBP, USDMXN. Data: Dukascopy
+M1 via QDM, 2012 -> 2026. Signals from the MT5 tester (the four live detectors, AA, as for the pinned record). Replay with the same M1
+ask-side engine (SCALED; BID shown alongside) and the same live stack as the base.
+
+Rules tested, exactly as below, with no re-tuning on these symbols:
+- **A.** At the bar-6 close, a trial average R (mean of M1 bid closes since entry, first tranche's 1R) below 0 holds the 75% add
+  until the bid reaches +1R (added at market then). All trades.
+- **B.** At the bar-12 close, a SHORT whose average R since entry is not above +0.5R is closed (100%) at market.
+- **C.** At the bar-12 close, a LONG whose average R since entry is above +1R gets +50% of the full size at market (shares the stop,
+  runs to TP2).
+- The package is A+B+C; each rule is also reported alone.
+
+Read-out, decided now:
+- The change vs base in R per trade and worst drawdown, for 2012-24 and 2025-26 separately, by symbol and pooled, with longs and
+  shorts split.
+- **Support** = pooled 2012-24 increment > 0 AND worst DD not higher than base, for the package and for each rule.
+- Anything else is reported as it comes out. The new symbols are looked at once; no parameter changes after the first look.
