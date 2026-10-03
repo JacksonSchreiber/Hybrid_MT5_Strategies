@@ -16,7 +16,7 @@
   const DETS = ["TrendCont", "SweepMSS", "DeepFib", "EMArevQ"];
   const state = {
     show: "tp2", cmp: "none", time: "rt", dir: "all", det: "all", start: "all", period: "all", shade: "open",
-    heat: true, fan: true, samples: false, source: "backtest", brush: null, avgCarry: false, avgDays: 10,
+    heat: true, fan: true, samples: false, source: "backtest", brush: null, avgCarry: false, avgDays: 10, avgBand: "hl",
   };
   let DATA = null, root = null;
 
@@ -303,22 +303,33 @@
     segs.appendChild(g1); ctl.appendChild(segs);
     const sd = el("div", "rp-ctl"); sd.appendChild(el("div", "rp-lbl", "Days shown")); const g2 = el("div", "rp-seg");
     [5, 10, 20, 30].forEach(v => { const b = el("button", state.avgDays === v ? "on" : "", v + " days"); b.type = "button"; b.onclick = () => { state.avgDays = v; render(); }; g2.appendChild(b); });
-    sd.appendChild(g2); ctl.appendChild(sd); card.appendChild(ctl);
+    sd.appendChild(g2); ctl.appendChild(sd);
+    const bd = el("div", "rp-ctl"); bd.appendChild(el("div", "rp-lbl", `Spread band <span class="rp-q" title="Typical high & low: the band's top is the average of the trades sitting ABOVE the line at that moment, its bottom the average of those BELOW - how far a typical trade sits from the average, up and down (it can be lopsided). ±1 standard deviation: the usual symmetric spread; about two thirds of trades sit inside it.">?</span>`));
+    const g3 = el("div", "rp-seg");
+    [["off", "Off"], ["hl", "Typical high & low"], ["sd", "±1 standard deviation"]].forEach(([v, t]) => { const b = el("button", state.avgBand === v ? "on" : "", t); b.type = "button"; b.onclick = () => { state.avgBand = v; render(); }; g3.appendChild(b); });
+    bd.appendChild(g3); ctl.appendChild(bd); card.appendChild(ctl);
     const groups = ["tp2", "be", "sl"].map(k => ({ key: k, trades: select(k) })).filter(g => g.trades.length);
     const steps = Math.min(state.avgDays * 2, Math.floor(DATA.cap_bars / 3));
     const series = groups.map(g => ({ key: g.key, pts: [...Array(steps + 1).keys()].map(i => {
-      const bar = i * 3; let sum = 0, n = 0;
+      const bar = i * 3, vals = [];
       for (const t of g.trades) {
-        let v = bar === 0 ? 0 : (bar - 1 < t.rt.length ? t.rt[bar - 1] / 100 : (state.avgCarry ? t.rt[t.rt.length - 1] / 100 : null));
-        if (v == null) continue; sum += v; n++;
+        const v = bar === 0 ? 0 : (bar - 1 < t.rt.length ? t.rt[bar - 1] / 100 : (state.avgCarry ? t.rt[t.rt.length - 1] / 100 : null));
+        if (v != null) vals.push(v);
       }
-      return { day: i / 2, mean: n >= 5 ? sum / n : null, n, of: g.trades.length };
+      const n = vals.length; if (n < 5) return { day: i / 2, mean: null, n, of: g.trades.length };
+      const mean = vals.reduce((a, b) => a + b, 0) / n;
+      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / n);
+      const up = vals.filter(v => v > mean), dn = vals.filter(v => v < mean);
+      const hi = up.length ? up.reduce((a, b) => a + b, 0) / up.length : mean, lo = dn.length ? dn.reduce((a, b) => a + b, 0) / dn.length : mean;
+      return { day: i / 2, mean, n, of: g.trades.length, sd, hi, lo };
     }) }));
     const box = el("div", "rp-cv"); const cv = el("canvas"); cv.style.height = "clamp(260px,40vw,380px)"; const tip = el("div", "rp-tip"); box.appendChild(cv); box.appendChild(tip); card.appendChild(box);
     const leg = el("div", "rp-leg"); series.forEach(sr => leg.appendChild(el("span", "rp-key", `<i style="background:${C.hueHex[sr.key]};height:3px"></i>${OUTCOME[sr.key]} (${sr.pts[0].of.toLocaleString()})`)));
     card.appendChild(leg);
-    card.appendChild(el("div", "k", state.avgCarry ? "Every trade stays in its line after it closes, at its exit level - so the lines end where each group finishes on average."
-      : "Each point averages the trades of that group still open at that moment (points with fewer than 5 open trades are left out)."));
+    card.appendChild(el("div", "k", (state.avgCarry ? "Every trade stays in its line after it closes, at its exit level - so the lines end where each group finishes on average."
+      : "Each point averages the trades of that group still open at that moment (points with fewer than 5 open trades are left out).")
+      + (state.avgBand === "hl" ? " Shaded: the typical high and low - the average of the trades above the line, and of those below it."
+         : state.avgBand === "sd" ? " Shaded: ±1 standard deviation around the line (about two thirds of trades sit inside it)." : "")));
     requestAnimationFrame(() => drawAvg(cv, tip, series, steps));
     return card;
   }
@@ -326,7 +337,8 @@
     const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr; const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
     const pad = { l: 44, r: 14, t: 12, b: 28 }, pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
-    let lo = -1, hi = 1; series.forEach(sr => sr.pts.forEach(p => { if (p.mean != null) { lo = Math.min(lo, p.mean); hi = Math.max(hi, p.mean); } }));
+    const bandOf = p => state.avgBand === "hl" ? [p.lo, p.hi] : state.avgBand === "sd" ? [p.mean - p.sd, p.mean + p.sd] : [p.mean, p.mean];
+    let lo = -1, hi = 1; series.forEach(sr => sr.pts.forEach(p => { if (p.mean != null) { const [a, b] = bandOf(p); lo = Math.min(lo, a); hi = Math.max(hi, b); } }));
     lo = Math.floor(lo * 2) / 2 - 0.25; hi = Math.ceil(hi * 2) / 2 + 0.25;
     const X = d => pad.l + (d / (steps / 2)) * pw, Y = r => pad.t + (1 - (r - lo) / (hi - lo)) * ph;
     ctx.fillStyle = C.surface; ctx.fillRect(0, 0, W, H);
@@ -342,6 +354,17 @@
     ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = C.dim;
     for (let d = 0; d <= days + 1e-9; d += xs) { const lb = d === 0 ? (narrow ? "0" : "entry") : (narrow ? d + "d" : "day " + d);
       ctx.textAlign = X(d) + ctx.measureText(lb).width / 2 > W - 2 ? "right" : "center"; ctx.fillText(lb, Math.min(X(d), W - 2), pad.t + ph + 8); }
+    if (state.avgBand !== "off") series.forEach(sr => {
+      const pts = sr.pts.filter(p => p.mean != null); if (pts.length < 2) return;
+      const [r, g, b] = C.hues[sr.key];
+      ctx.fillStyle = `rgba(${r},${g},${b},0.16)`; ctx.beginPath();
+      pts.forEach((p, i) => { const y = Y(bandOf(p)[1]); i ? ctx.lineTo(X(p.day), y) : ctx.moveTo(X(p.day), y); });
+      for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(X(pts[i].day), Y(bandOf(pts[i])[0]));
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = `rgba(${r},${g},${b},0.55)`; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+      [1, 0].forEach(e => { ctx.beginPath(); pts.forEach((p, i) => { const y = Y(bandOf(p)[e]); i ? ctx.lineTo(X(p.day), y) : ctx.moveTo(X(p.day), y); }); ctx.stroke(); });
+      ctx.setLineDash([]);
+    });
     series.forEach(sr => {
       ctx.strokeStyle = C.hueHex[sr.key]; ctx.lineWidth = 2; ctx.beginPath(); let started = false;
       sr.pts.forEach(p => { if (p.mean == null) { started = false; return; } if (!started) { ctx.moveTo(X(p.day), Y(p.mean)); started = true; } else ctx.lineTo(X(p.day), Y(p.mean)); });
@@ -354,7 +377,9 @@
       const i = Math.max(0, Math.min(steps, Math.round((x - pad.l) / pw * steps)));
       drawAvgBase(); ctx.strokeStyle = "rgba(240,246,252,0.35)"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(X(i / 2), pad.t); ctx.lineTo(X(i / 2), pad.t + ph); ctx.stroke(); ctx.setLineDash([]);
       tip.innerHTML = `<b>${i === 0 ? "entry" : "day " + (i / 2).toFixed(1)}</b><br>` + series.map(sr => { const p = sr.pts[i];
-        return `<span class="rp-sw sm" style="background:${C.hueHex[sr.key]}"></span>${OUTCOME[sr.key]}: <b>${p.mean == null ? "–" : fmtR(+p.mean.toFixed(2))}</b> <span class="k">(${p.n} of ${p.of}${state.avgCarry ? "" : " still open"})</span>`; }).join("<br>");
+        const band = p.mean == null || state.avgBand === "off" ? "" : state.avgBand === "hl"
+          ? ` <span class="k">· typical high ${fmtR(+p.hi.toFixed(2))} / low ${fmtR(+p.lo.toFixed(2))}</span>` : ` <span class="k">· ±${p.sd.toFixed(2)}R (1 SD)</span>`;
+        return `<span class="rp-sw sm" style="background:${C.hueHex[sr.key]}"></span>${OUTCOME[sr.key]}: <b>${p.mean == null ? "–" : fmtR(+p.mean.toFixed(2))}</b>${band} <span class="k">(${p.n} of ${p.of}${state.avgCarry ? "" : " still open"})</span>`; }).join("<br>");
       tip.style.display = "block"; const tw = tip.offsetWidth;
       tip.style.left = Math.min(W - tw - 4, Math.max(4, X(i / 2) + 12)) + "px"; tip.style.top = (pad.t + 6) + "px";
     };
