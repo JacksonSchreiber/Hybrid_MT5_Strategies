@@ -37,3 +37,6 @@ nothing is re-run by accident and the coach can see what was tried.
   - Longs pay all of it. Shorts are about 0, as most are already at +0.25R from the live shorts rule. Many trades are helped,
     but the few hurt are TP2 misses worth several R.
   - Not forwarded. `day4_raise_study.py`, `data/study/day4_raise_report.txt`
+- **Late breakout: average since entry < 0 but price > +1R -> stop to +0.25R** (checked at days 1-5).
+  - It almost never happens on a trade that is still open: 0-2 trades changed per checkpoint in 2012-24, 0 in 2025-26.
+  - Effect +0.0000..+0.0003R. No signal either way. `late_breakout_raise_study.py`, `data/study/late_breakout_raise_report.txt`
