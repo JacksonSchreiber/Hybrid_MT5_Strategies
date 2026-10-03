@@ -84,7 +84,7 @@ var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.que
 """
 
 def page(title: str, body: str, active: str = "", refresh: int | None = None) -> str:
-    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/paths", "Paths", "paths"), ("/wiki", "Wiki", "wiki"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
+    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/paths", "Data visualizers", "paths"), ("/wiki", "Wiki", "wiki"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
     nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs) + '<span id="utc" class="k" style="margin-left:auto;align-self:center;white-space:nowrap;font-variant-numeric:tabular-nums"></span>'
     m = f'<meta name="autorefresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -212,11 +212,11 @@ def paths_page(q: dict) -> str:
     """trader 2026-10-02: the R-path explorer - how trades travel to their exit (heatmap + typical path + drag-box share)."""
     v = str(int(os.path.getmtime(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.js")))) if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.js")) else "0"
     body = (f'<style>{RPATHS_CSS} main{{max-width:1400px}}</style>'
-            f'<h1>Trade paths</h1><div class="k">How trades travel from entry to their exit, in R. Pick a group, then read the shading: '
+            f'<h1>Data visualizers</h1><h2 style="margin-top:4px">Trade paths</h2><div class="k">How trades travel from entry to their exit, in R. Pick a group, then read the shading: '
             f'the brighter a cell, the more trades were there at that moment. The white line is the typical path.</div>'
             f'<div id="rp-app"></div><script src="/static/rpaths.js?v={v}"></script>'
             f'<script>window.addEventListener("DOMContentLoaded",function(){{RPaths.mount("rp-app","/static/rpaths.json?v={v}");}});</script>')
-    return page("Trade paths", body, "paths")
+    return page("Data visualizers", body, "paths")
 
 def flash(msg: str | None, ok: bool = True) -> str:
     return f'<div class="flash {"ok" if ok else "bad"}">{E(msg)}</div>' if msg else ""
