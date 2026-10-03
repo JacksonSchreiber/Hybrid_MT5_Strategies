@@ -20,6 +20,7 @@ def cls(sym):
     if r.startswith(("US", "DE", "UK", "JP")) and any(ch.isdigit() for ch in r): return "index"
     if r.startswith(("XAU", "XAG")): return "metal"
     if r.startswith("BTC"): return "crypto"
+    if r.startswith(("USOIL", "UKOIL", "XBR", "XTI")): return "oil"
     return "FX"
 
 
@@ -35,7 +36,7 @@ def main():
          ", ".join(f"{s}={cls(s)}" for s in sorted({z[0] for z in res}))]
     md = "SCALED"
     for per in ("2012-24", "2025-26"):
-        for c in ("FX", "index", "metal", "all"):
+        for c in ("FX", "index", "metal", "oil", "all"):
             for side in ("long", "short"):
                 zs = [z for z in res if (z[1][:4] < "2025") == (per == "2012-24") and (c == "all" or cls(z[0]) == c) and z[3] == (side == "long")]
                 if len(zs) < 5: continue
