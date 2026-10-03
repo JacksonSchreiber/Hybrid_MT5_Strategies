@@ -207,3 +207,132 @@ Read-out, decided now:
   is tagged with the rules that touched it (live/rule_tags.py -> web/rule_tags.csv + a 'rules' column on every grader file).
 
 - 2026-10-03, decided before any new-symbol result: US30 runs from 2013-01-01 only (Dukascopy throttled the 2011-12 source); the other nine are complete from 2012. Pooled as registered.
+
+## OOS pipeline (prepared, not run)
+
+**NEEDS A COACH RULING BEFORE `--look`.** On the original seven, the population the new symbols will use (TrendCont from the
+four-detector AA run, because REC cannot be reproduced on the current build) already fails two things:
+- A fails the strict both-periods reading (2025-26 DD 23.6 vs 23.4).
+- The package loses support.
+
+The base also drops from +0.115 to +0.078. See deviation 1 below. The coach should confirm two things in writing before the look:
+1. the AA-TrendCont population;
+2. the both-periods reading of A's bar.
+
+Prepared 2026-10-03 while MT5 was busy with the queue reproduction. No rule result and no base result has been computed on any new
+symbol. The study was validated on the original seven only.
+
+**Commands, in order**
+1. Already done: `python3 pipeline/oos_build_inputs.py build`, which writes `data/study/oos_inputs.json`. It holds, per symbol, the M1
+   checks, ref price, live spread, tick size and class. Re-run it if US30's M1 CSV appears.
+2. Optional: `pipeline/oos_mt5_stage.sh --dry-run` prints the plan and touches nothing.
+3. Run the MT5 stage once the queue job has finished, MT5 is closed and no qdmcli is running:
+   `nohup pipeline/oos_mt5_stage.sh > data/study/oos_aa/stage.out 2>&1 &`
+   - The script refuses to start if terminal64 is running.
+   - It is resumable: per-step markers live in `data/study/oos_aa/state/`.
+   - It runs these steps:
+     - **Parity:** one AA run of EURUSD.dk, 2016.08.01-2026.06.29. The journal goes to `oos_aa/parity/` and is diffed against the
+       pinned journal on signal fields only.
+     - **Per symbol:**
+       - export the tick CSV from the QDM store;
+       - build H4 from that same CSV, into `data/study/h4/<SYM>.dk.csv`;
+       - import with `mt5_import.sh --clean`;
+       - run the AA tester (`--mode ALL --strat SMC,Fib,TrendCont,EMArevQ --model 4`, `--from <start> --to 2026.06.30`, every
+         tester-study env knob unset, so the EA runs on its input defaults);
+       - copy the journal to `data/study/oos_aa/` right after the run.
+     - **At the end:** `oos_build_inputs.py build`, `drag` (writes `data/study/oos_spread_drag.json` and `.md`) and `qa`.
+   - Time estimates per symbol: export 3-8 min, H4 1-3 min, staging and import 15-45 min, AA run 20-60 min. That is about
+     45-110 min per symbol, **about 8-14 h for the nine**, plus about 20 min for parity.
+   - Disk: each tick CSV is about 12-25 GB on /home and is copied to C: while it imports. The script checks that C: has the CSV
+     size × 1.1 + 30 GB free.
+4. US30, when its download finishes (the M1 CSV appears in `data/qdm_csv/fleet`):
+   `python3 pipeline/oos_build_inputs.py build && pipeline/oos_mt5_stage.sh US30`
+5. Readiness check: `python3 pipeline/oos_queue_study.py`. It computes nothing. It lists whatever is missing, or says ready.
+6. **The one look** (trader's command): `python3 pipeline/oos_queue_study.py --look`
+   - Output: `data/study/oos_queue_report.txt` (and `oos_queue_trades.pkl`).
+   - Use `--look --exclude US30` only if the trader decides not to wait. An excluded symbol can only ever be reported later as a
+     separate addendum. It is never re-pooled.
+   - The script refuses to overwrite an existing look report. A re-run needs `--relook "<reason>"` and is written to a separately
+     labelled file.
+   - A re-run must keep the first look's exclusions. `--relook` can never add US30.
+   - A symbol excluded from the first look is reported only with `python3 pipeline/oos_queue_study.py --look --addendum US30`.
+     That writes `data/study/oos_queue_addendum_US30.txt`, evaluated alone and never pooled.
+   - data/ is gitignored, so copy or commit the report text on the day of the look.
+   - The ref and spread fields in `oos_inputs.json` are frozen once written; `build` only fills in missing symbols. The report
+     prints the sha256 of `spread_profile.csv`, `spreads.json`, `universe_cost_filter.csv`, `oos_inputs.json` and
+     `oos_spread_drag.json`.
+
+**What the report contains**
+- base, A, B, I and A+B+I, in SCALED and BID, for 2012-24 and 2025-26: R/trade, increment vs base, paired t, worst DD, total R,
+  R/DD, and longs/shorts.
+- Class × direction × period cells, and symbol × direction × period cells.
+- The bars block, with every sub-condition printed next to its verdict.
+- Provenance: journal and H4 sha256, ref price, drag, class.
+
+**Readings frozen in `pipeline/oos_queue_study.py`, before the look.** All are on SCALED, pooled.
+- **Support:** 2012-24 increment > 0 and 2012-24 worst DD ≤ base.
+- **B:** 2012-24 increment ≥ 0 and 2012-24 DD ≤ base. 2025-26 DD is printed but is not part of the bar.
+- **A:** increment ≥ -0.005R and DD ≤ base, both in **both** periods.
+  - FX-short cell, 2012-24: if the increment is < 0, A ships longs only.
+- **I** (alone vs base): 2012-24 increment > 0, t ≥ 1.5, and a 2012-24 FX-long cell > 0. Otherwise I is CLOSED.
+
+**Validation on the original seven**
+- Command: `--symbols EURUSD.dk,GBPUSD.dk,US100.dk,US500.dk,USDJPY.dk,USOIL.dk,XAUUSD.dk`, using combo3's own population loader.
+- All 3,117 per-trade results are **identical to `combo3_trades.pkl`** (exact float equality, order included).
+- `combo3_report.txt`: 20 of 20 rows match, 0 mismatches.
+- `combo3_class_report.txt`: 20 of 20 cell lines match.
+- Report: `data/study/oos_queue_validate_report.txt`.
+- The look code path was also dry-tested in a scratch directory on EURUSD/US100 copies. It reproduced the bridge loader trade for
+  trade.
+
+**Deviations from the original seven's method**
+1. **TrendCont comes from the four-detector AA run.** The originals' TrendCont came from the standalone record REC
+   (`data/study/trendcont`), which was built before the 2026-09-09/10 re-arm fix and includes the defect's re-entries. The current
+   build cannot reproduce REC.
+   - Bridge on the original seven, with TrendCont from the pinned AA journals instead of REC: `--symbols <seven> --aa-trendcont`,
+     report `data/study/oos_queue_bridge_report.txt`. It shows what the population swap alone does, on SCALED, 2012-24:
+
+     | | combo3 population (REC TrendCont) | AA TrendCont |
+     |---|---|---|
+     | n | 2775 | 2486 |
+     | base | +0.1146 | +0.0776 |
+     | base DD | 27.4 | 38.4 |
+     | A+B+I | +0.0315 (t 2.6), DD 23.5 (support) | +0.0172 (t 1.4), DD 39.8 (**no support**) |
+     | B | +0.0059, DD 22.2 | +0.0019, DD 36.1 (pass) |
+     | I | +0.0226 (t 3.2) | +0.0142 (t 2.0), FX long +0.029 (pass) |
+     | A | pass | **fails the strict reading on 2025-26 DD** (23.6 vs 23.4) |
+
+   - **Coach to note before the look:** under the population the new symbols will use, A and the package are already marginal on
+     the original seven.
+2. **Ref price** (SCALED spread scaling): `universe_cost_filter.csv` price (the box, 2026-09-21). The originals used the
+   `spreads.json` price (the box, 2026-09-17). The spread profile is the same file and the same run for all symbols.
+3. **Drag** (BID only): same formula. The median stop and median entry come from the new AA journals only, because there are no
+   graded windows on the new symbols.
+4. **H4** is rebuilt from the tick CSV, not copied from the terminal. It is bit-identical on EURUSD and GBPUSD (16,110 and 20,147 bars,
+   0 mismatches). The importer's digits are checked; if any tick needed rounding, the symbol is stopped.
+5. **Windows:**
+   - The tester runs from 2012.01.01 to 2026.06.30. MT5 shifts the start for warm-up, as it did for USDJPY/XAUUSD.
+   - Signals are cut at 2026-07-01, the latest original end (EURUSD). That leaves ≥3 months of M1 runway.
+   - US30 runs from 2013-01-01: its ticks are exported from 2013, and the tester and the study both start there.
+6. **Import replaces the existing `.dk` symbols.** The fleet copies of the nine (2020-01 to 2026-07) are deleted and re-created with
+   2012 to 2026-10 history. Specs are inferred by TickImport, as before.
+
+**One-look risks**
+- The AA journals carry the EA's base outcome (`r_multiple`, `pnl`, `terminal`, `mfe_r`, `rt_*`), and the tester writes an HTML
+  report with profit and drawdown. Opening or summing either is a look at base.
+- `oos_build_inputs.py` (drag, qa) and `oos_parity_check.py` read signal fields only. The stage log prints only signal counts.
+- The guards are procedural. Deleting the report bypasses them, so record the report's timestamp and sha on the day of the look.
+
+**Observation, not acted on:** the QDM M1 series sits below the `.dk` bid and almost never above it (above in 0% of EURUSD H4 closes,
+2.6% of US100). The median gap is 1e-5 on EURUSD (below in 78% of closes) and 0.8 pt on US100 (below in 94%). The engine's per-trade offset absorbs the level, and the effect is the same for old and new
+symbols. Still, "M1 = bid" in `ask_side_study`'s docstring is not exact.
+
+## THE LOOK - 2026-10-03 15:15 (data/study/oos_queue_report.txt, sha256 7ebccc817db25c33...)
+- Pool: AUDUSD, USDCAD, USDCHF, NZDUSD, USDMXN, XAGUSD (3,494 trades). EXCLUDED before the look for a data fault: EURJPY, GBPJPY, EURGBP
+  (the tester had no USDJPY/GBPUSD/EURUSD conversion history before 2020/2013/2016, so no or stuck trades in those years) and US30
+  (no data). These may only appear later as a separate addendum, never re-pooled. Trader's call: look now rather than fix first.
+- Bars: A PASS (FX-short cell +0.0075, so both sides), B PASS, I FAIL (2012-24 -0.0040, t -0.86; FX longs -0.0125) -> I CLOSED.
+- 2012-24 SCALED: base -0.0464R/trade, DD 170.2 | A+B +0.0155 (t 1.64), DD 114.4 | A+B+I +0.0115 (t 1.10), DD 134.6.
+  2025-26: base -0.1254, DD 54.0 | A+B +0.0099, DD 47.0.
+- NOTE for the coach: the BASE is negative on all six pooled symbols (TrendCont from today's fixed detector); every one of the nine
+  is in the live 47-symbol demo universe.
