@@ -205,3 +205,5 @@ Read-out, decided now:
   its corrected increment comes from data/study/queue_repro/<SYM>_off vs _nosr).
 - Graders: touched signals are NOT excluded. Each counterfactual = the full live stack with only the grader's own rule off; every signal
   is tagged with the rules that touched it (live/rule_tags.py -> web/rule_tags.csv + a 'rules' column on every grader file).
+
+- 2026-10-03, decided before any new-symbol result: US30 runs from 2013-01-01 only (Dukascopy throttled the 2011-12 source); the other nine are complete from 2012. Pooled as registered.
