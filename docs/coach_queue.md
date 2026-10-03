@@ -87,3 +87,22 @@ close it at market (longs untouched).
 **Ask:** design ONE pre-registered short-side study family with the coach (candidates: the day-2 average cut; a time- or
 progress-based short exit; half-size shorts). Fix the variant, a sealed holdout split by symbol, and a fragility bar (drop the
 top helped, double the hurt) before running it. Then an EA reproduction for whichever survives.
+
+**d) Grid: checkpoint (days 1-5) x bar (0..+1.5R), close 100% (added 2026-10-02;** `pipeline/avg_cut_grid_study.py`,
+`data/study/avg_cut_grid_report.txt`)
+- **All trades and longs-only lose in every one of the 35 cells in 2012-24** (-0.006 to -0.12R, mostly t -2 to -4).
+- **Shorts-only:**
+  - **Day 1** loses everywhere in 2012-24 (-0.008 to -0.022): too early.
+  - **Days 2-5 with bars of +0.5R and above** sit at about zero in 2012-24 (-0.004 to +0.006).
+  - **Day 2 / +0.5R** is the best 2012-24 cell (+0.006, DD 27.4 -> 22.2).
+  - **2025-26 is positive in every shorts-only cell**, +0.01 to +0.09R, t 1.2-5.0.
+  - **The shape:** costless over 13 years, a large help in the bad-for-shorts period, and lower drawdown in most cells. That reads
+    like a regime hedge more than an edge.
+- **Combined with entry 1 (the add gate on all trades + the shorts-only cut):**
+  - Day 2 / +0.5R gives 2012-24 **+0.009 (t 0.9), worst DD 21.1R** (base 27.4) and 2025-26 **+0.092 (t 4.9), DD 13.5R**
+    (base 20.4). That is the best combined cell.
+  - **The two rules are close to additive.** The interaction term is -0.003 to 0 in 2012-24 and -0.002 to +0.004 in 2025-26:
+    they neither clash nor amplify, because they touch different trades and different moments.
+- **Ask:** if the coach wants one short-side rule pre-registered, "shorts: close at the day-2 close if the 48h average is not above
+  +0.5R" is the cell to fix (it was also the first one tried, not picked from the grid). Run it with the add gate as a pair, with
+  an EA reproduction.
