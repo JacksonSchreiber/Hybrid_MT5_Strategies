@@ -19,7 +19,7 @@
   const state = {
     show: "tp2", cmp: "none", time: "rt", dir: "all", det: "all", start: "all", period: "all", shade: "open",
     heat: true, fan: true, samples: false, source: "backtest", brush: null, avgCarry: false, avgDays: 10, avgBand: "hl",
-    hide: new Set(), symCurve: "pooled", symSetup: "both", symMetric: "mean",
+    hide: new Set(), symCurve: "pooled", symMetric: "mean", mg: null, mgCmp: "live",
   };
   const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} } };
   try { const h = JSON.parse(store.get("rp.hide") || "[]"); if (Array.isArray(h)) state.hide = new Set(h); } catch (_) {}
@@ -451,59 +451,100 @@
       (state.start === "all" || (state.start === "fast" ? t.f6 >= 1.5 : t.f6 < 1.0)) &&
       (state.period === "all" || (state.period === "dev" ? t.y < 2025 : t.y >= 2025))).sort((a, b) => a.dt < b.dt ? -1 : a.dt > b.dt ? 1 : 0);
   }
-  const SC = { live: "#3987e5", abi: "#c98bff" };
+  // ---------------------------------------------------------------- management selector (trader 2026-10-03)
+  // t.m = 96 full-position R (x1000) per trade, one per combination of the post-signal layers (pipeline/mgmt_variants.py)
+  const LAYERS = [["S", "Staged entry", "25% at the signal, the other 75% at the bar-6 close"],
+    ["A", "A: hold weak adds", "a trial averaging below 0 at bar 6 waits for +1R before the 75% goes in (needs staged entry)"],
+    ["K", "Bank at +1R", "bank the detector's share at +1R (or TP1) and move the stop to entry"],
+    ["P", "+1.5R pyramid", "add 50% at +1.5R"], ["R", "Shorts stop raise", "shorts: every stop to +0.25R at +1.5R"],
+    ["B", "B: shorts day-2 cut", "close a short at the day-2 close if its average is not above +0.5R"],
+    ["I", "I: improving-longs add", "longs: +50% at the day-2 close when day 2 averages better than day 1"]];
+  const PRESETS = { raw: [], live: ["S", "K", "P", "R"], all: ["S", "A", "K", "P", "R", "B", "I"] };
+  const PNAME = { raw: "Raw signal", live: "Live setup", all: "Live + A+B+I" };
+  try { const m = JSON.parse(store.get("rp.mg") || "null"); state.mg = new Set(Array.isArray(m) ? m : PRESETS.all); } catch (_) { state.mg = new Set(PRESETS.all); }
+  state.mgCmp = store.get("rp.mgcmp") || "live";
+  const code = set => { const h = k => set.has(k) ? 1 : 0; const sa = set.has("S") ? (set.has("A") ? 2 : 1) : 0;
+    return sa * 32 + h("K") + 2 * h("P") + 4 * h("R") + 8 * h("B") + 16 * h("I"); };
+  const presetOf = set => Object.keys(PRESETS).find(k => PRESETS[k].length === set.size && PRESETS[k].every(x => set.has(x)));
+  const selName = () => { const p = presetOf(state.mg); return p ? PNAME[p] : "Your selection"; };
+  const SC = { sel: "#c98bff", cmp: "#3987e5" };
+  function symRows2() { return symRows().filter(t => Array.isArray(t.m)); }
   function symCard() {
     const card = el("div", "card rp-sym");
-    card.appendChild(el("div", "row", `<b>By symbol: live setup vs live + A+B+I</b><span class="k">historical · Direction / Detector / Start / Period filters apply · every outcome counted</span>`));
-    const rows = symRows();
-    if (!rows.length) { card.appendChild(el("div", "k", "No historical trades for the symbols shown.")); return card; }
-    const L = symList(), by = new Map();
-    rows.forEach(t => { if (!by.has(t.s)) by.set(t.s, []); by.get(t.s).push(t); });
-    const st = [...by.entries()].map(([s, ts]) => {
-      const b = ts.map(t => t.rb / 1000), a = ts.map(t => t.ra / 1000), sum = v => v.reduce((x, y) => x + y, 0), info = L.find(x => x.s === s) || {};
-      return { s, n: ts.length, orig: info.orig, part: info.part, grp: info.grp, y0: ts[0].dt.slice(0, 4), y1: ts[ts.length - 1].dt.slice(0, 4),
-               bm: sum(b) / b.length, bt: sum(b), bd: maxDD(b), win: b.filter(x => x > 0).length / b.length, am: sum(a) / a.length, at: sum(a), ad: maxDD(a) };
-    });
-    // controls
+    card.appendChild(el("div", "row", `<b>By symbol</b><span class="k">historical · the Symbols, Direction, Detector, Start and Period filters apply · every outcome counted</span>`));
+    // management selector
+    const mg = el("div", "rp-ctl");
+    mg.appendChild(el("div", "rp-lbl", `Management after the signal <span class="rp-q" title="Pick which layers run after a signal fires. None = the raw signal: full size at entry, the signal's own stop, out at its final target (TP2) or the stop - nothing else. All = the live setup plus A, B and I.">?</span>`));
+    const pr = el("div", "rp-seg"); pr.style.marginBottom = "4px";
+    Object.keys(PRESETS).forEach(k => { const b = el("button", presetOf(state.mg) === k ? "on" : "", PNAME[k] + (k === "raw" ? " (none)" : k === "all" ? " (all)" : "")); b.type = "button";
+      b.onclick = () => { state.mg = new Set(PRESETS[k]); store.set("rp.mg", JSON.stringify([...state.mg])); render(); }; pr.appendChild(b); });
+    mg.appendChild(pr);
+    const lg = el("div", "rp-seg");
+    LAYERS.forEach(([k, t, help]) => { const on = state.mg.has(k), dis = k === "A" && !state.mg.has("S");
+      const b = el("button", on && !dis ? "on" : "", (on && !dis ? "✓ " : "") + t); b.type = "button"; b.title = help + (dis ? " - turn on staged entry first" : "");
+      if (dis) b.disabled = true;
+      b.onclick = () => { on ? state.mg.delete(k) : state.mg.add(k); if (k === "S" && on) state.mg.delete("A"); store.set("rp.mg", JSON.stringify([...state.mg])); render(); };
+      lg.appendChild(b); });
+    mg.appendChild(lg); card.appendChild(mg);
     const ctl = el("div", "rp-grid");
-    const mk = (label, key, opts, help) => { const w = el("div", "rp-ctl"); w.appendChild(el("div", "rp-lbl", label + (help ? ` <span class="rp-q" title="${help}">?</span>` : ""))); const g = el("div", "rp-seg");
-      opts.forEach(([v, t]) => { const b = el("button", state[key] === v ? "on" : "", t); b.type = "button"; b.onclick = () => { state[key] = v; render(); }; g.appendChild(b); }); w.appendChild(g); return w; };
+    const mk = (label, key, opts, help, persist) => { const w = el("div", "rp-ctl"); w.appendChild(el("div", "rp-lbl", label + (help ? ` <span class="rp-q" title="${help}">?</span>` : ""))); const g = el("div", "rp-seg");
+      opts.forEach(([v, t]) => { const b = el("button", state[key] === v ? "on" : "", t); b.type = "button"; b.onclick = () => { state[key] = v; if (persist) store.set(persist, v); render(); }; g.appendChild(b); }); w.appendChild(g); return w; };
+    ctl.appendChild(mk("Compare with", "mgCmp", [["live", "Live setup"], ["raw", "Raw signal"], ["none", "Nothing"]], "", "rp.mgcmp"));
     ctl.appendChild(mk("Bars show", "symMetric", [["mean", "R per trade"], ["total", "Total R"], ["dd", "Worst drawdown"]]));
     ctl.appendChild(mk("Curves", "symCurve", [["pooled", "All shown, combined"], ["each", "Each symbol"]],
       "Combined: one cumulative-R line for every symbol shown, added together. Each symbol: one line per symbol (use the Symbols filter above to pick a few)."));
-    ctl.appendChild(mk("Setup", "symSetup", [["both", "Both"], ["live", "Live setup"], ["abi", "Live + A+B+I"]]));
     card.appendChild(ctl);
+    const rows = symRows2();
+    if (!rows.length) { card.appendChild(el("div", "k", "No historical trades for the symbols shown.")); return card; }
+    const cS = code(state.mg), cC = state.mgCmp === "none" ? null : code(new Set(PRESETS[state.mgCmp]));
+    const cmpName = state.mgCmp === "none" ? null : PNAME[state.mgCmp];
+    const L = symList(), by = new Map();
+    rows.forEach(t => { if (!by.has(t.s)) by.set(t.s, []); by.get(t.s).push(t); });
+    const sum = v => v.reduce((x, y) => x + y, 0);
+    const st = [...by.entries()].map(([s, ts]) => {
+      const a = ts.map(t => t.m[cS] / 1000), b = cC == null ? null : ts.map(t => t.m[cC] / 1000), info = L.find(x => x.s === s) || {};
+      return { s, n: ts.length, orig: info.orig, part: info.part, grp: info.grp, y0: ts[0].dt.slice(0, 4), y1: ts[ts.length - 1].dt.slice(0, 4),
+               am: sum(a) / a.length, at: sum(a), ad: maxDD(a), win: a.filter(x => x > 0).length / a.length,
+               bm: b ? sum(b) / b.length : null, bt: b ? sum(b) : null, bd: b ? maxDD(b) : null };
+    });
+    // pooled summary line
+    const pa = rows.map(t => t.m[cS] / 1000), pb = cC == null ? null : rows.map(t => t.m[cC] / 1000);
+    const f3 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3), f1 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
+    card.appendChild(el("div", "rp-sum", `<span class="rp-sw sm" style="background:${SC.sel}"></span><b>${selName()}</b>: ${f3(sum(pa) / pa.length)}R a trade · total ${f1(sum(pa))}R · worst DD ${maxDD(pa).toFixed(1)}R` +
+      (pb ? `<br><span class="rp-sw sm" style="background:${SC.cmp}"></span>${cmpName}: ${f3(sum(pb) / pb.length)}R a trade · total ${f1(sum(pb))}R · worst DD ${maxDD(pb).toFixed(1)}R` : "") +
+      `<br><span class="k">${rows.length.toLocaleString()} trades, ${by.size} symbol${by.size === 1 ? "" : "s"} shown</span>`));
     // bars
-    const key = { mean: ["bm", "am"], total: ["bt", "at"], dd: ["bd", "ad"] }[state.symMetric];
-    const sorted = st.slice().sort((x, y) => y[key[0]] - x[key[0]]);
+    const key = { mean: ["am", "bm"], total: ["at", "bt"], dd: ["ad", "bd"] }[state.symMetric];
+    const sorted = st.slice().sort((x, y) => (y[key[0]]) - (x[key[0]]));
     const bbox = el("div", "rp-cv"); const bcv = el("canvas"); bcv.style.height = Math.max(160, 30 + sorted.length * 30) + "px"; bcv.style.cursor = "default";
     const btip = el("div", "rp-tip"); bbox.appendChild(bcv); bbox.appendChild(btip); card.appendChild(bbox);
     const leg = el("div", "rp-leg");
-    leg.innerHTML = `<span class="rp-key"><i style="background:${SC.live}"></i>Live setup</span><span class="rp-key"><i style="background:${SC.abi}"></i>Live + A+B+I</span>` +
-      `<span class="k">dashed chip / name in italics = new symbol (never used in development) · * = partial years</span>`;
+    leg.innerHTML = `<span class="rp-key"><i style="background:${SC.sel}"></i>${selName()}</span>` + (cmpName ? `<span class="rp-key"><i style="background:${SC.cmp}"></i>${cmpName}</span>` : "") +
+      `<span class="k">italic name = new symbol (never used in development) · * = partial years</span>`;
     card.appendChild(leg);
-    requestAnimationFrame(() => drawBars(bcv, btip, sorted, key));
+    requestAnimationFrame(() => drawBars(bcv, btip, sorted, key, cmpName));
     // curves
     const cbox = el("div", "rp-cv"); const ccv = el("canvas"); ccv.style.height = "clamp(260px,40vw,400px)"; ccv.style.cursor = "crosshair";
     const ctip = el("div", "rp-tip"); cbox.appendChild(ccv); cbox.appendChild(ctip); card.appendChild(cbox);
-    card.appendChild(el("div", "k", "Cumulative R by signal date (full position, costs in). The gap between the two lines is what A+B+I adds or costs."));
-    requestAnimationFrame(() => drawCurves(ccv, ctip, rows, [...by.keys()]));
+    card.appendChild(el("div", "k", "Cumulative R by signal date (full position, costs in)." + (cmpName ? " The gap between the lines is what your selection adds or costs against " + cmpName.toLowerCase() + "." : "")));
+    requestAnimationFrame(() => drawCurves(ccv, ctip, rows, [...by.keys()], cS, cC, cmpName));
     // table
     const d = el("details", "rp-table"); d.appendChild(el("summary", "k", "Table: every symbol shown"));
-    const f3 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3), f1 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
-    let h = "<table><tr><th>symbol</th><th>group</th><th>years</th><th>trades</th><th>live R/trade</th><th>win%</th><th>live total</th><th>live DD</th><th>+ABI R/trade</th><th>+ABI total</th><th>+ABI DD</th><th>change</th></tr>";
-    st.slice().sort((x, y) => (y.orig - x.orig) || (y.bm - x.bm)).forEach(r => {
-      h += `<tr><td>${r.orig ? "" : "<i>"}${r.s}${r.part ? "*" : ""}${r.orig ? "" : "</i>"}</td><td>${r.grp ? r.grp.name : "–"}</td><td>${r.y0}–${r.y1}</td><td>${r.n}</td><td>${f3(r.bm)}</td><td>${(r.win * 100).toFixed(0)}%</td><td>${f1(r.bt)}</td><td>${r.bd.toFixed(1)}</td>` +
-           `<td>${f3(r.am)}</td><td>${f1(r.at)}</td><td>${r.ad.toFixed(1)}</td><td class="${r.am >= r.bm ? "ok" : "bad"}">${f3(r.am - r.bm)}</td></tr>`;
+    let h = `<table><tr><th>symbol</th><th>group</th><th>years</th><th>trades</th><th>${selName()} R/trade</th><th>win%</th><th>total</th><th>DD</th>` +
+            (cmpName ? `<th>${cmpName} R/trade</th><th>total</th><th>DD</th><th>change</th>` : "") + "</tr>";
+    st.slice().sort((x, y) => (y.orig - x.orig) || (y.am - x.am)).forEach(r => {
+      h += `<tr><td>${r.orig ? "" : "<i>"}${r.s}${r.part ? "*" : ""}${r.orig ? "" : "</i>"}</td><td>${r.grp ? r.grp.name : "–"}</td><td>${r.y0}–${r.y1}</td><td>${r.n}</td>` +
+           `<td>${f3(r.am)}</td><td>${(r.win * 100).toFixed(0)}%</td><td>${f1(r.at)}</td><td>${r.ad.toFixed(1)}</td>` +
+           (cmpName ? `<td>${f3(r.bm)}</td><td>${f1(r.bt)}</td><td>${r.bd.toFixed(1)}</td><td class="${r.am >= r.bm ? "ok" : "bad"}">${f3(r.am - r.bm)}</td>` : "") + "</tr>";
     });
     d.appendChild(el("div", "rp-tablewrap", h + "</table>")); card.appendChild(d);
     return card;
   }
-  function drawBars(cv, tip, rows, key) {
+  function drawBars(cv, tip, rows, key, cmpName) {
     const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr; const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
     const pad = { l: 92, r: 16, t: 8, b: 22 }, pw = W - pad.l - pad.r, rowH = (H - pad.t - pad.b) / rows.length;
-    const vals = [].concat(...rows.map(r => [r[key[0]], r[key[1]]]));
+    const vals = [].concat(...rows.map(r => cmpName ? [r[key[0]], r[key[1]]] : [r[key[0]]]));
     let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals); const span = (hi - lo) || 1; lo -= span * 0.04; hi += span * 0.04;
     const X = v => pad.l + (v - lo) / (hi - lo) * pw;
     ctx.fillStyle = C.surface; ctx.fillRect(0, 0, W, H);
@@ -513,56 +554,54 @@
     ctx.fillStyle = C.dim; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(unit(lo), X(lo) + 14, H - pad.b + 5); ctx.fillText(unit(hi), X(hi) - 14, H - pad.b + 5); ctx.fillText("0", X(0), H - pad.b + 5);
     ctx.textBaseline = "middle";
     rows.forEach((r, i) => {
-      const y = pad.t + i * rowH, bh = Math.max(4, rowH * 0.32);
+      const y = pad.t + i * rowH, bh = Math.max(4, rowH * (cmpName ? 0.32 : 0.55));
       ctx.fillStyle = r.orig ? C.text : C.dim; ctx.textAlign = "right"; ctx.font = (r.orig ? "" : "italic ") + "12px -apple-system,Segoe UI,Roboto,sans-serif";
       ctx.fillText(r.s + (r.part ? "*" : ""), pad.l - 8, y + rowH / 2);
-      [[r[key[0]], SC.live, y + rowH / 2 - bh - 1], [r[key[1]], SC.abi, y + rowH / 2 + 1]].forEach(([v, col, yy]) => {
-        if (state.symSetup !== "both" && col !== (state.symSetup === "live" ? SC.live : SC.abi)) return;
-        ctx.fillStyle = col; const x0 = X(Math.min(0, v)), x1 = X(Math.max(0, v)); ctx.fillRect(x0, yy, Math.max(1, x1 - x0), bh); });
+      const bars = cmpName ? [[r[key[0]], SC.sel, y + rowH / 2 - bh - 1], [r[key[1]], SC.cmp, y + rowH / 2 + 1]] : [[r[key[0]], SC.sel, y + rowH / 2 - bh / 2]];
+      bars.forEach(([v, col, yy]) => { ctx.fillStyle = col; const x0 = X(Math.min(0, v)), x1 = X(Math.max(0, v)); ctx.fillRect(x0, yy, Math.max(1, x1 - x0), bh); });
     });
     cv.onpointermove = e => { const rr = cv.getBoundingClientRect(), i = Math.floor((e.clientY - rr.top - pad.t) / rowH); const r = rows[i];
       if (!r) { tip.style.display = "none"; return; }
-      tip.innerHTML = `<b>${r.s}${r.part ? "*" : ""}</b> <span class="k">${r.orig ? "original" : "new"} · ${r.y0}–${r.y1} · ${r.n} trades</span><br>` +
-        `<span class="rp-sw sm" style="background:${SC.live}"></span>Live: <b>${fmtR(+r.bm.toFixed(3))}</b>/trade · total ${unit(r.bt)} · worst DD ${r.bd.toFixed(1)}R · win ${(r.win * 100).toFixed(0)}%<br>` +
-        `<span class="rp-sw sm" style="background:${SC.abi}"></span>+A+B+I: <b>${fmtR(+r.am.toFixed(3))}</b>/trade · total ${unit(r.at)} · worst DD ${r.ad.toFixed(1)}R`;
+      tip.innerHTML = `<b>${r.s}${r.part ? "*" : ""}</b> <span class="k">${r.grp ? r.grp.name + " · " : ""}${r.orig ? "original" : "new"} · ${r.y0}–${r.y1} · ${r.n} trades</span><br>` +
+        `<span class="rp-sw sm" style="background:${SC.sel}"></span>${selName()}: <b>${fmtR(+r.am.toFixed(3))}</b>/trade · total ${unit(r.at)} · worst DD ${r.ad.toFixed(1)}R · win ${(r.win * 100).toFixed(0)}%` +
+        (cmpName ? `<br><span class="rp-sw sm" style="background:${SC.cmp}"></span>${cmpName}: <b>${fmtR(+r.bm.toFixed(3))}</b>/trade · total ${unit(r.bt)} · worst DD ${r.bd.toFixed(1)}R` : "");
       tip.style.display = "block"; tip.style.left = Math.min(W - tip.offsetWidth - 4, Math.max(4, e.clientX - rr.left + 12)) + "px"; tip.style.top = Math.max(4, e.clientY - rr.top - tip.offsetHeight - 8) + "px"; };
     cv.onpointerleave = () => { tip.style.display = "none"; };
   }
-  function drawCurves(cv, tip, rows, syms) {
+  function drawCurves(cv, tip, rows, syms, cS, cC, cmpName) {
     const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr; const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
     const pad = { l: 52, r: 14, t: 12, b: 26 }, pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
     const tms = s => Date.parse(s + "T00:00:00Z");
     const t0 = tms(rows[0].dt), t1 = Math.max(t0 + 864e5, tms(rows[rows.length - 1].dt));
     const series = [];
-    const cum = (ts, f) => { let c = 0; return ts.map(t => ({ x: tms(t.dt), y: (c += f(t) / 1000) })); };
-    const setups = state.symSetup === "both" ? ["live", "abi"] : [state.symSetup];
-    if (state.symCurve === "pooled") setups.forEach(k => series.push({ name: k === "live" ? "Live setup" : "Live + A+B+I", col: SC[k], pts: cum(rows, t => k === "live" ? t.rb : t.ra), dash: [] }));
+    const cum = (ts, c) => { let v = 0; return ts.map(t => ({ x: tms(t.dt), y: (v += t.m[c] / 1000) })); };
+    const sets = [[cS, selName(), SC.sel, []]].concat(cC == null ? [] : [[cC, cmpName, SC.cmp, [5, 4]]]);
+    if (state.symCurve === "pooled") sets.forEach(([c, nm, col]) => series.push({ name: nm, col, pts: cum(rows, c), dash: [] }));
     else syms.forEach((s, i) => { const col = `hsl(${Math.round(i * 360 / Math.max(1, syms.length))},70%,62%)`; const ts = rows.filter(t => t.s === s);
-      setups.forEach(k => series.push({ name: s + (setups.length > 1 ? (k === "live" ? " live" : " +ABI") : ""), col, pts: cum(ts, t => k === "live" ? t.rb : t.ra), dash: k === "abi" && setups.length > 1 ? [5, 4] : [] })); });
+      sets.forEach(([c, nm, _, dash]) => series.push({ name: s + (sets.length > 1 ? " · " + nm : ""), col, pts: cum(ts, c), dash })); });
     let lo = 0, hi = 0; series.forEach(sr => sr.pts.forEach(p => { lo = Math.min(lo, p.y); hi = Math.max(hi, p.y); }));
     const sp = (hi - lo) || 1; lo -= sp * 0.05; hi += sp * 0.05;
     const X = x => pad.l + (x - t0) / (t1 - t0) * pw, Y = y => pad.t + (1 - (y - lo) / (hi - lo)) * ph;
     ctx.fillStyle = C.surface; ctx.fillRect(0, 0, W, H);
     ctx.font = "11px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.textBaseline = "middle";
-    const ys = [1, 2, 5, 10, 20, 25, 50, 100, 200].find(k => (hi - lo) / k <= 7) || 500;
+    const ys = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500].find(k => (hi - lo) / k <= 7) || 1000;
     for (let r = Math.ceil(lo / ys) * ys; r <= hi; r += ys) { ctx.strokeStyle = r === 0 ? "#6e7681" : C.grid; ctx.lineWidth = r === 0 ? 1.2 : 1; ctx.beginPath(); ctx.moveTo(pad.l, Y(r)); ctx.lineTo(W - pad.r, Y(r)); ctx.stroke();
       ctx.fillStyle = C.dim; ctx.textAlign = "right"; ctx.fillText((r > 0 ? "+" : "") + r + "R", pad.l - 6, Y(r)); }
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     const y0 = new Date(t0).getUTCFullYear(), y1 = new Date(t1).getUTCFullYear(), yst = Math.max(1, Math.ceil((y1 - y0 + 1) / Math.max(2, Math.floor(pw / 56))));
     for (let y = y0 + 1; y <= y1; y += yst) { const x = X(Date.UTC(y, 0, 1)); ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + ph); ctx.stroke(); ctx.fillStyle = C.dim; ctx.fillText(String(y), x, pad.t + ph + 6); }
     series.forEach(sr => { ctx.strokeStyle = sr.col; ctx.lineWidth = state.symCurve === "pooled" ? 2 : 1.5; ctx.setLineDash(sr.dash); ctx.beginPath();
-      sr.pts.forEach((p, i) => i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))); ctx.stroke(); ctx.setLineDash([]);
-      const last = sr.pts[sr.pts.length - 1]; if (last && state.symCurve === "each" && syms.length <= 8) { ctx.fillStyle = sr.col; ctx.textAlign = "left"; ctx.textBaseline = "middle"; } });
-    let base = ctx.getImageData(0, 0, cv.width, cv.height);
+      sr.pts.forEach((p, i) => i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))); ctx.stroke(); ctx.setLineDash([]); });
+    const base = ctx.getImageData(0, 0, cv.width, cv.height);
+    const restore = () => { ctx.putImageData(base, 0, 0); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.scale(dpr, dpr); };
     cv.onpointermove = e => { const rr = cv.getBoundingClientRect(), x = e.clientX - rr.left; const tx = t0 + (x - pad.l) / pw * (t1 - t0);
-      ctx.putImageData(base, 0, 0); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.scale(dpr, dpr);
-      ctx.strokeStyle = "rgba(240,246,252,0.35)"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + ph); ctx.stroke(); ctx.setLineDash([]);
+      restore(); ctx.strokeStyle = "rgba(240,246,252,0.35)"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + ph); ctx.stroke(); ctx.setLineDash([]);
       const at = sr => { let v = 0; for (const p of sr.pts) { if (p.x > tx) break; v = p.y; } return v; };
       const lines = series.map(sr => ({ sr, v: at(sr) })).sort((a, b) => b.v - a.v).slice(0, 12);
       tip.innerHTML = `<b>${new Date(tx).toISOString().slice(0, 10)}</b><br>` + lines.map(o => `<span class="rp-sw sm" style="background:${o.sr.col}"></span>${o.sr.name}: <b>${(o.v >= 0 ? "+" : "−") + Math.abs(o.v).toFixed(1)}R</b>`).join("<br>") + (series.length > 12 ? `<br><span class="k">+${series.length - 12} more</span>` : "");
       tip.style.display = "block"; tip.style.left = Math.min(W - tip.offsetWidth - 4, Math.max(4, x + 12)) + "px"; tip.style.top = (pad.t + 6) + "px"; };
-    cv.onpointerleave = () => { tip.style.display = "none"; ctx.putImageData(base, 0, 0); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.scale(dpr, dpr); };
+    cv.onpointerleave = () => { tip.style.display = "none"; restore(); };
   }
 
   function tableView(S, G) {

@@ -28,6 +28,7 @@ import pickle                                                               # no
 from pipeline import oos_queue_study as Q                                   # registers the new nine's engine inputs  # noqa: E402
 from pipeline import oos_build_inputs as OI                                 # noqa: E402
 from pipeline.per_symbol_stats import ORIG, PKL                             # noqa: E402
+from pipeline import mgmt_variants as MV                                    # noqa: E402
 
 MODE = "SCALED"; CAP = 180; NPG = 41
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "live", "static", "rpaths.json")
@@ -73,10 +74,12 @@ def do_symbol(sym):
         k6 = int(np.searchsorted(S.t, S.h4t[i0 + 6])) - k0 if i0 + 6 < len(S.h4) else jx
         mfe6 = float(bh[:max(1, min(k6, jx + 1))].max())
         q = RQ.get((sym, x["t"], x["strat"]))
+        mv = MV.variants(S, x, MODE)                                         # 96 management combinations (webapp selector)
         out.append({"s": sym.split(".")[0], "d": x["strat"], "l": 1 if x["up"] else 0, "y": int(x["t"][:4]), "o": oc,
                     "tp": round(u["tp2_R"], 2), "f6": round(mfe6, 2), "xb": round(xbars, 2), "src": "backtest", "rt": rt, "pg": pg,
                     "dt": x["t"][:10].replace(".", "-"), "g": 0 if sym in ORIG else 1, "p": 1 if sym in PARTIAL else 0,
-                    "rb": None if q is None else round(q[0] * 1000), "ra": None if q is None else round(q[1] * 1000)})
+                    "rb": None if q is None else round(q[0] * 1000), "ra": None if q is None else round(q[1] * 1000),
+                    "m": None if mv is None else [round(v * 1000) for v in mv]})
     return out
 
 
@@ -90,11 +93,15 @@ def main():
     with Pool(6) as pool: trades = [t for r in pool.map(do_symbol, sorted({x["sym"] for x in ALL})) for t in r]
     doc = {"built": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), "engine": "M1 ask-corrected replay, live stop management",
            "symbols_orig": [s.split(".")[0] for s in ORIG], "partial": [s.split(".")[0] for s in sorted(PARTIAL)],
+           "mgmt": {"index": "sa*32 + K + 2P + 4R + 8B + 16I (sa 0 = S off, 1 = S on, 2 = S+A)", "live": MV.LIVE, "all": MV.ALL},
            "rt_unit": "H4 bar (6 = 1 trading day)", "pg_points": NPG, "cap_bars": CAP, "trades": trades}
     raw = json.dumps(doc, separators=(",", ":")).encode()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "wb") as f: f.write(raw)
     with gzip.open(OUT + ".gz", "wb", compresslevel=9) as f: f.write(raw)
+    chk = [t for t in trades if t["m"] is not None and t["rb"] is not None]
+    d39 = max(abs(t["m"][MV.LIVE] - t["rb"]) for t in chk); d95 = max(abs(t["m"][MV.ALL] - t["ra"]) for t in chk)
+    print(f"management variants check on {len(chk)} trades: live combo vs base max |diff| {d39} (x1000 R), all-on vs A+B+I max |diff| {d95}")
     from collections import Counter
     print(f"{len(trades)} trades in {(time.time() - T0) / 60:.1f} min; outcomes {dict(Counter(t['o'] for t in trades))}; "
           f"{len(raw) / 1e6:.2f} MB raw, {os.path.getsize(OUT + '.gz') / 1e6:.2f} MB gzip")
