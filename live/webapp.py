@@ -84,7 +84,7 @@ var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.que
 """
 
 def page(title: str, body: str, active: str = "", refresh: int | None = None) -> str:
-    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/paths", "Paths", "paths"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
+    tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/paths", "Paths", "paths"), ("/wiki", "Wiki", "wiki"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
     nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs) + '<span id="utc" class="k" style="margin-left:auto;align-self:center;white-space:nowrap;font-variant-numeric:tabular-nums"></span>'
     m = f'<meta name="autorefresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -108,6 +108,105 @@ RPATHS_CSS = """
 .rp-readout b{font-variant-numeric:tabular-nums}.rp-tablewrap{overflow-x:auto}.rp-table td,.rp-table th{white-space:nowrap;font-variant-numeric:tabular-nums}.rp-foot{margin:8px 2px 20px}
 .rp-wide{max-width:1400px}
 """
+
+WIKI_CSS = """
+.wk h1{font-size:24px;margin:8px 0 2px}.wk .lead{color:var(--dim);margin:0 0 14px}
+.wk h2{font-size:13px;letter-spacing:.08em;margin:26px 0 10px;color:var(--dim);text-transform:uppercase}
+.wk .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.wk .st{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--c);border-radius:10px;padding:14px 16px}
+.wk .st h3{margin:0;font-size:18px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}.wk .st .tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:#21262d;color:var(--dim);white-space:nowrap}
+.wk .st .one{margin:6px 0 10px;color:var(--txt)}.wk .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:13px}
+.wk .kv dt{color:var(--dim)}.wk .kv dd{margin:0}
+.wk .steps{counter-reset:s;display:grid;gap:8px}.wk .step{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.wk .step:before{counter-increment:s;content:counter(s);flex:none;width:28px;height:28px;border-radius:50%;background:#1f3b5c;color:#cde2fb;font-weight:700;display:flex;align-items:center;justify-content:center}
+.wk .step b{display:block;font-size:15px}.wk .step span{color:var(--dim);font-size:13px}
+.wk .step .why{display:block;color:var(--txt);font-size:13px;margin-top:3px}
+.wk .rails{display:flex;flex-wrap:wrap;gap:8px}.wk .rail{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px}
+.wk .rail b{color:var(--txt)}
+.wk .pend{background:linear-gradient(180deg,#1b1f2a,#161b22);border:1px dashed #6e7681;border-radius:10px;padding:14px 16px}
+.wk .pend h3{margin:0 0 4px;font-size:16px}.wk .pend .star{color:var(--warn);font-weight:800}
+.wk .pend .num{font-variant-numeric:tabular-nums;color:var(--up);font-weight:600}
+.wk .note{color:var(--dim);font-size:13px;margin-top:10px}
+.wk details{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-top:10px}
+.wk details summary{cursor:pointer;font-weight:600}.wk details li{margin:5px 0;font-size:14px}.wk details li span{color:var(--dim)}
+"""
+
+WIKI_STRATEGIES = [
+    ("TrendCont", "#3fb950", "Pullback in a trend",
+     "A trend pauses and drifts back to the H4 20-EMA; you join it as it resumes.",
+     [("Fires when", "the market is tagged TREND"), ("Your call?", "Always (DISCRETION)"), ("Banks at +1R", "25%"), ("Character", "Thin edge on its own - the big runners (about 15%) pay for the rest")]),
+    ("DeepFib", "#bc8cff", "Buy the trend at a discount",
+     "After a strong push, price pulls back deep into it (the 61.8-78.6% zone) and prints a reversal candle.",
+     [("Fires when", "a real trend leg is retraced deeply"), ("Your call?", "Take by default in a TREND; your call otherwise"), ("Banks at +1R", "25%"), ("Character", "Wins about half the time, pays 2.5-5x risk")]),
+    ("SweepMSS", "#58a6ff", "Stop hunt, then a turn",
+     "Price spikes through an obvious high or low, grabs the stops, snaps back and breaks structure the other way.",
+     [("Fires when", "a real swing level is swept and structure shifts"), ("Your call?", "Take by default in a TREND; your call otherwise"), ("Banks at +1R", "50%"), ("Character", "Loses more often than it wins - big winners pay for it")]),
+    ("EMArevQ", "#d29922", "The rubber band",
+     "Price stretches unusually far from its 20-bar average and prints a reversal; you fade the stretch back toward the average.",
+     [("Fires when", "a 1.5+ ATR stretch that climbed slowly, or a clean rejection candle"), ("Your call?", "Always (DISCRETION)"), ("Banks at +1R", "50% (often earlier - its first target is the average itself)"), ("Character", "Short, quick trades")]),
+    ("Inverse", "#f0883e", "When a trade fails slowly, flip it",
+     "If a trade is still open and unbanked in H4 bars 7-18 and then gets stopped out, a resting order takes the opposite trade at that moment.",
+     [("Fires when", "its parent is stopped out between bars 7 and 18"), ("Your call?", "Always (DISCRETION) - offered in advance"), ("Banks at +1R", "the parent's share"), ("Character", "Backtest about +0.20R per fill; graded live")]),
+]
+
+WIKI_STEPS = [
+    ("Signal appears", "A detector fires at the close of an H4 bar.", "The card, the advisor's read and a Telegram message all arrive together."),
+    ("Spread check", "If the spread costs more than 0.10R of the stop, the signal is held, not thrown away.", "It is re-offered once, at the current price, the first time the spread is normal again (within 3 H4 bars)."),
+    ("Trial: 25% in", "Approve and only a quarter of the position goes in.", "About 29% of signals are stopped out inside the first day - at a quarter of the cost."),
+    ("Bar 6: the other 75%", "If the trade is still open after six H4 bars (about a day), the rest goes in.", "Same return as entering in full, with about a third less drawdown."),
+    ("+1R: bank and lock", "The EA banks part of the position (25% or 50%) and moves the stop to entry.", "From here a winner can no longer turn into a loss."),
+    ("+1.5R: the boost", "The EA adds 50% more of the full size.", "Worth about +0.04R a trade - one of the strongest pieces of the system."),
+    ("+1.5R on shorts: lock profit", "On a short, every ticket's stop moves to +0.25R.", "Shorts reach TP2 less often than longs, so some profit is protected."),
+    ("TP2 or stop", "The rest runs to the final target or comes back to its stop.", "Trades that reach +2R at any point finish at TP2 about 57% of the time."),
+]
+
+WIKI_RAILS = [("Risk ladder", "0.10% / 0.25% / full size per trade, set by FTMO headroom"), ("Lot floor", "auto-reject when the minimum lot is over 2x the risk"),
+              ("Correlation cap", "1.5% total correlated open risk"), ("Election gate", "no new trades into a scheduled election"),
+              ("Big releases", "no entry within 6h of a major release"), ("FTMO headroom", "every order checked against the daily and max loss"),
+              ("Kill switch", "one switch stops all new entries")]
+
+WIKI_PENDING = [
+    ("Hold the add until a weak trade proves itself", "If a trade's average over its first 24 hours is below 0R, the 75% add waits until price reaches +1R.",
+     "+0.006R a trade, less drawdown in both periods"),
+    ("Shorts: close stalled ones at day 2", "A short whose average over 48 hours isn't above +0.5R is closed.",
+     "Worst drawdown 27.4 -> 22.2R at no cost over 13 years; strongly positive in 2025-26"),
+    ("Longs: add to improving trades at day 2", "If a long's second day averages better than its first, add 50% more.",
+     "+0.023R a trade (the strongest single result)"),
+]
+
+WIKI_DROPPED = [
+    ("Raising the stop after the bank", "every level and timing tested costs more than it saves - pullbacks on the way to TP2 get cut"),
+    ("Cutting trades that are underwater after 1-5 days", "the ones that recover pay for the rest"),
+    ("Selling part of the position at +1.5R", "each slice sold costs about 0.015R a trade"),
+    ("Lower targets for shorts", "no consistent pattern"), ("A bigger pyramid on fast starters", "a little more R for a lot more drawdown"),
+    ("Gating the +1.5R boost on the average", "even late breakouts pay for the boost"),
+    ("Never adding the 75% on weak trades", "too much of the slow winners' upside is lost"),
+]
+
+
+def wiki_page(q: dict) -> str:
+    """trader 2026-10-03: a short, plain-English wiki - the strategies, how every trade is managed, and what is being studied."""
+    E_ = E
+    cards = "".join(
+        f'<div class="st" style="--c:{c}"><h3>{E_(n)} <span class="tag">{E_(t)}</span></h3><div class="one">{E_(one)}</div>'
+        f'<dl class="kv">' + "".join(f"<dt>{E_(k)}</dt><dd>{E_(v)}</dd>" for k, v in kv) + "</dl></div>"
+        for n, c, t, one, kv in WIKI_STRATEGIES)
+    steps = "".join(f'<div class="step"><div><b>{E_(a)}</b><span>{E_(b)}</span><span class="why">{E_(c)}</span></div></div>' for a, b, c in WIKI_STEPS)
+    rails = "".join(f'<span class="rail"><b>{E_(a)}</b> - {E_(b)}</span>' for a, b in WIKI_RAILS)
+    pend = "".join(f'<div class="pend"><h3>{E_(a)} <span class="star">*</span></h3><div>{E_(b)}</div><div class="note">Backtest: <span class="num">{E_(c)}</span></div></div>'
+                   for a, b, c in WIKI_PENDING)
+    dropped = "".join(f"<li><b>{E_(a)}</b> <span>- {E_(b)}</span></li>" for a, b in WIKI_DROPPED)
+    body = (f'<style>{WIKI_CSS}</style><div class="wk">'
+            f'<h1>Wiki</h1><p class="lead">The system on one page: what each strategy looks for, and what happens to every trade after you approve it.</p>'
+            f'<h2>The strategies</h2><div class="grid">{cards}</div>'
+            f'<h2>How every trade is managed</h2><div class="steps">{steps}</div>'
+            f'<h2>Safety rails</h2><div class="rails">{rails}</div>'
+            f'<h2>Being studied</h2><div class="grid">{pend}</div>'
+            f'<div class="note"><span class="star" style="color:var(--warn)">*</span> Not live yet - tested on 13 years of history and waiting for the coach. '
+            f'Together the three add about +28% R per trade with about 14% less drawdown in the backtest.</div>'
+            f'<details><summary>Tried and dropped</summary><ul>{dropped}</ul></details></div>')
+    return page("Wiki", body, "wiki")
+
 
 def paths_page(q: dict) -> str:
     """trader 2026-10-02: the R-path explorer - how trades travel to their exit (heatmap + typical path + drag-box share)."""
@@ -1257,6 +1356,7 @@ class H(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "max-age=3600"); self.end_headers(); self.wfile.write(data); return
                 with open(base, "rb") as f: return self._send(f.read(), "application/json")
             if parts[0] == "paths": return self._send(paths_page(q))
+            if parts[0] == "wiki": return self._send(wiki_page(q))
             if parts[0] == "api" and len(parts) == 3 and parts[1] == "bars":
                 from live import mt5feed
                 sym = parts[2]; tf = q.get("tf", "h4"); n = max(1, min(2000, int(q.get("n", "500") or 500)))
