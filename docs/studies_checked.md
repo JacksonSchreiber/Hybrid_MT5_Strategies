@@ -74,3 +74,7 @@ nothing is re-run by accident and the coach can see what was tried.
   - 2012-24: slightly negative in every cell (-0.001..-0.003R), drawdown a little lower (to 24.7R).
   - 2025-26: positive (+0.002..+0.021, t 2-4), the usual bad-period-for-shorts pattern.
   - Not forwarded. `short_bank_avg_study.py`, `data/study/short_bank_avg_report.txt`
+- **Worsening streaks -> sell** (daily averages falling 2..5 days in a row; sell 25-100%; longs and shorts separately).
+  - Longs, 2-day streak: clearly negative (-0.030R at 100%, t -3.1; -0.007 at 25%). 3+ day streaks are rare (2-39 trades), about 0.
+  - Shorts: about 0 at every length (-0.002..+0.001).
+  - Not forwarded. Improving streaks -> add are summarised in queue entry 3. `streak_avg_study.py`, `data/study/streak_avg_report.txt`

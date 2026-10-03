@@ -159,6 +159,10 @@ full size at market (it shares the position's stop and runs to TP2).
   - **But it adds to many more trades** (517 vs 111), so drawdown rises (27.4 -> 31.9R). Return per unit of drawdown is a little
     below C's.
   - **The choice:** C is the drawdown-efficient version, improving is the return-maximising one.
+  - **Longer streaks are weaker** (`pipeline/streak_avg_study.py`). Daily averages rising 2 / 3 / 4 / 5 days in a row, then add
+    +50% (longs): +0.023 / +0.014 / +0.009 / +0.003R in 2012-24; +0.013 / -0.002 / -0.004 / +0.001 in 2025-26. Two days (the
+    trigger above) is the best and the only one positive in both periods. The same add on SHORTS is about 0 in 2012-24 and -0.033
+    (t -3.3) in 2025-26, so it stays a longs-only rule.
 - **Ask:** pre-register "+50% at day 2 when the 48h average > +1R" (longs only, or both sides) and run an EA reproduction.
 
 ## 4. The three rules together (added 2026-10-02)
