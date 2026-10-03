@@ -12,6 +12,11 @@ Outcome: "tp2" (the runner reached TP2), "be" (banked, then stopped at entry / +
 "open" (still running at the end of the data - dropped). Meta: symbol, detector, direction, year, TP2 in R, best R in the first
 6 H4 bars (fast / slow starts), exit time in H4 bars. source = "backtest" (live trades will be appended with source "live").
 Output: live/static/rpaths.json (gzip-served by the webapp).
+2026-10-03 (trader): ALL 16 downloaded symbols - the original seven AND the nine never used in development - with the population of
+pipeline/per_symbol_stats.py (all four detectors from today's EA build: originals' TrendCont from the pinned AA journals, not REC;
+the new nine from data/study/oos_aa). Extra per trade: dt signal date, g 0 original / 1 new, p 1 = partial years (EURJPY/GBPJPY
+2020+, EURGBP 2013-16: the tester lacked conversion history), rb / ra = full-position R x1000 under the live stack / live + A+B+I
+(from data/study/per_symbol_trades.pkl - run per_symbol_stats.py first).
 """
 from __future__ import annotations
 import gzip, json, os, sys, time
@@ -19,8 +24,10 @@ import numpy as np
 from multiprocessing import Pool
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from pipeline import ask_side_study as A                                   # noqa: E402
-from pipeline.exit_mgmt_study import load_rows                             # noqa: E402
-from pipeline.exit_s025_study import aa_rows                                # noqa: E402
+import pickle                                                               # noqa: E402
+from pipeline import oos_queue_study as Q                                   # registers the new nine's engine inputs  # noqa: E402
+from pipeline import oos_build_inputs as OI                                 # noqa: E402
+from pipeline.per_symbol_stats import ORIG, PKL                             # noqa: E402
 
 MODE = "SCALED"; CAP = 180; NPG = 41
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "live", "static", "rpaths.json")
@@ -39,9 +46,10 @@ def walk(F, be, bank_R, tp2_R, up):
     return "open", None, None
 
 
-ALL = []
+ALL = []; RQ = {}
+PARTIAL = {"EURJPY.dk", "GBPJPY.dk", "EURGBP.dk"}
 def do_symbol(sym):
-    S = A.Sym(sym, A.spread_profile(), A.ref_prices()); out = []
+    S = A.Sym(sym, A.spread_profile(), Q.REFS); out = []
     for x in [x for x in ALL if x["sym"] == sym]:
         u = A.setup(S, x, MODE)
         if not u or u["tp2_R"] is None: continue
@@ -64,18 +72,24 @@ def do_symbol(sym):
         pg = [round(float(bc[k]) * 100) for k in idx[:-1]] + [round(xr * 100)]
         k6 = int(np.searchsorted(S.t, S.h4t[i0 + 6])) - k0 if i0 + 6 < len(S.h4) else jx
         mfe6 = float(bh[:max(1, min(k6, jx + 1))].max())
+        q = RQ.get((sym, x["t"], x["strat"]))
         out.append({"s": sym.split(".")[0], "d": x["strat"], "l": 1 if x["up"] else 0, "y": int(x["t"][:4]), "o": oc,
-                    "tp": round(u["tp2_R"], 2), "f6": round(mfe6, 2), "xb": round(xbars, 2), "src": "backtest", "rt": rt, "pg": pg})
+                    "tp": round(u["tp2_R"], 2), "f6": round(mfe6, 2), "xb": round(xbars, 2), "src": "backtest", "rt": rt, "pg": pg,
+                    "dt": x["t"][:10].replace(".", "-"), "g": 0 if sym in ORIG else 1, "p": 1 if sym in PARTIAL else 0,
+                    "rb": None if q is None else round(q[0] * 1000), "ra": None if q is None else round(q[1] * 1000)})
     return out
 
 
 def main():
-    global ALL
+    global ALL, RQ
     T0 = time.time()
-    ALL = sorted([dict(x, strat="TrendCont") for x in load_rows()] + [x for x in aa_rows({"SweepMSS", "DeepFib", "EMArevQ"}) if x["sym"] != "BTCUSD.dk"],
-                 key=lambda x: x["t"])
-    with Pool(2) as pool: trades = [t for r in pool.map(do_symbol, sorted({x["sym"] for x in ALL})) for t in r]
+    RQ = {(z[0], z[1], z[2]): (z[4][MODE]["base"], z[4][MODE]["A+B+I"]) for z in pickle.load(open(PKL, "rb"))}
+    new = [s for s in OI.NEW if s != "US30.dk"]
+    bad, drag = Q.check_new(new)
+    ALL = sorted(Q.pop_original(set(ORIG), aa_trendcont=True) + Q.pop_new([s for s in new if s not in bad], drag), key=lambda x: x["t"])
+    with Pool(6) as pool: trades = [t for r in pool.map(do_symbol, sorted({x["sym"] for x in ALL})) for t in r]
     doc = {"built": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), "engine": "M1 ask-corrected replay, live stop management",
+           "symbols_orig": [s.split(".")[0] for s in ORIG], "partial": [s.split(".")[0] for s in sorted(PARTIAL)],
            "rt_unit": "H4 bar (6 = 1 trading day)", "pg_points": NPG, "cap_bars": CAP, "trades": trades}
     raw = json.dumps(doc, separators=(",", ":")).encode()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
