@@ -140,6 +140,9 @@ input bool   InpPyramid          = false;  // TESTER study (coach item 20): add 
 input double InpPyramidR         = 1.5;
 input double InpPyramidFrac      = 0.5;
 input double InpShortRaiseR      = 0.0;    // TESTER study (coach item 25): SELL - every leg's stop to +R at the +InpPyramidR touch (0 = off)
+input bool   InpAddGate          = false;  // TESTER study (coach queue A): trial average < 0 at the bar-6 add holds the add until +1R
+input double InpShortCutAvg      = 0.0;    // TESTER study (coach queue B): SELL closed at the bar-12 close if its average R <= this (0 = off; queue: 0.5)
+input double InpImprovingAdd     = 0.0;    // TESTER study (coach queue I): BUY whose day-2 average > day-1 average adds this share of full size at the bar-12 close (0 = off; queue: 0.5)
 input bool   InpSelfTestReoffer  = false;  // SELF-TEST only (coach item 26): every fresh signal is "spread-refused" (held), then re-offered next poll
 input bool   InpSelfTestStaged   = false;
 input int    InpSelfTestStagedN  = 6;      // TESTER ONLY: the add bar for the staged self-test (1 = add at the first bar close, so the path is exercised)  // TESTER ONLY: run the live self-test with staged entry on (coach item 18 check)
@@ -358,6 +361,7 @@ struct JournalRow
    double   sr_vol;             // THIS ticket's volume when the stop was moved (the counterfactual's size)
    int      sr_tries;           // failed modify attempts (5 -> refused)
    //--- coach item 26: re-offered spread rejects (journal columns reoffer, held_minutes, spread_r_at_signal, spread_r_at_offer, drift_r)
+   int      d2_state;           // coach queue B / I: 0 day-2 check pending, 1 cut (B), 2 checked - no action, 3 improving add placed (I), 4 add refused
    int      ro;
    int      ro_held_min;
    double   ro_spread0, ro_spread1, ro_drift;
@@ -365,7 +369,7 @@ struct JournalRow
 void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0; r.st_anchor_entry=0.0; r.st_anchor_risk=0.0; r.st_fill_time=0; r.st_pyr=0;
                               r.inv_state=0; r.inv_parent_sid=0; r.inv_parent_posid=0; r.inv_parent_strategy=""; r.inv_bars_to_stop=0; r.inv_slip_r=0.0;
                               r.sr_state=0; r.sr_time=0; r.sr_px=0.0; r.sr_stop=0.0; r.sr_from=0.0; r.sr_vol=0.0; r.sr_tries=0;
-                              r.ro=0; r.ro_held_min=0; r.ro_spread0=0.0; r.ro_spread1=0.0; r.ro_drift=0.0; }
+                              r.ro=0; r.ro_held_min=0; r.ro_spread0=0.0; r.ro_spread1=0.0; r.ro_drift=0.0; r.d2_state=0; }
 JournalRow g_rows[];
 
 //--- mid-trade management panel state
@@ -552,6 +556,14 @@ double   g_cfg_pyr_r=1.5;         // live.json pyramid_trigger_r
 double   g_cfg_pyr_f=0.5;         // live.json pyramid_frac: share of the ORIGINAL full size added
 double   g_cfg_short_raise_r=0.0; // live.json short_raise_at_pyramid_r: coach item 25 - SELL stop to +R at +1.5R (0 = off)
 bool     g_cfg_reoffer=false;     // live.json reoffer_spread_rejects: coach item 26 - hold a spread-refused signal, re-offer it once
+//--- coach queue A / B / I (built 2026-10-03, OFF until the coach rules): averages = mean of the M1 bid closes since the first fill,
+//--- in the first tranche's 1R
+bool     g_cfg_add_gate=false;    // live.json staged_add_gate: trial average < 0 at the bar-6 add -> hold the add until +1R
+double   g_cfg_short_cut=0.0;     // live.json short_day2_cut_avg: SELL closed at the bar-12 close if its average <= this (0 = off)
+double   g_cfg_impr_add=0.0;      // live.json improving_add_frac: BUY with day-2 average > day-1 average adds this share of full size (0 = off)
+#define ADD_GATE_AVG 0.0
+#define ADD_GATE_REL 1.0
+#define AVG_NA -99999.0
 //--- coach item 26: held spread-rejected candidates (one re-offer each), persisted as state\<SYM>\held_<sid>.json
 #define MAX_HELD 3
 struct HeldSlot { bool active; int sid; SignalCandidate cand; datetime sig_bar; datetime held_at; double spread0;
@@ -878,6 +890,9 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_pyr_r=StringToDouble(JGet(k,v,"pyramid_trigger_r","1.5")); if(g_cfg_pyr_r<1.05 || g_cfg_pyr_r>5.0) g_cfg_pyr_r=1.5;
       g_cfg_pyr_f=StringToDouble(JGet(k,v,"pyramid_frac","0.5"));     if(g_cfg_pyr_f<0.05 || g_cfg_pyr_f>1.0) g_cfg_pyr_f=0.5;
       g_cfg_reoffer=(StringToInteger(JGet(k,v,"reoffer_spread_rejects","0"))!=0);
+      g_cfg_add_gate=(StringToInteger(JGet(k,v,"staged_add_gate","0"))!=0);
+      g_cfg_short_cut=StringToDouble(JGet(k,v,"short_day2_cut_avg","0")); if(g_cfg_short_cut<0.0 || g_cfg_short_cut>3.0) g_cfg_short_cut=0.0;
+      g_cfg_impr_add=StringToDouble(JGet(k,v,"improving_add_frac","0"));  if(g_cfg_impr_add<0.0 || g_cfg_impr_add>1.0) g_cfg_impr_add=0.0;
       g_cfg_short_raise_r=StringToDouble(JGet(k,v,"short_raise_at_pyramid_r","0"));
       if(g_cfg_short_raise_r<0.0 || g_cfg_short_raise_r>=g_cfg_pyr_r) g_cfg_short_raise_r=0.0;      // nonsense -> off
       if(g_cfg_election_days<0) g_cfg_election_days=0;
@@ -1054,6 +1069,7 @@ void OnTimer()
       LiveFtmoDayReset();      // no file I/O unless the FTMO day key changed
       LiveProcessTasks();
       StagedAddTick();         // coach item 18: add the second tranche at the close of H4 bar N (live, staged rows only)
+      Day2Tick();              // coach queue B / I (off unless live.json short_day2_cut_avg / improving_add_frac > 0)
       ReofferTick();           // coach item 26: held spread rejects - re-offer once the spread normalises, or close the window
       if(g_cfg_inverse || InverseArmedCount()>0) { InverseArmTick(); InverseFireTick(); }   // coach item 21 (also every tick)
       if(LiveWeekendFlatOn() && LiveWeekendWindow(TimeCurrent())) LiveWeekendFlatten();   // §10.1 live: retries a refused close
@@ -1082,6 +1098,7 @@ int OnInit()
   {
    //--- coach item 18 tester study: staged entry (+ early promotion) from inputs when not live; live reads live.json
    if(!InpLiveMode && InpInverse) g_cfg_inverse=true;   // coach item 21 tester study
+   if(!InpLiveMode){ g_cfg_add_gate=InpAddGate; g_cfg_short_cut=MathMax(0.0,InpShortCutAvg); g_cfg_impr_add=MathMax(0.0,MathMin(1.0,InpImprovingAdd)); }   // coach queue A/B/I tester
    if(!InpLiveMode && InpStaged)
      { g_cfg_staged=true; g_cfg_st_f0=InpStagedF0; g_cfg_st_n=MathMax(1,InpStagedN); g_cfg_st_early=MathMax(0.0,InpEarlyPromoteR); }
    bool in_tester = (bool)MQLInfoInteger(MQL_TESTER);
@@ -1396,6 +1413,7 @@ void OnTick()
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
    if(!InpLiveMode && g_cfg_staged) StagedAddTick();   // coach item 18 tester study (live runs it on the timer)
+   if(!InpLiveMode) Day2Tick();                         // coach queue B / I tester study (inert unless InpShortCutAvg / InpImprovingAdd > 0)
    if(g_cfg_inverse && iTime(_Symbol,PERIOD_H4,0)!=g_inv_last_bar) { g_inv_last_bar=iTime(_Symbol,PERIOD_H4,0); InverseArmTick(); }   // once per H4 bar
    if(InverseArmedCount()>0) InverseFireTick();          // coach item 21: the fill is time-critical - every tick while armed
    LiveDetectExternalEdits();  // live only: SL/TP moved in the trader's own terminal -> EXTERNAL_* action + audit
@@ -2326,7 +2344,7 @@ void LiveSaveRowState(int i)
    j.KStr("inv_parent_strategy",r.inv_parent_strategy); j.KInt("inv_bars_to_stop",r.inv_bars_to_stop); j.KNum("inv_slip_r",r.inv_slip_r,4);
    j.KInt("sr_state",r.sr_state); j.KInt("sr_time",(long)r.sr_time); j.KNum("sr_px",r.sr_px,_Digits); j.KNum("sr_stop",r.sr_stop,_Digits);
    j.KNum("sr_from",r.sr_from,_Digits); j.KNum("sr_vol",r.sr_vol,2); j.KInt("sr_tries",r.sr_tries);
-   j.KInt("ro",r.ro); j.KInt("ro_held_min",r.ro_held_min); j.KNum("ro_spread0",r.ro_spread0,4); j.KNum("ro_spread1",r.ro_spread1,4); j.KNum("ro_drift",r.ro_drift,4);
+   j.KInt("d2_state",r.d2_state); j.KInt("ro",r.ro); j.KInt("ro_held_min",r.ro_held_min); j.KNum("ro_spread0",r.ro_spread0,4); j.KNum("ro_spread1",r.ro_spread1,4); j.KNum("ro_drift",r.ro_drift,4);
    j.Key("actions"); j.BeginObj();
    int na=0;
    for(int a=0;a<ArraySize(g_actions);a++)
@@ -2392,6 +2410,7 @@ void LiveWritePositions()
       j.KInt("tranche",g_rows[i].st_tranche); j.KInt("staged_state",g_rows[i].st_state); j.KNum("full_lots",g_rows[i].st_full_lots,2);
       if(g_rows[i].st_tranche==1) j.KTime("add_due",g_rows[i].time+(datetime)((g_cfg_st_n+1)*PeriodSeconds(PERIOD_H4)));
       j.KStr("staged_note",g_rows[i].reject_why);
+      j.KInt("d2_state",g_rows[i].d2_state);
       j.KInt("short_raise",g_rows[i].sr_state); j.KInt("short_raise_time",(long)(g_rows[i].sr_state==1 ? g_rows[i].sr_time : 0));
       j.KNum("short_raise_stop",g_rows[i].sr_stop,_Digits);
       bool beok=BEPlaceable(i); PositionSelectByTicket((ulong)g_rows[i].posid);
@@ -2447,6 +2466,7 @@ bool LiveLoadRowState(string rel)
    r.sr_state=(int)StringToInteger(JGet(k,v,"sr_state","0")); r.sr_time=(datetime)StringToInteger(JGet(k,v,"sr_time","0"));
    r.sr_px=StringToDouble(JGet(k,v,"sr_px","0")); r.sr_stop=StringToDouble(JGet(k,v,"sr_stop","0")); r.sr_from=StringToDouble(JGet(k,v,"sr_from","0"));
    r.sr_vol=StringToDouble(JGet(k,v,"sr_vol","0")); r.sr_tries=(int)StringToInteger(JGet(k,v,"sr_tries","0"));
+   r.d2_state=(int)StringToInteger(JGet(k,v,"d2_state","0"));
    r.ro=(int)StringToInteger(JGet(k,v,"ro","0")); r.ro_held_min=(int)StringToInteger(JGet(k,v,"ro_held_min","0"));
    r.ro_spread0=StringToDouble(JGet(k,v,"ro_spread0","0")); r.ro_spread1=StringToDouble(JGet(k,v,"ro_spread1","0")); r.ro_drift=StringToDouble(JGet(k,v,"ro_drift","0"));
    g_rows[n]=r;
@@ -6198,9 +6218,22 @@ void StagedAddTick()
    int nrows=ArraySize(g_rows);
    for(int i=0;i<nrows;i++)
      {
-      if(g_rows[i].st_state!=1 || g_rows[i].st_tranche!=1 || g_rows[i].symbol!=_Symbol) continue;
+      if((g_rows[i].st_state!=1 && g_rows[i].st_state!=4) || g_rows[i].st_tranche!=1 || g_rows[i].symbol!=_Symbol) continue;
       int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
       if(sh<0) continue;
+      if(g_rows[i].st_state==4)
+        {   //--- coach queue A: the add is HELD - it goes in only when price reaches +1R (or the trader promotes it now)
+         if(g_rows[i].closed || !PositionSelectByTicket((ulong)g_rows[i].posid)) { changed=true; StagedSkip(i,"position_closed while the add was held (gate)"); continue; }
+         //--- the study's release: the BID reaches +1R from the card's entry (both sides: frame bh). If the first tranche's bank
+         //--- triggers on the same tick, the bank goes first (the study banks before it adds, so the add joins the runner unbanked-free)
+         double ce=CardE(i), cr=CardR(i);
+         double rl=(g_rows[i].direction>0 ? ce+ADD_GATE_REL*cr : ce-ADD_GATE_REL*cr);
+         double bq=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+         bool rel=(cr>0.0 && (g_rows[i].direction>0 ? bq>=rl : bq<=rl));
+         bool man=(g_promote_sid>0 && g_rows[i].id==g_promote_sid);
+         if(!rel && !man) continue;
+         if(rel && !man && !g_rows[i].banked && BankReached(i)) continue;       // bank on this tick first, release on the next
+        }
       //--- coach 2026-10-01: EARLY PROMOTION - during bars 1..N-1, price trading through +staged_early_promote_r (from the
       //--- first tranche's entry, in its 1R) adds the rest at once; otherwise the bar-N close add as before.
       string promote="";
@@ -6213,8 +6246,20 @@ void StagedAddTick()
          double bq=SymbolInfoDouble(_Symbol,SYMBOL_BID), aq=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
          if(g_rows[i].direction>0 ? bq>=lvl : aq<=lvl) promote="early";
         }
+      if(g_rows[i].st_state==4 && promote!="manual_promote") promote="gate_1R";      // coach queue A: released at +1R
       if(promote=="") continue;                              // neither the early level nor the bar-N close yet
       changed=true;
+      if(promote=="bar"+IntegerToString(g_cfg_st_n) && g_cfg_add_gate && g_rows[i].st_state==1 && QueueRuleRow(i))
+        {   //--- coach queue A: a weak trial (average R from the entry-bar open to the bar-N close below 0) holds the add until +1R
+         double av=AvgRSince(i,BarOpen(i,1),BarOpen(i,g_cfg_st_n+1));
+         if(av!=AVG_NA && av<ADD_GATE_AVG)
+           {
+            g_rows[i].st_state=4; g_rows[i].reject_why=StringFormat("add held: trial average %+.2fR < 0 - goes in at +1R",av);
+            if(InpLiveMode) AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"held","gate",StringFormat("avg=%+.3f posid=%I64d",av,g_rows[i].posid));
+            Print("Signal #",g_rows[i].id," STAGED ADD HELD (gate): trial average ",DoubleToString(av,2),"R < 0");
+            continue;
+           }
+        }
       if(g_rows[i].closed || !PositionSelectByTicket((ulong)g_rows[i].posid)) { StagedSkip(i,"position_closed"); continue; }
       double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
       double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0) vmin=0.01;
@@ -6255,7 +6300,7 @@ void StagedAddTick()
       g_rows[n].risk_px=g_rows[i].st_anchor_risk;            // R in the first tranche's 1R, so the two rows add up
       g_rows[n].sl=g_rows[i].sl;                             // the ORIGINAL stop stays the risk basis (the live SL is csl)
       g_rows[n].st_state=2; g_rows[n].st_tranche=2; g_rows[n].st_fill_time=TimeCurrent();
-      g_rows[n].entry_mode="staged_add_"+promote; g_rows[n].reject_why=(promote=="manual_promote" ? g_promote_note : "");   // promote = early | bar6 | manual_promote
+      g_rows[n].entry_mode="staged_add_"+promote; g_rows[n].reject_why=(promote=="manual_promote" ? g_promote_note : "");   // promote = early | bar6 | manual_promote | gate_1R
       g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=TimeCurrent();
       g_rows[n].closed=false; g_rows[n].closed_vol=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
       g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].terminal=""; g_rows[n].ratcheted=false;
@@ -6263,16 +6308,159 @@ void StagedAddTick()
       g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0; g_rows[n].rt_bankr=-99.0;
       //--- banked already: the add joins the runner - nothing more to bank, its stop is already the entry
       if(g_rows[i].banked) { g_rows[n].banked=true; g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0; }
-      //--- coach item 25: a staged add placed AFTER the shorts stop raise enters with the raised stop (csl); its stop-at-entry
-      //--- counterfactual level is the first tranche's pre-raise stop, at its own size
-      if(g_rows[n].sr_state==1) { g_rows[n].sr_from=g_rows[i].sr_from; g_rows[n].sr_vol=add; }
       else { g_rows[n].banked=false; g_rows[n].tp1_done=false; }
+      //--- coach item 25: a staged add placed AFTER the shorts stop raise enters with the raised stop (csl); its stop-at-entry
+      //--- counterfactual level is the first tranche's pre-raise stop, at its own size.
+      //--- (2026-10-03 fix: this block had been inserted between the banked if/else above, so the else bound to it and every
+      //--- add after a bank on a non-raised trade was marked UNBANKED - the bank logic then banked 25/50% of the add at once.)
+      if(g_rows[n].sr_state==1) { g_rows[n].sr_from=g_rows[i].sr_from; g_rows[n].sr_vol=add; }
       g_rows[i].st_state=2;
       if(InpLiveMode) AuditLine("staged_add","","",StringFormat("sig:%d",g_rows[i].id),"ok","",
                 StringFormat("promote=%s add=%.2f fill=%s sl=%s posid=%I64d first_posid=%I64d banked=%d",promote,add,DoubleToString(fill,_Digits),DoubleToString(csl,_Digits),pid,g_rows[i].posid,(int)g_rows[i].banked));
       Print("Signal #",g_rows[i].id," STAGED ADD -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
      }
    if(changed) { WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions(); }
+  }
+
+//+------------------------------------------------------------------+
+//| COACH QUEUE A / B / I helpers + the day-2 checks (built 2026-10-03, OFF until ruled)
+//+------------------------------------------------------------------+
+//--- the study's anchor (pipeline/ask_side_study.setup / frame): the card's entry = the SIGNAL bar's (bid) close, R = |that - the
+//--- original stop|; times are H4 bar opens counted from the signal bar (bar 0): the entry bar = signal + 1.
+int    SigShift(int i){ return iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false); }
+double CardE(int i){ int sh=SigShift(i); return (sh<0 ? 0.0 : iClose(_Symbol,PERIOD_H4,sh)); }
+double CardR(int i){ double e=CardE(i); return (e>0.0 ? MathAbs(e-g_rows[i].sl) : 0.0); }
+datetime BarOpen(int i,int k){ int sh=SigShift(i); return (sh-k<0 ? 0 : iTime(_Symbol,PERIOD_H4,sh-k)); }   // open of bar signal+k
+//--- mean of the M1 bid closes of the M1 bars opening in [t0, t1), in the card's R signed with the trade (the studies' "average R":
+//--- cumsum(F["bc"]) / count, from the entry bar's open)
+double AvgRSince(int i,datetime t0,datetime t1)
+  {
+   double e=CardE(i), r=CardR(i);
+   if(r<=0.0 || t0<=0 || t1<=t0) return AVG_NA;
+   double c[]; int n=CopyClose(_Symbol,PERIOD_M1,t0,t1-1,c);
+   if(n<=0) return AVG_NA;
+   double sum=0.0; for(int k=0;k<n;k++) sum+=c[k];
+   return (sum/n-e)*g_rows[i].direction/r;
+  }
+bool QueueRuleRow(int i){ return !(g_rows[i].strategy=="Inverse" || g_rows[i].strategy=="ADOPTED" || g_rows[i].strategy=="TEST"); }   // the studies' population
+//--- the first tranche's bank trigger (same as ManageOpenPositions: +1R from the anchor, or TP1 when nearer)
+bool BankReached(int i)
+  {
+   int dir=g_rows[i].direction;
+   double r1=(dir>0 ? AnchorEntry(i)+AnchorRisk(i) : AnchorEntry(i)-AnchorRisk(i)), trig=r1;
+   if(g_rows[i].partial_frac>0.0 && g_rows[i].tp1>0.0 && (dir>0 ? g_rows[i].tp1<=r1 : g_rows[i].tp1>=r1)) trig=g_rows[i].tp1;
+   return (dir>0 ? SymbolInfoDouble(_Symbol,SYMBOL_BID)>=trig : SymbolInfoDouble(_Symbol,SYMBOL_ASK)<=trig);
+  }
+//--- at the close of H4 bar 12 after the signal: B (SELL whose average since the first fill is <= short_day2_cut_avg -> close every
+//--- ticket at market) and I (BUY whose day-2 average beats its day-1 average -> add improving_add_frac of the full size at market,
+//--- sharing the position's stop and TP). Once per signal (d2_state). Never on Inverse / ADOPTED / TEST rows.
+void Day2Tick()
+  {
+   if(g_cfg_short_cut<=0.0 && g_cfg_impr_add<=0.0) return;
+   bool changed=false;
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
+   double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0) vmin=0.01;
+   int nrows=ArraySize(g_rows);
+   for(int i=0;i<nrows;i++)
+     {
+      if(g_rows[i].d2_state!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) continue;
+      if(!QueueRuleRow(i)) continue;
+      if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending") || g_rows[i].posid<=0) continue;
+      int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
+      if(sh<13) continue;                                           // bar 12 after the signal has not closed yet
+      int sid=g_rows[i].id; string tag=StringFormat("sig:%d",sid);
+      bool open_any=false;
+      for(int k=0;k<nrows;k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid)) open_any=true;
+      int st=2; changed=true;
+      if(open_any && sh<=16)                                        // act within a day of the checkpoint (a late restart does not act on stale data)
+        {
+         datetime t0=BarOpen(i,1), t6=BarOpen(i,7), t12=BarOpen(i,13);   // entry-bar open, bar-6 close, bar-12 close
+         if(g_rows[i].direction<0 && g_cfg_short_cut>0.0)
+           {
+            double av=AvgRSince(i,t0,t12);
+            if(av!=AVG_NA && av<=g_cfg_short_cut)
+              {
+               if(InpLiveMode && !g_trading_enabled) { AuditLine("day2_cut","","",tag,"skipped","trading_disabled",StringFormat("avg=%+.3f",av)); continue; }   // d2_state stays 0: retried next tick until bar 16
+               st=1;
+               for(int k=0;k<nrows;k++)
+                  if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid))
+                     ManualClose(k,"DAY2_CUT");
+               if(InpLiveMode) AuditLine("day2_cut","","",tag,"ok","",StringFormat("avg=%+.3f <= %.2f",av,g_cfg_short_cut));
+               Print("Signal #",sid," DAY-2 SHORT CUT: 48h average ",DoubleToString(av,2),"R <= ",DoubleToString(g_cfg_short_cut,2),"R");
+              }
+           }
+         if(g_rows[i].direction>0 && g_cfg_impr_add>0.0)
+           {
+            double a1=AvgRSince(i,t0,t6), a2=AvgRSince(i,t6,t12);
+            if(a1!=AVG_NA && a2!=AVG_NA && a2>a1) st=(ImprovingAdd(i,step,vmin,a1,a2) ? 3 : 4);
+           }
+        }
+      for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) g_rows[k].d2_state=st;
+     }
+   if(changed) { WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions(); }
+  }
+//--- coach queue I: the improving add (tranche 4), modelled on the pyramid add
+bool ImprovingAdd(int i,double step,double vmin,double a1,double a2)
+  {
+   string sid=StringFormat("sig:%d",g_rows[i].id);
+   if(!PositionSelectByTicket((ulong)g_rows[i].posid))
+     {   // the first tranche may have closed while a later ticket of the signal is still open: take the stop/TP from any open ticket
+      bool f=false;
+      for(int k=0;k<ArraySize(g_rows) && !f;k++) if(g_rows[k].id==g_rows[i].id && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid)) f=true;
+      if(!f) return false;
+     }
+   double csl=PositionGetDouble(POSITION_SL), ctp=PositionGetDouble(POSITION_TP);
+   double full=(g_rows[i].st_full_lots>0.0 ? g_rows[i].st_full_lots : g_rows[i].lots);
+   double add=NormalizeDouble(MathMax(vmin,MathFloor(g_cfg_impr_add*full/step+1e-9)*step),2);
+   //--- coach 2026-10-03: total size capped at 200% of the full size (first + staged add + pyramid + this add, incl. a held add's 75%)
+   double have=0.0; for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==g_rows[i].id && g_rows[k].symbol==_Symbol && (g_rows[k].decision=="approved" || g_rows[k].decision=="approved_pending")) have+=g_rows[k].lots;
+   if(g_rows[i].st_state==4) have+=MathMax(0.0,g_rows[i].st_full_lots-g_rows[i].lots);
+   if(have+add>2.0*full+1e-9) add=NormalizeDouble(MathFloor((2.0*full-have)/step+1e-9)*step,2);
+   if(add<vmin-1e-9) { AuditLine("improving_add","","",sid,"skipped",StringFormat("size_cap_200pct: have %.2f of full %.2f",have,full),""); return false; }
+   if(full<2.0*vmin-1e-9) { AuditLine("improving_add","","",sid,"skipped",StringFormat("min_lot_position:%.2f",full),""); return false; }
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK), px=ask, ar=AnchorRisk(i);
+   if(InpLiveMode)
+     {
+      string why="";
+      if(!g_trading_enabled) why="trading_disabled";
+      else if(g_cfg_max_spread_r>0.0 && ar>0.0 && (ask-bid)/ar>g_cfg_max_spread_r) why=StringFormat("spread_too_wide:%.3fR",(ask-bid)/ar);
+      else if(csl>0.0 && px<=csl) why="price_through_stop";
+      else { double fr=0.0, frung=0.0; if(LotFloorExceedsRung(px,(csl>0.0?csl:g_rows[i].sl),fr,frung)) why=StringFormat("lot_floor_exceeds_rung:%.2f%%",fr*100.0); }
+      if(why=="" && !FtmoHeadroomOK(add,px,(csl>0.0?csl:g_rows[i].sl),why,"improving_add")) {}
+      if(why!="") { AuditLine("improving_add","","",sid,"skipped",why,""); return false; }
+     }
+   string cap=StringFormat("Signal #%d impr",g_rows[i].id);
+   if(!g_trade.Buy(add,_Symbol,0.0,csl,ctp,cap)) { if(InpLiveMode) AuditLine("improving_add","","",sid,"skipped",StringFormat("order_failed:%d",(int)g_trade.ResultRetcode()),""); return false; }
+   long pid=0; double fill=px; ulong deal=g_trade.ResultDeal();
+   for(int t=0;t<10 && pid<=0;t++)
+     {
+      if(deal>0 && HistoryDealSelect(deal)) { pid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID); double f=HistoryDealGetDouble(deal,DEAL_PRICE); if(f>0.0) fill=f; }
+      if(pid<=0 && InpLiveMode && !(bool)MQLInfoInteger(MQL_TESTER)) Sleep(200); else break;
+     }
+   if(pid<=0)
+     for(int q=PositionsTotal()-1;q>=0 && pid<=0;q--)
+       {
+        ulong tk=PositionGetTicket(q); if(tk==0) continue;
+        if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+        if(PositionGetString(POSITION_COMMENT)!=cap) continue;
+        pid=(long)PositionGetInteger(POSITION_IDENTIFIER); fill=PositionGetDouble(POSITION_PRICE_OPEN);
+       }
+   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+   g_rows[n]=g_rows[i];
+   g_rows[n].posid=pid; g_rows[n].lots=add; g_rows[n].entry=fill;
+   g_rows[n].st_anchor_entry=AnchorEntry(i); g_rows[n].st_anchor_risk=ar; g_rows[n].risk_px=ar;
+   g_rows[n].st_tranche=4; g_rows[n].st_state=0; g_rows[n].st_full_lots=full; g_rows[n].st_fill_time=TimeCurrent();
+   g_rows[n].entry_mode="improving_add"; g_rows[n].reject_why=StringFormat("day-1 avg %+.2fR -> day-2 avg %+.2fR",a1,a2);
+   g_rows[n].banked=g_rows[i].banked; g_rows[n].tp1_done=g_rows[i].banked; if(g_rows[i].banked) g_rows[n].partial_frac=0.0;   // unbanked: banks with the first (study: the leg is banked at bankf)
+   g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=TimeCurrent();
+   g_rows[n].closed=false; g_rows[n].closed_vol=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
+   g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].terminal=""; g_rows[n].ratcheted=false;
+   g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0;
+   g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0; g_rows[n].rt_bankr=-99.0;
+   g_rows[n].sr_state=0; g_rows[n].st_pyr=1;                         // never pyramids or short-raises on its own (the first row does)
+   if(InpLiveMode) AuditLine("improving_add","","",sid,"ok","",StringFormat("add=%.2f fill=%s sl=%s posid=%I64d a1=%+.3f a2=%+.3f",add,DoubleToString(fill,_Digits),DoubleToString(csl,_Digits),pid,a1,a2));
+   Print("Signal #",g_rows[i].id," IMPROVING ADD -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," (day-1 ",DoubleToString(a1,2),"R, day-2 ",DoubleToString(a2,2),"R)");
+   return true;
   }
 
 //+------------------------------------------------------------------+

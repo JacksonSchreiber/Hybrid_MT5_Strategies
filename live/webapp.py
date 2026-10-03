@@ -746,10 +746,12 @@ def dashboard(q: dict) -> str:
         for c in sorted(children.pop((p["symbol"], str(p.get("signal_id"))), []), key=_tr): ordered.append((c, True))
     for rest in children.values(): ordered += [(c, False) for c in rest]   # parent already closed: show it on its own
     for p, child in ordered:
-        what = {2: "staged add", 3: "pyramid add (+1.5R)"}.get(_tr(p), "")
+        what = {2: "staged add", 3: "pyramid add (+1.5R)", 4: "improving add (day 2)"}.get(_tr(p), "")
         title = (f'↳ {E(what)} {E(p["direction"])}' if child else f'{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}'
                  + (f' <span class="k">({E(what)})</span>' if what else ""))
         style = ' style="margin-left:28px;border-left:3px solid var(--line, #888)"' if child else ""
+        if _tr(p) == 1 and int(p.get("staged_state") or 0) == 4:
+            title += f' <span class="pill warn">ADD HELD until +1R · {p.get("lots_init")}/{p.get("full_lots")} lots</span>'
         if _tr(p) == 1 and int(p.get("staged_state") or 0) == 1:
             # trial phase: the staged first tranche, waiting for the bar-6 add (or a Promote now)
             due = C._srv_to_utc(p.get("add_due"), CFG) if p.get("add_due") else None

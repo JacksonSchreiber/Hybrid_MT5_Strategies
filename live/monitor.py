@@ -8,7 +8,7 @@ down (restart), FTMO headroom below thresholds, calendar coverage < 14 d (daily)
 "recovered" message when it starts within a few minutes of boot.
 """
 from __future__ import annotations
-import glob, json, os, subprocess, sys, time, urllib.request
+import csv, glob, json, os, subprocess, sys, time, urllib.request
 from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
@@ -113,6 +113,9 @@ class Monitor:
             if not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 2:
                 self.send(f"STAGED ADD: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots added at {p.get('entry')} "
                           f"(bar-{self.cfg.get('staged_add_bar', 6)} close) · SL {p.get('sl_live')}\n{self.base}/position/{k}")
+            elif not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 4:
+                self.send(f"IMPROVING ADD (day 2): pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots at {p.get('entry')} "
+                          f"· shares the stop {p.get('sl_live')} · target TP2\n{self.base}/position/{k}")
             elif not prev and self.st.get("positions_initialised") and int(p.get("tranche") or 0) == 3:
                 stp = (f"stop {p.get('sl_live')} (+R stop raise - shorts)" if int(p.get("short_raise") or 0) == 1 else f"stop at entry {p.get('sl_live')}")
                 self.send(f"PYRAMID ADD (+1.5R): pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {p.get('lots_live')} lots at {p.get('entry')} "
@@ -133,6 +136,9 @@ class Monitor:
                     share = (li - ll) / li if li else 0
                     self.send(f"+1R BANKED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · closed {li - ll:.2f} of {li:g} lots "
                               f"({share:.0%}) at +1R = {C.r_fmt(p.get('banked_r'))} on this position · {ll:g} lots run · stop now {p.get('sl_live')} (entry)")
+            if int(p.get("staged_state") or 0) == 4 and int(prev.get("staged") or 0) != 4 and self.st.get("positions_initialised"):
+                self.send(f"ADD HELD: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · the trial averaged below 0 to the bar-6 close, so the "
+                          f"75% add waits for +1R. {p.get('staged_note') or ''}\n{self.base}/position/{k}")
             if p.get("ratcheted") and not prev.get("ratcheted"): self.send(f"SL ratcheted to TP1: pos {p['posid']} {p['symbol']}")
             sr, sk = int(p.get("short_raise") or 0), f"{p['symbol']}-{p.get('signal_id')}"          # coach item 25: once per signal
             if sr in (1, 2) and sk not in self.st.setdefault("short_raise_sent", []) and self.st.get("positions_initialised"):
@@ -166,12 +172,29 @@ class Monitor:
                 elif tr in (1, 2) and full > 0 and li > 0:
                     head = (f"CLOSED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · {C.r_fmt(tot * li / full)} "
                             f"(tranche {tr} of 2: {li:g} of {full:g} lots)")
+                elif tr == 4:
+                    head = f"CLOSED: improving add pos {p['posid']} {p['symbol']} {p['direction']} · {C.r_fmt(tot)} on the add ({li:g} lots)"
                 elif tr == 3:
                     head = f"CLOSED: pyramid add pos {p['posid']} {p['symbol']} {p['direction']} · {C.r_fmt(tot)} on the add ({li:g} lots)"
                 else:
                     head = f"CLOSED: pos {p['posid']} {p['symbol']} {p['strategy']} {p['direction']} · total {C.r_fmt(tot)} (banked {C.r_fmt(p.get('banked_r'))})"
                 self.send(f"{head} after {p.get('bars_open')} bars\n{self.base}/position/{k}")
             seen[k] = {"banked": bool(p.get("banked")), "ratcheted": bool(p.get("ratcheted")), "open": False}
+        # coach queue B: the EA's day-2 short cut (actions file DAY2_CUT), one message per signal
+        sent = self.st.setdefault("day2_cut_sent", [])
+        for path in glob.glob(os.path.join(self.cfg["root"], "journal", "*.actions.csv")):
+            try:
+                with open(path, encoding="ascii", errors="replace", newline="") as fh:
+                    for a in csv.DictReader(fh):
+                        if a.get("action") != "DAY2_CUT": continue
+                        sym = os.path.basename(path).split("_")[0]; key = f"{sym}-{a.get('signal_id')}"
+                        if key in sent: continue
+                        sent.append(key)
+                        if self.st.get("positions_initialised"):
+                            self.send(f"DAY-2 SHORT CUT: {sym} signal #{a.get('signal_id')} · the short averaged at or below +0.5R over its first 48h, "
+                                      f"so the EA closed it at {a.get('price')} (open {a.get('open_r')}R).")
+            except OSError: pass
+        self.st["day2_cut_sent"] = sent[-500:]
 
     def heartbeats(self):
         """instance health, trader ruling 2026-09-22: no per-symbol noise. A symbol is DOWN only after `down_after_s` (300 s =
@@ -476,7 +499,7 @@ class Monitor:
                 self.st["inv_read_flag"] = True
                 self.send(f"COACH READ DUE - Inverse: {iv['closed']} closed fills, mean {iv['mean_R']:+.3f}R vs the backtest +0.20R. web/inverse_shadow.csv.")
         except Exception as e:
-            self.log(f"inverse_shadow error: {e!r}")
+            self.guard_error("inverse_shadow", e)
         ipn, ip_inc = shadow_bank.inverse_pyramid_watch(self.cfg)       # coach 2026-10-01: early stop for the pyramid on Inverses
         if ipn >= 10 and ip_inc is not None and not self.st.get("inv_pyr_flag"):
             self.st["inv_pyr_flag"] = True
@@ -506,7 +529,7 @@ class Monitor:
                           f"{sum(sig_r.values()) / ix_n:+.3f}R (full-position R; backtest 2012-24 -0.164, 2025-26 -0.189). No rule - for the coach.")
             self.st["ix_short_n"] = ix_n
         except Exception as e:
-            self.log(f"index-short watch error: {e!r}")
+            self.guard_error("index-short watch", e)
         try:                                                             # coach item 25: shorts stop raise vs stop-at-entry, 15 / 30
             from live import short_raise_shadow
             srn, sr_sum = short_raise_shadow.write(self.cfg)
@@ -523,7 +546,7 @@ class Monitor:
                     self.send(f"COACH GRADING POINT - shorts stop raise: {srn} armed shorts, sum of actual - counterfactual {sr_sum:+.3f}R (>= 0): "
                               f"the guard holds. web/short_raise.csv.")
         except Exception as e:
-            self.log(f"short_raise_shadow error: {e!r}")
+            self.guard_error("short_raise_shadow", e)
         try:                                                             # coach item 26: re-offered takes vs on-time takes at n=20
             from live import reoffer_shadow
             ro = reoffer_shadow.write(self.cfg)
@@ -539,12 +562,25 @@ class Monitor:
                               f"takes {f_(ro['ontime_mean'])} (n={ro['ontime']}); skipped re-offers' shadow {f_(ro['skipped_mean'])} (n={ro['skipped']}). "
                               f"The -0.10R guard holds. web/reoffer.csv.")
         except Exception as e:
-            self.log(f"reoffer_shadow error: {e!r}")
+            self.guard_error("reoffer_shadow", e)
+        try:                                                             # coach queue A / B / I: one counter per rule, read at n=30.
+            from live import queue_shadow                                #   trader 2026-10-03: never retired automatically - tell the trader
+            qs = queue_shadow.write(self.cfg)
+            names = {"A": "add gate (hold the add until +1R)", "B": "shorts day-2 cut", "I": "improving-longs add"}
+            for rule, (qn, qsum) in qs.items():
+                if qn >= 30 and not self.st.get(f"queue_flag_{rule}"):
+                    self.st[f"queue_flag_{rule}"] = True
+                    verdict = ("BELOW ZERO - the coach's bar says retire; per your ruling it stays ON until you decide" if qsum < 0 else "at or above zero - holds")
+                    self.send(f"COACH GRADING POINT - {names[rule]}: {qn} resolved, sum of actual - counterfactual {qsum:+.3f}R ({qsum / qn:+.3f}R each): "
+                              f"{verdict}. web/queue_rules.csv.")
+            self.st["queue_counts"] = {k: v[0] for k, v in qs.items()}
+        except Exception as e:
+            self.guard_error("queue_shadow", e)
         try:                                                             # trader 2026-10-03: live trades into the Data visualizers tab
             from live import rpaths_live
             self.st["rpaths_live_n"] = rpaths_live.write(self.cfg)
         except Exception as e:
-            self.log(f"rpaths_live error: {e!r}")
+            self.guard_error("rpaths_live", e)
         mn, m_diff = shadow_bank.write_manual(self.cfg)                  # coach item 22: graded at n=20 manual sizings
         if mn >= 20 and not self.st.get("manual_flag_20"):
             self.st["manual_flag_20"] = True
@@ -599,10 +635,19 @@ class Monitor:
         if lines: C.append_line(p, ("ts,symbol,hour_utc,spread\n" if new else "") + "\n".join(lines))
         self.st["spread_last"] = now
 
+    def guard_error(self, name: str, e: Exception):
+        """coach 2026-10-03 item 7: a guard module that fails (import error, crash) is ALERTED, not swallowed - once per name+error per day."""
+        self.log(f"{name} error: {e!r}")
+        key = f"{name}|{type(e).__name__}|{str(e)[:80]}|{time.strftime('%Y-%m-%d')}"
+        sent = self.st.setdefault("guard_err_sent", [])
+        if key in sent: return
+        self.st["guard_err_sent"] = (sent + [key])[-200:]
+        self.send(f"GUARD ERROR - {name} failed: {type(e).__name__}: {str(e)[:200]}. Its live grading is NOT running until fixed.")
+
     def tick(self):
         for fn in (self.signals, self.acks, self.positions, self.heartbeats, self.processes, self.calendar, self.summary, self.reminders, self.eligibility, self.opus_fallback, self.trendcont_watch, self.opinion_watch, self.equity_sample, self.shadow_bank, self.spread_sample):
             try: fn()
-            except Exception as e: self.log(f"{fn.__name__} error: {e!r}")
+            except Exception as e: self.guard_error(fn.__name__, e)
         self.save()
 
     def loop(self):
