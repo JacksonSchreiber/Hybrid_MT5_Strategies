@@ -144,7 +144,8 @@ input bool   InpAddGate          = false;  // TESTER study (coach queue A): tria
 input double InpShortCutAvg      = 0.0;    // TESTER study (coach queue B): SELL closed at the bar-12 close if its average R <= this (0 = off; queue: 0.5)
 input double InpImprovingAdd     = 0.0;    // TESTER study (coach queue I): BUY whose day-2 average > day-1 average adds this share of full size at the bar-12 close (0 = off; queue: 0.5)
 input bool   InpSelfTestReoffer  = false;
-input bool   InpSelfTestQueue    = false;  // live self-test (tester only): coach queue A/B/I all ON (staged_add_gate 1, short_day2_cut_avg 0.5, improving_add_frac 0.5)  // SELF-TEST only (coach item 26): every fresh signal is "spread-refused" (held), then re-offered next poll
+input bool   InpSelfTestQueue    = false;
+input int    InpParIdx           = 0;      // TESTER parallel runner (pipeline/mt5_parallel.sh): a free pass index; optimise over it to run N passes at once  // live self-test (tester only): coach queue A/B/I all ON (staged_add_gate 1, short_day2_cut_avg 0.5, improving_add_frac 0.5)  // SELF-TEST only (coach item 26): every fresh signal is "spread-refused" (held), then re-offered next poll
 input bool   InpSelfTestStaged   = false;
 input int    InpSelfTestStagedN  = 6;      // TESTER ONLY: the add bar for the staged self-test (1 = add at the first bar close, so the path is exercised)  // TESTER ONLY: run the live self-test with staged entry on (coach item 18 check)
 input bool   InpLiveSelfTest     = false;  // LIVE self-test (TESTER ONLY): in-EA scripted task driver + assertions
@@ -1401,7 +1402,7 @@ void OnTick()
       g_start_time=TimeCurrent(); g_last_time=g_start_time;
       // §3.8: headless AA-mode journals get an "AA_" prefix so mt5_verify --mode ALL
       // can never overwrite the trader's own interactive journal for the same symbol.
-      string jpfx=(InpAutoApprove!=AA_NONE ? "AA_" : "");
+      string jpfx=JournalPrefix();      // "AA_" / "" - or journal\par\<sym>_<tag>\AA_ in a parallel (optimisation) pass
       g_journal_part=StringFormat("journal\\%s%s_%s.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
       g_actions_part=StringFormat("journal\\%s%s_%s.actions.part.csv",jpfx,_Symbol,StampCompact(g_start_time));
       //--- isolated inverse-cohort journals (never mixed with the graded stream)
@@ -6143,7 +6144,7 @@ void OnDeinit(const int reason)
      {
       // §3.8: AA-mode (headless) journals carry the "AA_" prefix so mt5_verify's
       // baseline can never overwrite the trader's own journal for the same window.
-      string jpfx=(InpAutoApprove!=AA_NONE ? "AA_" : "");
+      string jpfx=JournalPrefix();
       //--- PHASE 3 LIVE: journals stay under live\journal (§11-5, never mixed with tester files);
       //--- monthly rotation replaces this finaliser in Slice 5. Tester path/bytes unchanged.
       if(InpLiveMode)
@@ -6322,6 +6323,33 @@ void StagedAddTick()
       Print("Signal #",g_rows[i].id," STAGED ADD -> ",DoubleToString(add,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
      }
    if(changed) { WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions(); }
+  }
+
+//+------------------------------------------------------------------+
+//| PARALLEL TESTER PASSES (2026-10-03): MT5 optimisation mode runs one pass per local agent. A pass (MQL_OPTIMIZATION)
+//| journals under journal\par\<symbol>_<tag>\ - tag = a hash of the study inputs below + InpParIdx - with a params.txt
+//| sidecar, so concurrent passes never collide. Normal tester / live runs are unchanged (prefix "AA_" or "").
+//+------------------------------------------------------------------+
+string StudyParams()
+  {
+   return StringFormat("InpParIdx=%d;InpStaged=%d;InpPyramid=%d;InpTcBankFrac=%.4f;InpShortRaiseR=%.4f;InpAddGate=%d;InpShortCutAvg=%.4f;"
+                       "InpImprovingAdd=%.4f;InpInverse=%d;InpOfferInverse=%d;InpEarlyPromoteR=%.4f;InpV2Exit=%d;InpRiskPct=%.5f;InpStopFloorATR=%.4f;"
+                       "InpWeekendFlat=%d;InpDelayMode=%d;InpUseSMC=%d;InpUseFib=%d;InpUseTrendCont=%d;InpUseEMArevQ=%d",
+                       InpParIdx,(int)InpStaged,(int)InpPyramid,InpTcBankFrac,InpShortRaiseR,(int)InpAddGate,InpShortCutAvg,
+                       InpImprovingAdd,(int)InpInverse,(int)InpOfferInverse,InpEarlyPromoteR,(int)InpV2Exit,InpRiskPct,InpStopFloorATR,
+                       (int)InpWeekendFlat,(int)InpDelayMode,(int)InpUseSMC,(int)InpUseFib,(int)InpUseTrendCont,(int)InpUseEMArevQ);
+  }
+string JournalPrefix()
+  {
+   string jpfx=(InpAutoApprove!=AA_NONE ? "AA_" : "");
+   if(!(bool)MQLInfoInteger(MQL_OPTIMIZATION)) return jpfx;
+   string ps=_Symbol+"|"+StudyParams(); uint h=5381;
+   for(int k=0;k<StringLen(ps);k++) h=((h<<5)+h)+(uint)StringGetCharacter(ps,k);    // djb2
+   string dir=StringFormat("journal\\par\\%s_%08x",_Symbol,h);
+   FolderCreate("journal",FILE_COMMON); FolderCreate("journal\\par",FILE_COMMON); FolderCreate(dir,FILE_COMMON);
+   int f=FileOpen(dir+"\\params.txt",FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(f!=INVALID_HANDLE){ FileWriteString(f,"symbol="+_Symbol+";"+StudyParams()+"\n"); FileClose(f); }
+   return StringFormat("par\\%s_%08x\\",_Symbol,h)+jpfx;      // relative to journal\ (callers prepend it)
   }
 
 //+------------------------------------------------------------------+
