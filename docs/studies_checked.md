@@ -89,3 +89,10 @@ nothing is re-run by accident and the coach can see what was tried.
   - Holdout one look (AUDCAD/AUDNZD/NZDCAD): -0.078R/trade (t -4.6), FAIL. `cbloc_v52.py`, `cbloc_holdout_look.py`,
     docs/cbloc_holdout_report_2026-10-04.txt
 
+- **Commodity-bloc time stop raise** (trader 2026-10-04; AUDUSD/NZDUSD/USDCAD; stop to entry at the bar-3 close, +0.25R at bar 6,
+  +0.5R at bar 18, tighten only; closed at that bar close if the price is already through the new stop).
+  - **On the raw signal it helps a lot:** -0.107 -> -0.017R/trade (t 2.6), DD 221 -> 82. Most of that is closing trades that are
+    below entry at 12h.
+  - **On the live bloc setup (T+L1.0) it adds nothing:** +0.018 -> +0.016R/trade (t -0.4), DD 15 -> 11. The "skip if already
+    through" version is +0.019 (t 0.3). The 24h cut and the +1R lock already do the job.
+  - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
