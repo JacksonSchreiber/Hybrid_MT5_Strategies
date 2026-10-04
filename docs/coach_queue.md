@@ -350,3 +350,13 @@ detectors from MT5 AA runs (same settings as the other new symbols), SCALED engi
 Bars (pooled over the three, all years): PRIMARY T+L1.0 increment vs live > 0 with paired t >= 1.5 AND worst DD not above live's.
 SECONDARY T alone increment > 0. Reported: per symbol, long / short, 2012-24 and 2025-26. ONE look; no rule changes after it.
 On the website these three sit in the research-lock group (hidden while locked), and only after the look.
+
+### ADDENDUM 2026-10-03 22:30 (trader) - a second candidate, registered while the holdout is still blind
+(AUDNZD downloaded and in MT5; AUDCAD/NZDCAD downloading; NO holdout outcome has been computed.)
+  RAW+C+B  raw signal (100% at the signal, the signal's stop, out at TP2; no TP1 / staging / pyramid / raise), plus
+           24h cut: close at the bar-6 close if the bid high has not reached +1.5R, plus
+           bank 25% at the first +0.5R and the stop to ENTRY at that moment (pipeline/cbloc_raw_bank_grid.py kern(cutX=1.5, bf=0.25, bL=0.5)).
+  In-sample (AUDUSD, NZDUSD, USDCAD, all years): raw -0.1065R/trade DD 221 -> +0.0130 (t 3.2 vs raw), DD 36; long +0.013 short +0.013;
+  2012-24 +0.012, 2025-26 +0.022 - the best of 174 cells on a flat surface (selection noted).
+  Bar on the holdout (pooled, all years): increment vs RAW > 0 with paired t >= 1.5 AND worst DD not above raw's; also reported vs the
+  live setup and vs T+L1.0. Same one look as the primary test.
