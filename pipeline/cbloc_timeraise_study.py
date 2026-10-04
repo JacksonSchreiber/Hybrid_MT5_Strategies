@@ -12,6 +12,8 @@ Per minute: stop -> +1.5R flag -> bank -> pyramid + lock -> TP2 -> bloc 24h cut 
 Kernel = numba; with the time raise off it reproduces cbloc_timestop_study.run_h (live, T+L1.0) and the raw replay exactly (checked).
 SCALED (model cost = the M1 bar minimum spread, a LOWER bound - real FX costs are higher).
     python3 pipeline/cbloc_timeraise_study.py     -> data/study/cbloc_timeraise_report.txt
+    python3 pipeline/cbloc_timeraise_study.py --levels 0,0.5,0.8 --raw    other stop levels (bars 3/6/18), raw only
+                                                  -> data/study/cbloc_timeraise_raw_0_0.5_0.8_report.txt
 """
 from __future__ import annotations
 import os, statistics as st, sys, time
@@ -27,11 +29,16 @@ from pipeline.exit_mgmt_study import maxdd, paired_t      # noqa: E402
 SYMS = ["AUDUSD.dk", "NZDUSD.dk", "USDCAD.dk"]
 REPORT = os.path.join(A.STUDY, "cbloc_timeraise_report.txt")
 BARS = (3, 6, 18); LVLS = np.array([0.0, 0.25, 0.5])
+if "--levels" in sys.argv: LVLS = np.array([float(v) for v in sys.argv[sys.argv.index("--levels") + 1].split(",")])
+RAW_ONLY = "--raw" in sys.argv
+if "--levels" in sys.argv or RAW_ONLY:
+    REPORT = REPORT.replace("_report.txt", ("_raw" if RAW_ONLY else "") + "_" + "_".join(f"{v:g}" for v in LVLS) + "_report.txt")
 # (name, setup 0 raw / 1 live bloc / 2 live standard (check only), time raise 0 off / 1 close / 2 skip)
 V = [("raw", 0, 0), ("raw + time raise (close)", 0, 1), ("raw + time raise (skip)", 0, 2),
      ("live (bloc T+L1.0)", 1, 0), ("live + time raise (close)", 1, 1), ("live + time raise (skip)", 1, 2), ("_live standard", 2, 0)]
-KIND = {0: "stop", 1: "TP2", 2: "24h cut", 3: "window end", 10: "closed at 12h (below entry)", 11: "closed at 1 day (below +0.25R)",
-        12: "closed at 3 days (below +0.5R)"}
+LBL = [("entry" if v == 0 else f"+{v:g}R") for v in LVLS]
+KIND = {0: "stop (not a time-raised stop)", 1: "TP2", 2: "24h cut", 3: "window end", 10: f"closed at 12h (below {LBL[0]})", 11: f"closed at 1 day (below {LBL[1]})",
+        12: f"closed at 3 days (below {LBL[2]})"}
 
 
 @njit(cache=True)
@@ -124,7 +131,8 @@ def main():
          f"{time.time() - T0:.0f}s; time raise off vs run_h (live bloc, live standard) and the raw replay: max |diff| {dmax:.1e} "
          f"({'EXACT' if dmax < 1e-12 else 'MISMATCH'})\n"]
     col = lambda nm, f=lambda z: True: [z[4][nm][0] for z in res if f(z)]
-    for base, names in (("raw", V[1:3]), ("live (bloc T+L1.0)", V[4:6])):
+    L[-1] = L[-1].rstrip("\n") + f"; time raise levels {' / '.join(LBL)} at bars {' / '.join(map(str, BARS))}\n"
+    for base, names in (("raw", V[1:3]), ("live (bloc T+L1.0)", V[4:6]))[:1 if RAW_ONLY else 2]:
         b = col(base)
         L.append(f"  {base:28} {st.mean(b):+.4f}R  total {sum(b):+7.1f}  DD {maxdd(b):6.1f}  tot/DD {sum(b) / maxdd(b):+6.2f}" + " " * 25 +
                  f"| long {st.mean(col(base, lambda z: z[1])):+.4f} short {st.mean(col(base, lambda z: not z[1])):+.4f} | "
@@ -139,10 +147,10 @@ def main():
                      + " ".join(f"{s[:6]} {st.mean(col(nm, lambda z, s=s: z[2] == s)):+.3f}" for s in SYMS))
         L.append("")
     L.append("How the trades ended (time raise 'close'), with the base result of the same trades:")
-    for base, nm in (("raw", "raw + time raise (close)"), ("live (bloc T+L1.0)", "live + time raise (close)")):
+    for base, nm in (("raw", "raw + time raise (close)"), ("live (bloc T+L1.0)", "live + time raise (close)"))[:1 if RAW_ONLY else 2]:
         L.append(f"  {nm}:")
         for k in sorted({z[4][nm][1] for z in res}):
-            zs = [z for z in res if z[4][nm][1] == k]
+            zs = [z for z in res if z[4][nm][1] == k and (k != 0 or z[4][nm][2] < 0)]      # stops on a time-raised stop: below
             for side, sf in (("long ", lambda z: z[1]), ("short", lambda z: not z[1])):
                 ss = [z for z in zs if sf(z)]
                 if not ss: continue
@@ -150,7 +158,7 @@ def main():
         stp = [z for z in res if z[4][nm][1] == 0 and z[4][nm][2] >= 0]
         for q in range(3):
             ss = [z for z in stp if z[4][nm][2] == q]
-            if ss: L.append(f"    stopped on the raised stop ({['entry', '+0.25R', '+0.5R'][q]:6}) n {len(ss):4}  avg {st.mean(z[4][nm][0] for z in ss):+.3f}R  (base {st.mean(z[4][base][0] for z in ss):+.3f}R)")
+            if ss: L.append(f"    stopped on the raised stop ({LBL[q]:6}) n {len(ss):4}  avg {st.mean(z[4][nm][0] for z in ss):+.3f}R  (base {st.mean(z[4][base][0] for z in ss):+.3f}R)")
     open(REPORT, "w").write("\n".join(L) + "\n"); print("\n".join(L))
 
 

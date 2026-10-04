@@ -95,4 +95,6 @@ nothing is re-run by accident and the coach can see what was tried.
     below entry at 12h.
   - **On the live bloc setup (T+L1.0) it adds nothing:** +0.018 -> +0.016R/trade (t -0.4), DD 15 -> 11. The "skip if already
     through" version is +0.019 (t 0.3). The 24h cut and the +1R lock already do the job.
+  - **Raw, levels entry / +0.5R / +0.8R** (same bars): -0.012R/trade (t 2.65 vs raw), DD 89. That is barely different from the first
+    levels (-0.017, DD 82), and still below the live bloc setup (+0.018). `--levels 0,0.5,0.8 --raw`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
