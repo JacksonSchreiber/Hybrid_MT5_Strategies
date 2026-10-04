@@ -130,6 +130,12 @@ nothing is re-run by accident and the coach can see what was tried.
     - long -0.037 / short -0.056: the USD "shorts carry it" does not carry over either.
     - Worse than the live T+L1.0 on the same crosses (-0.024). The 8h close and the entry stop cost R on the crosses (-6 and -38R
       vs raw), where on the USD pairs they gained. Not forwarded. `--syms AUDCAD.dk,AUDNZD.dk,NZDCAD.dk`
+  - **Middle-ground tries, judged on the worse of USD / crosses** (raw, 100% at the signal, 1h average check):
+    - **+ 24h cut unless +1.5R + +1R lock at +1.5R (no 8h step):** at 0R USD **+0.035** (DD 21) / crosses -0.037 (DD 75); at
+      -0.05R +0.052 / -0.048. The best worse-group so far; pooled about 0.
+    - **+ -0.5R at 8h + +0.5R at 24h:** at 0R +0.005 / -0.060; at -0.05R +0.002 / -0.070.
+    - On the crosses longs carry the loss (-0.062 vs shorts -0.013), and the lock and the cut lose R vs raw there (-6 / -13R), where
+      on USD they gain (+71 / +23R). `--hours none --avgcheck 1 --bloc`
   - Fixed 2026-10-04: checks inside the entry bar now start at the first M1 minute. Sunday-open bars have no data for 60-120 min, so
     about 2% of trades were skipping every step. The 4h/8h/12h runs were unaffected. `--avgcheck H`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`

@@ -19,6 +19,8 @@ SCALED (model cost = the M1 bar minimum spread, a LOWER bound - real FX costs ar
     ... --avgcheck 0.5        + an AVERAGE CHECK at that hour: if the average bid close since the entry (in R) is below 0 there,
                               the trade is closed at that minute's close (applies with the time raise only)
     ... --avgthr -0.1         the average check's threshold (default 0: close when the average is below it)
+    ... --bloc                + the 24h CUT (close everything at the bar-6 close unless the bid high reached +1.5R) and the +1R LOCK
+                              (at the first +1.5R the stop goes to +1R) on the raw rule; --hours none = no time-raise steps
     ... --syms AUDCAD.dk,AUDNZD.dk,NZDCAD.dk   other symbols (the commodity-bloc crosses come in through CB_HOLDOUT)
     ... --bank 0.5 [--bank-be]  + BANK that share at TP1 (capped at TP2; no TP1 = no bank), with --bank-be the stop also goes to
                               entry at the bank (as live); applies with the time raise only
@@ -41,17 +43,22 @@ if "--syms" in sys.argv:
     REPORT = REPORT.replace("_report.txt", "_" + "-".join(s_.split(".")[0] for s_ in SYMS) + "_report.txt")
 HOURS = [12, 24, 72]; LVLS = np.array([0.0, 0.25, 0.5])
 if "--levels" in sys.argv: LVLS = np.array([float(v) for v in sys.argv[sys.argv.index("--levels") + 1].split(",")])
-if "--hours" in sys.argv: HOURS = [float(v) for v in sys.argv[sys.argv.index("--hours") + 1].split(",")]
+if "--hours" in sys.argv:
+    hv = sys.argv[sys.argv.index("--hours") + 1]
+    HOURS = [] if hv == "none" else [float(v) for v in hv.split(",")]
+    if hv == "none": LVLS = np.array([])
 assert len(HOURS) == len(LVLS) <= 3
 RAW_ONLY = "--raw" in sys.argv
 AVGH = float(sys.argv[sys.argv.index("--avgcheck") + 1]) if "--avgcheck" in sys.argv else None
 AVGTHR = float(sys.argv[sys.argv.index("--avgthr") + 1]) if "--avgthr" in sys.argv else 0.0
 BANKF_RULE = float(sys.argv[sys.argv.index("--bank") + 1]) if "--bank" in sys.argv else None
 BANK_BE = "--bank-be" in sys.argv
+BLOC_RULE = "--bloc" in sys.argv
 if "--levels" in sys.argv or "--hours" in sys.argv or RAW_ONLY:
     REPORT = REPORT.replace("_report.txt", ("_raw" if RAW_ONLY else "") + "_" + "_".join(f"{h:g}h{v:g}" for h, v in zip(HOURS, LVLS))
                             + (f"_avg{AVGH:g}h" if AVGH is not None else "") + (f"{AVGTHR:+g}" if AVGTHR else "")
-                            + (f"_bank{BANKF_RULE:g}{'be' if BANK_BE else ''}" if BANKF_RULE is not None else "") + "_report.txt")
+                            + (f"_bank{BANKF_RULE:g}{'be' if BANK_BE else ''}" if BANKF_RULE is not None else "") + ("_bloc" if BLOC_RULE else "")
+                            + "_report.txt")
 # (name, setup 0 raw / 1 live bloc / 2 live standard (check only), time raise 0 off / 1 close / 2 skip)
 V = [("raw", 0, 0), ("raw + time raise (close)", 0, 1), ("raw + time raise (skip)", 0, 2),
      ("live (bloc T+L1.0)", 1, 0), ("live + time raise (close)", 1, 1), ("live + time raise (skip)", 1, 2), ("_live standard", 2, 0)]
@@ -63,9 +70,9 @@ if AVGH is not None: KIND[20] = f"closed at the {AVGH:g}h average check (< {AVGT
 
 @njit(cache=True)
 def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, bank_R, bankf, F0, k_add, up, pyr_on, pyr_R, pyr_f,
-         tstop, rmode, rto, sr, trig, rk, rl, tr, ak, bank_be, athr):
+         tstop, rmode, rto, sr, trig, rk, rl, tr, ak, bank_be, athr, tck, lock_raw):
     ls = np.zeros(4); le = np.zeros(4); nl = 1; ls[0] = F0; le[0] = e0
-    locked = 0.0; stop = -1.0; banked = False; trigp = True; reached = False; q = 0; rstop = -1
+    locked = 0.0; stop = -1.0; banked = False; trigp = True; reached = False; q = 0; rstop = -1; trigl = True
     add_pend = F0 < 1.0 and k_add >= 0 and k_add < n
     cs = 0.0
     for j in range(n):
@@ -89,11 +96,14 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, ban
             elif rmode == 2:
                 if be + rto > stop: stop = be + rto; rstop = -1
             trigp = False
+        if lock_raw and trigl and bh[j] >= trig:
+            if be + rto > stop: stop = be + rto; rstop = 9
+            trigl = False
         if has_tp2 and xh[j] >= tp2_R:
             v = locked
             for a in range(nl): v += ls[a] * (tp2_R - le[a])
             return v, 1, rstop, j
-        if tstop and k_add >= 0 and j == k_add and not reached:
+        if tstop and tck >= 0 and j == tck and not reached:
             v = locked
             for a in range(nl): v += ls[a] * (xc[j] - le[a])
             return v, 2, rstop, j
@@ -137,11 +147,12 @@ def do(sym):
         akj = kt(AVGH) if AVGH is not None else -1
         ka = p["kbar"][6]; tp2 = p["tp2"]; R = {}
         for name, su, tr in V:
-            live = su > 0; rb = BANKF_RULE is not None and su == 0 and tr > 0
+            live = su > 0; rb = BANKF_RULE is not None and su == 0 and tr > 0; rbl = BLOC_RULE and su == 0 and tr > 0
             R[name] = kern(F["xo"], F["xh"], F["xl"], F["xc"], F["bo"], F["bh"], F["bc"], F["eo"], p["n"], p["e0"], p["be"], tp2 is not None,
                            tp2 if tp2 is not None else 0.0, live or rb, p["bank_R"](1.0) if live else p["bank_R"](99.0),
                            p["bankf_det"] if live else (BANKF_RULE or 0.0), A.F0 if live else 1.0, ka if live else -1,
-                           p["up"], live, A.PYR_R, A.PYR_F, su == 1, 2 if su == 1 else 1, CB.BLOC_LOCK, CT.K.SR, CT.TRIG, rk, lv, tr, akj if tr > 0 else -1, live or BANK_BE, AVGTHR)
+                           p["up"], live, A.PYR_R, A.PYR_F, su == 1 or rbl, 2 if su == 1 else 1, CB.BLOC_LOCK, CT.K.SR, CT.TRIG, rk, lv, tr, akj if tr > 0 else -1, live or BANK_BE, AVGTHR,
+                           ka if su == 1 else (p["kbar"][6] if rbl else -1), rbl)
         # exactness: time raise off == run_h (live bloc / live standard) and the raw replay
         k_add = ka if ka >= 0 else None
         for name, ts, rt in (("live (bloc T+L1.0)", 1, CB.BLOC_LOCK), ("_live standard", None, None)):
@@ -175,7 +186,7 @@ def main():
         nm = "raw + time raise (close)"; hit = sum(1 for z in res if z[4]["_tp1"][0] is not None and z[4]["_tp1"][0] < 50 and z[4][nm][4] >= z[4]["_tp1"][0])
         L.append(f"  TP1 below TP2 on {len(t1)} of {len(res)} trades, median TP1 {st.median(t1):+.2f}R (quarter {sorted(t1)[len(t1) // 4]:+.2f}, three quarters "
                  f"{sorted(t1)[3 * len(t1) // 4]:+.2f}); reached under the rule on {hit} trades\n")
-    L[-1] = L[-1].rstrip("\n") + f"; time raise {' / '.join(f'{l} at {h:g}h' for l, h in zip(LBL, HOURS))}{f' + average check at {AVGH:g}h (< {AVGTHR:g}R -> close)' if AVGH is not None else ''}{f' + bank {BANKF_RULE:.0%} at TP1' + (' (stop to entry)' if BANK_BE else ' (stop unchanged)') if BANKF_RULE is not None else ''}\n"
+    L[-1] = L[-1].rstrip("\n") + f"; time raise {' / '.join(f'{l} at {h:g}h' for l, h in zip(LBL, HOURS))}{f' + average check at {AVGH:g}h (< {AVGTHR:g}R -> close)' if AVGH is not None else ''}{' + 24h cut unless +1.5R, +1R lock at +1.5R' if BLOC_RULE else ''}{f' + bank {BANKF_RULE:.0%} at TP1' + (' (stop to entry)' if BANK_BE else ' (stop unchanged)') if BANKF_RULE is not None else ''}\n"
     for base, names in (("raw", V[1:3]), ("live (bloc T+L1.0)", V[4:6]))[:1 if RAW_ONLY else 2]:
         b = col(base)
         L.append(f"  {base:28} {st.mean(b):+.4f}R  total {sum(b):+7.1f}  DD {maxdd(b):6.1f}  tot/DD {sum(b) / maxdd(b):+6.2f}" + " " * 25 +
@@ -206,7 +217,7 @@ def main():
     # where R is won and lost (trader 2026-10-04): every exit type, with what the same trades made on the raw signal
     def bucket(r):
         kd, rs = r[1], r[2]
-        if kd == 0: return f"stopped on the raised stop ({LBL[rs]})" if rs >= 0 else "stopped at the signal stop (-1R)"
+        if kd == 0: return "stopped on the +1R lock" if rs == 9 else (f"stopped on the raised stop ({LBL[rs]})" if rs >= 0 else "stopped at the signal stop (-1R)")
         return {1: "TP2", 2: "24h cut", 3: "still open at the window end"}.get(kd, KIND.get(kd))
     for nm in [n for n, su, tr in V if su == 0 and tr != 2] + ([] if RAW_ONLY else [n for n, su, tr in V if su == 1 and tr != 2]):
         base = "raw" if nm.startswith("raw") else "live (bloc T+L1.0)"
