@@ -1,6 +1,10 @@
 // hybrid_chart.js - interactive signal/position chart on Lightweight Charts (self-hosted).
 // mount(el, data): data = {bars_h4, bars_d1 [[t,o,h,l,c,v]], levels{entry,sl,tp1,tp2}, overlay{zone,zone2,leg,aux,swings_hi,swings_lo},
 //                        signal_t (epoch), digits, marks:[{t,label}], title}
+// BLIND mode (backtest tab, coach 2026-10-04): data.blind = true, bars carry synthetic contiguous times and prices in R from the entry,
+// ema_h4 / ema_d1 = precomputed {20,50,200} arrays aligned with the bars (right from the first bar), sig_h4 / sig_d1 = the index of the
+// signal bar. Axis labels are relative to the signal ("-2d", "signal"); prices print as R; nothing is fetched; zoom/pan only over the
+// bars given (the server sends nothing after the signal and nothing older than ~2 months).
 (function () {
   function ema(vals, n) { var k = 2 / (n + 1), out = [], p = vals[0]; for (var i = 0; i < vals.length; i++) { p = i ? p + k * (vals[i] - p) : vals[0]; out.push(p); } return out; }
   function iso(s) { return s ? Math.floor(new Date(s).getTime() / 1000) : null; }
@@ -38,7 +42,7 @@
         }).catch(function () { build((tf === 'h4' ? d.bars_h4 : d.bars_d1) || [], null); });
       }
       var cs, emaS = {}, closes = [], barsAll = [];
-      function setStatus(tick) { if (!status) return; status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live · axis = broker clock (UTC+3 summer / +2 winter)') : (d.live ? 'feed unavailable' : 'bars as of the signal · axis = broker clock'); }
+      function setStatus(tick) { if (!status) return; if (d.blind) { status.textContent = 'blind card · price = R from the entry · time = before the signal (weekends removed) · scroll/drag to zoom and pan'; return; } status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live · axis = broker clock (UTC+3 summer / +2 winter)') : (d.live ? 'feed unavailable' : 'bars as of the signal · axis = broker clock'); }
       function update(last, tick) {
         // series.update() accepts only the current bar or a newer one: push the forming bar and any new bar, never older ones
         var lastT = barsAll.length ? barsAll[barsAll.length - 1][0] : 0;
@@ -54,6 +58,15 @@
       function showErr(where, e) { if (status) { status.textContent = 'chart error in ' + where + ': ' + (e && e.message || e); status.style.color = '#f85149'; } console.log('chart error', where, e); }
       function guard(where, fn) { try { fn(); } catch (e) { showErr(where, e); } }
       function build(bars, tick) { try { build0(bars, tick); } catch (e) { showErr('build', e); } }
+      function relLabel(t, long) {   // blind: synthetic time -> position relative to the signal bar
+        var step = tf === 'h4' ? 14400 : 86400, b0 = barsAll.length ? barsAll[0][0] : 0, sig = d['sig_' + tf] != null ? d['sig_' + tf] : barsAll.length - 1;
+        var rel = Math.round((t - b0) / step) - sig;
+        if (rel === 0) return tf === 'h4' ? 'signal' : 'signal day';
+        if (rel > 0) return '+' + rel;
+        if (tf === 'd1') return '-' + (-rel) + 'd';
+        var hrs = -rel * 4; if (hrs < 24) return '-' + hrs + 'h';
+        var dd = hrs / 24; return '-' + (dd % 1 ? dd.toFixed(1) : dd) + 'd' + (long ? ' (' + (-rel) + ' bars)' : '');
+      }
       function build0(bars, tick) {
         if (chart) { chart.remove(); }
         barsAll = bars.slice();
@@ -61,20 +74,28 @@
         chart = LightweightCharts.createChart(box, { height: h, layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
           grid: { vertLines: { color: '#1e242e' }, horzLines: { color: '#1e242e' } }, crosshair: { mode: 0 },
           rightPriceScale: { borderColor: '#30363d', scaleMargins: { top: 0.08, bottom: 0.08 } },
-          timeScale: { borderColor: '#30363d', timeVisible: tf === 'h4', secondsVisible: false, rightOffset: 6 },
-          localization: { priceFormatter: function (p) { return p.toFixed(d.digits || 5); } }, handleScale: true, handleScroll: true });
+          timeScale: d.blind ? { borderColor: '#30363d', timeVisible: true, secondsVisible: false, rightOffset: 6, fixRightEdge: true, fixLeftEdge: true,
+                                  tickMarkFormatter: function (t) { return relLabel(t, false); } }
+                             : { borderColor: '#30363d', timeVisible: tf === 'h4', secondsVisible: false, rightOffset: 6 },
+          localization: d.blind ? { priceFormatter: function (p) { return (p >= 0 ? '+' : '') + p.toFixed(2) + 'R'; }, timeFormatter: function (t) { return relLabel(t, true); } }
+                                : { priceFormatter: function (p) { return p.toFixed(d.digits || 5); } }, handleScale: true, handleScroll: true });
         cs = chart.addCandlestickSeries({ upColor: '#3fb950', downColor: '#f85149', borderUpColor: '#3fb950', borderDownColor: '#f85149', wickUpColor: '#3fb950', wickDownColor: '#f85149',
-          priceFormat: { type: 'price', precision: d.digits || 5, minMove: Math.pow(10, -(d.digits || 5)) } });
+          priceFormat: d.blind ? { type: 'price', precision: 2, minMove: 0.01 } : { type: 'price', precision: d.digits || 5, minMove: Math.pow(10, -(d.digits || 5)) },
+          autoscaleInfoProvider: d.blind ? function (orig) {   // blind: keep entry / SL / TP1 / TP2 in view, as the live image does
+            var r = orig(), lv = d.levels || {}, ps = ['entry', 'sl', 'tp1', 'tp2'].map(function (k) { return lv[k]; }).filter(function (v) { return v !== null && v !== undefined && isFinite(v); });
+            if (r && r.priceRange && ps.length) { r.priceRange.minValue = Math.min.apply(null, [r.priceRange.minValue].concat(ps)); r.priceRange.maxValue = Math.max.apply(null, [r.priceRange.maxValue].concat(ps)); }
+            return r; } : undefined });
         cs.setData(bars.map(function (b) { return { time: b[0], open: b[1], high: b[2], low: b[3], close: b[4] }; }));
         closes = bars.map(function (b) { return b[4]; });
+        var pre = d.blind ? d['ema_' + tf] : null;     // blind: EMAs computed on the full history server-side, right from the first bar
         [20, 50, 200].forEach(function (n) {
-          var e = ema(closes, n), ls = chart.addLineSeries({ color: EMA[n], lineWidth: n === 200 ? 2 : 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-          ls.setData(bars.map(function (b, i) { return { time: b[0], value: e[i] }; }).slice(n)); emaS[n] = ls;
+          var e = pre && pre[String(n)] ? pre[String(n)] : ema(closes, n), ls = chart.addLineSeries({ color: EMA[n], lineWidth: n === 200 ? 2 : 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+          var pts = bars.map(function (b, i) { return { time: b[0], value: e[i] }; }); ls.setData(pre ? pts : pts.slice(n)); emaS[n] = ls;
         });
         setStatus(tick);
         var lv = d.levels || {};
         [['entry', '#3fb950', 'entry', 2, 0], ['sl', '#f85149', 'SL', 2, 2], ['tp1', '#58a6ff', 'TP1', 1, 2], ['tp2', '#58a6ff', 'TP2', 1, 3]].forEach(function (L) {
-          if (lv[L[0]] > 0) cs.createPriceLine({ price: lv[L[0]], color: L[1], lineWidth: L[3], lineStyle: L[4], axisLabelVisible: true, title: L[2] });
+          if (d.blind ? (lv[L[0]] !== null && lv[L[0]] !== undefined && isFinite(lv[L[0]])) : lv[L[0]] > 0) cs.createPriceLine({ price: lv[L[0]], color: L[1], lineWidth: L[3], lineStyle: L[4], axisLabelVisible: true, title: L[2] });
         });
         var ov = d.overlay || {};
         function band(t0, t1, hi, lo, fill, line) {   // filled band between lo..hi over [t0,t1] (Lightweight Charts has no rectangles)
@@ -102,7 +123,8 @@
           (ov.swings_hi || []).forEach(function (s) { var t = iso(s.t); if (t) marks.push({ time: t, position: 'aboveBar', color: '#ffc878', shape: 'arrowDown', size: 0.9, text: 'swing hi' }); });
           (ov.swings_lo || []).forEach(function (s) { var t = iso(s.t); if (t) marks.push({ time: t, position: 'belowBar', color: '#ffc878', shape: 'arrowUp', size: 0.9, text: 'swing lo' }); });
         }
-        if (d.signal_t) marks.push({ time: tf === 'h4' ? d.signal_t : d.signal_t - (d.signal_t % 86400), position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 });
+        if (d.blind && bars.length) { var si = d['sig_' + tf] != null ? d['sig_' + tf] : bars.length - 1; marks.push({ time: bars[si][0], position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 }); }
+        else if (d.signal_t) marks.push({ time: tf === 'h4' ? d.signal_t : d.signal_t - (d.signal_t % 86400), position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 });
         (d.marks || []).forEach(function (m) { marks.push({ time: m.t, position: 'aboveBar', color: '#ff8c00', shape: 'square', text: m.label, size: 1 }); });
         var set = {}; marks.forEach(function (m) { set[m.time] = m; }); marks = Object.values(set).sort(function (a, b) { return a.time - b.time; });
         guard('markers', function () { cs.setMarkers(marks); });
