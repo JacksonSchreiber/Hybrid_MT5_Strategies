@@ -40,6 +40,7 @@ mkdir -p "$SETDIR"
   [[ -n "${PYR:-}" ]] && echo "InpPyramid=true"             # coach item 20: exercise the +1.5R pyramid
   [[ -n "${REOFFER:-}" ]] && echo "InpSelfTestReoffer=true"   # coach item 26: every fresh signal held, then re-offered
   [[ -n "${QUEUE:-}" ]] && echo "InpSelfTestQueue=true"       # coach queue A/B/I all on (add gate, shorts day-2 cut, improving add)
+  [[ -n "${BLOC:-}" ]] && echo "InpSelfTestBloc=true"         # commodity bloc T+L1.0 on the self-test symbol (bar-N cut + the +1R lock)
   echo "InpTaskPollSec=$POLL"; echo "InpHeartbeatSec=$BEAT"; echo "InpLiveMaxAgeBars=$MAXAGE"
   echo "InpUseSMC=true"; echo "InpUseFib=true"; echo "InpUseEMA=false"; echo "InpUseEMArevQ=true"; echo "InpUseTrendCont=true"
   echo "InpUseShock=false"; echo "InpUseEmaRevInv=false"

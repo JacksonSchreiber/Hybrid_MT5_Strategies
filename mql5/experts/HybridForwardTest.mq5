@@ -143,6 +143,8 @@ input double InpShortRaiseR      = 0.0;    // TESTER study (coach item 25): SELL
 input bool   InpAddGate          = false;  // TESTER study (coach queue A): trial average < 0 at the bar-6 add holds the add until +1R
 input double InpShortCutAvg      = 0.0;    // TESTER study (coach queue B): SELL closed at the bar-12 close if its average R <= this (0 = off; queue: 0.5)
 input double InpImprovingAdd     = 0.0;    // TESTER study (coach queue I): BUY whose day-2 average > day-1 average adds this share of full size at the bar-12 close (0 = off; queue: 0.5)
+input bool   InpBlocTL           = false;  // TESTER study (trader 2026-10-04): commodity-bloc T+L1.0 on this symbol - cut at the bar-N close unless +1.5R was reached; every stop to +1R at +1.5R
+input bool   InpSelfTestBloc     = false;  // live self-test (tester only): this symbol is a bloc_tl_symbols symbol from the start
 input bool   InpSelfTestReoffer  = false;
 input bool   InpSelfTestQueue    = false;
 input int    InpParIdx           = 0;      // TESTER parallel runner (pipeline/mt5_parallel.sh): a free pass index; optimise over it to run N passes at once  // live self-test (tester only): coach queue A/B/I all ON (staged_add_gate 1, short_day2_cut_avg 0.5, improving_add_frac 0.5)  // SELF-TEST only (coach item 26): every fresh signal is "spread-refused" (held), then re-offered next poll
@@ -364,6 +366,11 @@ struct JournalRow
    int      sr_tries;           // failed modify attempts (5 -> refused)
    //--- coach item 26: re-offered spread rejects (journal columns reoffer, held_minutes, spread_r_at_signal, spread_r_at_offer, drift_r)
    int      d2_state;           // coach queue B / I: 0 day-2 check pending, 1 cut (B), 2 checked - no action, 3 improving add placed (I), 4 add refused
+   //--- commodity-bloc T+L1.0 (trader ruling 2026-10-04; live.json bloc_tl_symbols). State file only - no journal column.
+   int      bl_state;           // 0 bar-N check pending, 1 cut (BLOC_CUT), 2 passed (+1.5R reached / closed before), 3 not eligible / stale, 5 cut waiting
+   int      bl_lock;            // 0 not locked, 1 every stop moved to +1R at +1.5R, 2 refused
+   datetime bl_time;            // last lock attempt (retry throttle)
+   int      bl_tries;           // failed lock modifies (5 -> refused)
    int      ro;
    int      ro_held_min;
    double   ro_spread0, ro_spread1, ro_drift;
@@ -371,7 +378,8 @@ struct JournalRow
 void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0; r.st_anchor_entry=0.0; r.st_anchor_risk=0.0; r.st_fill_time=0; r.st_pyr=0;
                               r.inv_state=0; r.inv_parent_sid=0; r.inv_parent_posid=0; r.inv_parent_strategy=""; r.inv_bars_to_stop=0; r.inv_slip_r=0.0;
                               r.sr_state=0; r.sr_time=0; r.sr_px=0.0; r.sr_stop=0.0; r.sr_from=0.0; r.sr_vol=0.0; r.sr_tries=0;
-                              r.ro=0; r.ro_held_min=0; r.ro_spread0=0.0; r.ro_spread1=0.0; r.ro_drift=0.0; r.d2_state=0; }
+                              r.ro=0; r.ro_held_min=0; r.ro_spread0=0.0; r.ro_spread1=0.0; r.ro_drift=0.0; r.d2_state=0;
+                              r.bl_state=0; r.bl_lock=0; r.bl_time=0; r.bl_tries=0; }
 JournalRow g_rows[];
 
 //--- mid-trade management panel state
@@ -563,6 +571,9 @@ bool     g_cfg_reoffer=false;     // live.json reoffer_spread_rejects: coach ite
 bool     g_cfg_add_gate=false;    // live.json staged_add_gate: trial average < 0 at the bar-6 add -> hold the add until +1R
 double   g_cfg_short_cut=0.0;     // live.json short_day2_cut_avg: SELL closed at the bar-12 close if its average <= this (0 = off)
 double   g_cfg_impr_add=0.0;      // live.json improving_add_frac: BUY with day-2 average > day-1 average adds this share of full size (0 = off)
+string   g_cfg_bloc_syms="";      // live.json bloc_tl_symbols: commodity-bloc T+L1.0 roots, comma list ("" = off) - trader 2026-10-04
+datetime g_cfg_bloc_from=0;       // live.json bloc_tl_from (broker time "YYYY.MM.DD HH:MI"): only signals at/after it (open trades before it are left alone)
+const double BLOC_TRIG_R=1.5, BLOC_LOCK_R=1.0;   // the bar-N cut needs +1.5R reached; the lock moves every stop to +1R
 #define ADD_GATE_AVG 0.0
 #define ADD_GATE_REL 1.0
 #define AVG_NA -99999.0
@@ -895,6 +906,8 @@ void LiveLoadConfig(bool bootstrap=true)
       g_cfg_add_gate=(StringToInteger(JGet(k,v,"staged_add_gate","0"))!=0);
       g_cfg_short_cut=StringToDouble(JGet(k,v,"short_day2_cut_avg","0")); if(g_cfg_short_cut<0.0 || g_cfg_short_cut>3.0) g_cfg_short_cut=0.0;
       g_cfg_impr_add=StringToDouble(JGet(k,v,"improving_add_frac","0"));  if(g_cfg_impr_add<0.0 || g_cfg_impr_add>1.0) g_cfg_impr_add=0.0;
+      g_cfg_bloc_syms=JGet(k,v,"bloc_tl_symbols","");                       // trader 2026-10-04: commodity-bloc T+L1.0
+      { string bf=JGet(k,v,"bloc_tl_from",""); g_cfg_bloc_from=(bf=="" ? 0 : StringToTime(bf)); }
       g_cfg_short_raise_r=StringToDouble(JGet(k,v,"short_raise_at_pyramid_r","0"));
       if(g_cfg_short_raise_r<0.0 || g_cfg_short_raise_r>=g_cfg_pyr_r) g_cfg_short_raise_r=0.0;      // nonsense -> off
       if(g_cfg_election_days<0) g_cfg_election_days=0;
@@ -904,6 +917,7 @@ void LiveLoadConfig(bool bootstrap=true)
    if(InpLiveSelfTest && InpSelfTestStaged && (bool)MQLInfoInteger(MQL_TESTER)) { g_cfg_staged=true; g_cfg_st_n=MathMax(1,InpSelfTestStagedN); }   // coach item 18 self-test
    if(InpLiveSelfTest && InpPyramid && (bool)MQLInfoInteger(MQL_TESTER)) g_cfg_pyr=true;                 // coach item 20 self-test
    if(InpLiveSelfTest && InpSelfTestReoffer && (bool)MQLInfoInteger(MQL_TESTER)) g_cfg_reoffer=true;     // coach item 26 self-test
+   if(InpLiveSelfTest && InpSelfTestBloc && (bool)MQLInfoInteger(MQL_TESTER)) { g_cfg_bloc_syms=SymbolRoot(); g_cfg_bloc_from=0; }   // commodity-bloc self-test
    LiveLoadRiskMult();
   }
 
@@ -942,6 +956,7 @@ void WriteHeartbeat(string status="running")
    j.KBool("terminal_trade_allowed",(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED));
    j.KBool("mql_trade_allowed",(bool)MQLInfoInteger(MQL_TRADE_ALLOWED));
    j.KBool("weekend_flat",LiveWeekendFlatOn());
+   j.KBool("bloc_tl",BlocSymbolOn());           // commodity-bloc T+L1.0 active on this chart (trader 2026-10-04)
    j.KNum("max_spread_r",g_cfg_max_spread_r,3);   // the ACTIVE gate, so the dashboard shows what this instance is enforcing, not what the file on disk says
    j.KTime("last_bar_server",g_last_bar); j.KInt("bars_seen",g_bars_seen);
    { int d1n=Bars(_Symbol,PERIOD_D1); string rg="",rw=""; ComputeRegime(0,rg,rw,false);
@@ -1071,6 +1086,7 @@ void OnTimer()
       LiveLoadRiskMult();
       LiveFtmoDayReset();      // no file I/O unless the FTMO day key changed
       LiveProcessTasks();
+      BlocTick();              // commodity bloc (trader 2026-10-04): the bar-N cut decides BEFORE the staged add / the Inverse
       StagedAddTick();         // coach item 18: add the second tranche at the close of H4 bar N (live, staged rows only)
       Day2Tick();              // coach queue B / I (off unless live.json short_day2_cut_avg / improving_add_frac > 0)
       ReofferTick();           // coach item 26: held spread rejects - re-offer once the spread normalises, or close the window
@@ -1415,6 +1431,7 @@ void OnTick()
 
    //--- two-target management runs EVERY tick (a bar can blow through TP1)
    ManageOpenPositions();
+   if(!InpLiveMode && InpBlocTL) BlocTick();           // commodity-bloc tester study (before the staged add)
    if(!InpLiveMode && g_cfg_staged) StagedAddTick();   // coach item 18 tester study (live runs it on the timer)
    if(!InpLiveMode) Day2Tick();                         // coach queue B / I tester study (inert unless InpShortCutAvg / InpImprovingAdd > 0)
    if(g_cfg_inverse && iTime(_Symbol,PERIOD_H4,0)!=g_inv_last_bar) { g_inv_last_bar=iTime(_Symbol,PERIOD_H4,0); InverseArmTick(); }   // once per H4 bar
@@ -2347,6 +2364,7 @@ void LiveSaveRowState(int i)
    j.KStr("inv_parent_strategy",r.inv_parent_strategy); j.KInt("inv_bars_to_stop",r.inv_bars_to_stop); j.KNum("inv_slip_r",r.inv_slip_r,4);
    j.KInt("sr_state",r.sr_state); j.KInt("sr_time",(long)r.sr_time); j.KNum("sr_px",r.sr_px,_Digits); j.KNum("sr_stop",r.sr_stop,_Digits);
    j.KNum("sr_from",r.sr_from,_Digits); j.KNum("sr_vol",r.sr_vol,2); j.KInt("sr_tries",r.sr_tries);
+   j.KInt("bl_state",r.bl_state); j.KInt("bl_lock",r.bl_lock); j.KInt("bl_tries",r.bl_tries);
    j.KInt("d2_state",r.d2_state); j.KInt("ro",r.ro); j.KInt("ro_held_min",r.ro_held_min); j.KNum("ro_spread0",r.ro_spread0,4); j.KNum("ro_spread1",r.ro_spread1,4); j.KNum("ro_drift",r.ro_drift,4);
    j.Key("actions"); j.BeginObj();
    int na=0;
@@ -2415,6 +2433,9 @@ void LiveWritePositions()
       j.KStr("staged_note",g_rows[i].reject_why);
       j.KInt("d2_state",g_rows[i].d2_state);
       j.KInt("short_raise",g_rows[i].sr_state); j.KInt("short_raise_time",(long)(g_rows[i].sr_state==1 ? g_rows[i].sr_time : 0));
+      { int fi=BlocFirstRow(g_rows[i].id); bool bl=(fi>=0 && BlocTL(fi));       // commodity bloc T+L1.0 (trader 2026-10-04)
+        j.KBool("bloc",bl); j.KInt("bloc_state",(fi>=0 ? g_rows[fi].bl_state : 0)); j.KInt("bloc_lock",(fi>=0 ? g_rows[fi].bl_lock : 0));
+        if(bl && fi>=0) j.KTime("bloc_cut_due",g_rows[fi].time+(datetime)((g_cfg_st_n+1)*PeriodSeconds(PERIOD_H4))); }
       j.KNum("short_raise_stop",g_rows[i].sr_stop,_Digits);
       bool beok=BEPlaceable(i); PositionSelectByTicket((ulong)g_rows[i].posid);
       double csl0=PositionGetDouble(POSITION_SL), bep0=BEPrice(i);
@@ -2470,6 +2491,7 @@ bool LiveLoadRowState(string rel)
    r.sr_px=StringToDouble(JGet(k,v,"sr_px","0")); r.sr_stop=StringToDouble(JGet(k,v,"sr_stop","0")); r.sr_from=StringToDouble(JGet(k,v,"sr_from","0"));
    r.sr_vol=StringToDouble(JGet(k,v,"sr_vol","0")); r.sr_tries=(int)StringToInteger(JGet(k,v,"sr_tries","0"));
    r.d2_state=(int)StringToInteger(JGet(k,v,"d2_state","0"));
+   r.bl_state=(int)StringToInteger(JGet(k,v,"bl_state","0")); r.bl_lock=(int)StringToInteger(JGet(k,v,"bl_lock","0")); r.bl_tries=(int)StringToInteger(JGet(k,v,"bl_tries","0"));
    r.ro=(int)StringToInteger(JGet(k,v,"ro","0")); r.ro_held_min=(int)StringToInteger(JGet(k,v,"ro_held_min","0"));
    r.ro_spread0=StringToDouble(JGet(k,v,"ro_spread0","0")); r.ro_spread1=StringToDouble(JGet(k,v,"ro_spread1","0")); r.ro_drift=StringToDouble(JGet(k,v,"ro_drift","0"));
    g_rows[n]=r;
@@ -3862,7 +3884,7 @@ void ManageOpenPositions()
          continue;
         }
 
-      if(g_rows[i].banked && !g_rows[i].closed) { PyramidCheck(i,bid,ask,step,vmin); ShortRaiseCheck(i,ask); continue; }   // coach items 20 / 25
+      if(g_rows[i].banked && !g_rows[i].closed) { PyramidCheck(i,bid,ask,step,vmin); ShortRaiseCheck(i,ask); BlocLockCheck(i,bid,ask); continue; }   // coach items 20 / 25, commodity bloc
       if(g_rows[i].closed || g_rows[i].banked) continue;      // one-time; NOT gated on tp1_done
       if(g_rows[i].risk_px<=0.0) continue;
       if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;   // already gone
@@ -6250,6 +6272,7 @@ void StagedAddTick()
          if(g_rows[i].direction>0 ? bq>=lvl : aq<=lvl) promote="early";
         }
       if(g_rows[i].st_state==4 && promote!="manual_promote") promote="gate_1R";      // coach queue A: released at +1R
+      if(promote=="bar"+IntegerToString(g_cfg_st_n) && BlocTL(i) && g_rows[i].bl_state!=2) continue;   // commodity bloc: the bar-N add waits for BlocTick's pass
       if(promote=="") continue;                              // neither the early level nor the bar-N close yet
       changed=true;
       if(g_rows[i].closed || !PositionSelectByTicket((ulong)g_rows[i].posid)) { StagedSkip(i,"position_closed"); continue; }
@@ -6333,10 +6356,10 @@ void StagedAddTick()
 string StudyParams()
   {
    return StringFormat("InpParIdx=%d;InpStaged=%d;InpPyramid=%d;InpTcBankFrac=%.4f;InpShortRaiseR=%.4f;InpAddGate=%d;InpShortCutAvg=%.4f;"
-                       "InpImprovingAdd=%.4f;InpInverse=%d;InpOfferInverse=%d;InpEarlyPromoteR=%.4f;InpV2Exit=%d;InpRiskPct=%.5f;InpStopFloorATR=%.4f;"
+                       "InpImprovingAdd=%.4f;InpBlocTL=%d;InpInverse=%d;InpOfferInverse=%d;InpEarlyPromoteR=%.4f;InpV2Exit=%d;InpRiskPct=%.5f;InpStopFloorATR=%.4f;"
                        "InpWeekendFlat=%d;InpDelayMode=%d;InpUseSMC=%d;InpUseFib=%d;InpUseTrendCont=%d;InpUseEMArevQ=%d",
                        InpParIdx,(int)InpStaged,(int)InpPyramid,InpTcBankFrac,InpShortRaiseR,(int)InpAddGate,InpShortCutAvg,
-                       InpImprovingAdd,(int)InpInverse,(int)InpOfferInverse,InpEarlyPromoteR,(int)InpV2Exit,InpRiskPct,InpStopFloorATR,
+                       InpImprovingAdd,(int)InpBlocTL,(int)InpInverse,(int)InpOfferInverse,InpEarlyPromoteR,(int)InpV2Exit,InpRiskPct,InpStopFloorATR,
                        (int)InpWeekendFlat,(int)InpDelayMode,(int)InpUseSMC,(int)InpUseFib,(int)InpUseTrendCont,(int)InpUseEMArevQ);
   }
 string JournalPrefix()
@@ -6597,6 +6620,7 @@ void ShortRaiseCheck(int i,double ask)
   {
    double L=(InpLiveMode ? g_cfg_short_raise_r : InpShortRaiseR);
    if(L<=0.0 || g_rows[i].direction>=0 || g_rows[i].strategy=="Inverse" || g_rows[i].sr_state!=0) return;
+   if(BlocTL(i)) return;                                                            // commodity bloc: BlocLockCheck moves every stop to +1R instead
    if(g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) return;
    double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR);
    double ae=AnchorEntry(i), ar=AnchorRisk(i);
@@ -6614,6 +6638,7 @@ void ShortRaiseCheck(int i,double ask)
       double csl=PositionGetDouble(POSITION_SL), ctp=PositionGetDouble(POSITION_TP);
       g_rows[k].sr_from=csl; g_rows[k].sr_vol=PositionGetDouble(POSITION_VOLUME);
       if(csl>0.0 && csl<=lvl+_Point*0.5) { kept++; continue; }                     // already at or tighter than +L: never loosen
+      ExHold(g_rows[k].posid);                                                      // the EA's own move: not an EXTERNAL_SL edit
       if(g_trade.PositionModify((ulong)g_rows[k].posid,lvl,ctp)) moved++;
       else { ok=false; why=StringFormat("modify_failed:%d posid=%I64d",(int)g_trade.ResultRetcode(),g_rows[k].posid); }
      }
@@ -6635,6 +6660,135 @@ void ShortRaiseCheck(int i,double ask)
         { g_rows[k].sr_state=1; g_rows[k].sr_time=now; g_rows[k].sr_px=ask; g_rows[k].sr_stop=lvl; }
    AuditLine("short_raise","","",tag,"ok","",StringFormat("stop=%s (+%.2fR) ask=%s moved=%d kept=%d",DoubleToString(lvl,_Digits),L,DoubleToString(ask,_Digits),moved,kept));
    Print("Signal #",sid," SHORT RAISE at +",DoubleToString(trigR,2),"R -> stop ",DoubleToString(lvl,_Digits)," (+",DoubleToString(L,2),"R) on ",moved," ticket(s)");
+   WriteJournal(g_journal_part);
+   if(InpLiveMode) LiveWritePositions();
+  }
+
+//+------------------------------------------------------------------+
+//| COMMODITY-BLOC T+L1.0 (trader ruling 2026-10-04)                  |
+//+------------------------------------------------------------------+
+//--- On a bloc symbol (live.json bloc_tl_symbols; tester InpBlocTL), the study rules of pipeline/cbloc_timestop_study.run_h "T+L1.0":
+//---  T     at the close of H4 bar N after the signal (N = staged_add_bar, 6) every ticket of the signal is closed at market unless the
+//---        BID reached +1.5R from the card entry (CardE / CardR; M1 bid highs for a BUY, bid lows for a SELL, entry-bar open .. bar-N
+//---        close). Banked runners included. The staged add is then not placed. Actions-file BLOC_CUT line per ticket.
+//---  L1.0  after the bank, the first +1.5R from the first fill (the pyramid's trigger) moves EVERY ticket's stop to the first fill
+//---        +/- 1R, both directions, tighten-only (replaces the shorts-only item-25 raise on these symbols). BLOC_LOCK action lines.
+//--- Population = QueueRuleRow (no Inverse / ADOPTED / TEST / re-offer / late fill), signals at/after bloc_tl_from (live).
+bool BlocSymbolOn()
+  {
+   if(!InpLiveMode) return InpBlocTL;
+   if(g_cfg_bloc_syms=="") return false;
+   string a[]; int n=StringSplit(g_cfg_bloc_syms,',',a);
+   for(int k=0;k<n;k++){ string x=a[k]; StringTrimLeft(x); StringTrimRight(x); if(x!="" && x==SymbolRoot()) return true; }
+   return false;
+  }
+bool BlocTL(int i)
+  {
+   if(!BlocSymbolOn() || g_rows[i].symbol!=_Symbol) return false;
+   if(InpLiveMode && g_cfg_bloc_from>0 && g_rows[i].time<g_cfg_bloc_from) return false;
+   return QueueRuleRow(i);
+  }
+int  BlocFirstRow(int sid){ for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && g_rows[k].st_tranche<2 && g_rows[k].strategy!="Inverse") return k; return -1; }
+void BlocMark(int sid,int st){ for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) g_rows[k].bl_state=st; }
+bool BlocOpenAny(int sid)
+  {
+   for(int k=0;k<ArraySize(g_rows);k++)
+      if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid)) return true;
+   return false;
+  }
+void BlocTick()
+  {
+   if(!BlocSymbolOn()) return;
+   bool changed=false;
+   int N=g_cfg_st_n;
+   int nrows=ArraySize(g_rows);
+   for(int i=0;i<nrows;i++)
+     {
+      if((g_rows[i].bl_state!=0 && g_rows[i].bl_state!=5) || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) continue;
+      if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending") || g_rows[i].posid<=0) continue;
+      int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
+      if(sh<N+1) continue;                                           // the bar-N close has not passed yet
+      int sid=g_rows[i].id; string tag=StringFormat("sig:%d",sid);
+      if(!BlocTL(i)) { BlocMark(sid,3); changed=true; continue; }
+      if(!BlocOpenAny(sid)) { BlocMark(sid,2); changed=true; continue; }   // already closed (stop / TP2 / by hand) before the check
+      if(sh>N+7)
+        {
+         changed=true;   //--- the checkpoint passed more than a day ago (box down?): never act on stale data - flag it for the trader
+         BlocMark(sid,3);
+         if(InpLiveMode) AuditLine("bloc_cut","","",tag,"skipped","stale_checkpoint",StringFormat("bar %d close passed %d bars ago - apply the bloc cut by hand",N,sh-N-1));
+         Print("Signal #",sid," BLOC CUT skipped: the bar-",N," close passed ",sh-N-1," bars ago (stale)");
+         continue;
+        }
+      datetime t0=BarOpen(i,1), tN=BarOpen(i,N+1);
+      double e=CardE(i), r=CardR(i);
+      if(r<=0.0 || t0<=0 || tN<=t0) { BlocMark(sid,3); changed=true; if(InpLiveMode) AuditLine("bloc_cut","","",tag,"skipped","no_card_anchor",""); continue; }
+      bool reached=false; int nb=0;
+      if(g_rows[i].direction>0) { double hh[]; nb=CopyHigh(_Symbol,PERIOD_M1,t0,tN-1,hh); for(int k=0;k<nb && !reached;k++) if(hh[k]>=e+BLOC_TRIG_R*r) reached=true; }
+      else                      { double ll[]; nb=CopyLow(_Symbol,PERIOD_M1,t0,tN-1,ll);  for(int k=0;k<nb && !reached;k++) if(ll[k]<=e-BLOC_TRIG_R*r) reached=true; }
+      if(nb<=0) continue;                                            // M1 history not loaded yet: retry next tick (stale guard above)
+      changed=true;
+      if(reached) { BlocMark(sid,2); continue; }
+      if(InpLiveMode && !g_trading_enabled)
+        {
+         if(g_rows[i].bl_state!=5) { AuditLine("bloc_cut","","",tag,"waiting","trading_disabled",""); BlocMark(sid,5); }
+         continue;
+        }
+      for(int k=0;k<nrows;k++)
+         if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol && !g_rows[k].closed && g_rows[k].posid>0 && PositionSelectByTicket((ulong)g_rows[k].posid))
+            ManualClose(k,"BLOC_CUT");
+      if(BlocOpenAny(sid))
+        {   //--- a close failed: retried next tick (until the stale guard), audited once
+         if(g_rows[i].bl_state!=5) { if(InpLiveMode) AuditLine("bloc_cut","","",tag,"waiting","close_failed",""); BlocMark(sid,5); }
+         continue;
+        }
+      BlocMark(sid,1);
+      if(g_rows[i].st_state==1 || g_rows[i].st_state==4) StagedSkip(i,"bloc_time_stop (+1.5R not reached by the bar-"+IntegerToString(N)+" close)");
+      if(InpLiveMode) AuditLine("bloc_cut","","",tag,"ok","",StringFormat("not +%.1fR by the bar-%d close (card %s, 1R %s)",BLOC_TRIG_R,N,DoubleToString(e,_Digits),DoubleToString(r,_Digits)));
+      Print("Signal #",sid," BLOC CUT: +",DoubleToString(BLOC_TRIG_R,1),"R not reached by the bar-",N," close - every ticket closed");
+     }
+   if(changed) { WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions(); }
+  }
+void BlocLockCheck(int i,double bid,double ask)
+  {
+   if(g_rows[i].bl_lock!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol || !BlocTL(i)) return;
+   double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR);
+   int dir=g_rows[i].direction;
+   double ae=AnchorEntry(i), ar=AnchorRisk(i);
+   if(ar<=0.0) return;
+   if(!(dir>0 ? bid>=ae+trigR*ar : ask<=ae-trigR*ar)) return;
+   if(g_rows[i].bl_tries>0 && TimeCurrent()-g_rows[i].bl_time<5) return;          // retry throttle after a failed modify
+   double lvl=NormPrice(dir>0 ? ae+BLOC_LOCK_R*ar : ae-BLOC_LOCK_R*ar);
+   int sid=g_rows[i].id; string tag=StringFormat("sig:%d",sid);
+   double gap=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   bool ok=(dir>0 ? lvl<=bid-gap : lvl>=ask+gap);
+   string why=(ok ? "" : StringFormat("stops_level:lvl=%s bid=%s ask=%s",DoubleToString(lvl,_Digits),DoubleToString(bid,_Digits),DoubleToString(ask,_Digits)));
+   int moved=0, kept=0;
+   for(int k=0;k<ArraySize(g_rows) && ok;k++)
+     {
+      if(g_rows[k].id!=sid || g_rows[k].symbol!=_Symbol || g_rows[k].strategy=="Inverse" || g_rows[k].closed || g_rows[k].posid<=0) continue;
+      if(!PositionSelectByTicket((ulong)g_rows[k].posid)) continue;
+      double csl=PositionGetDouble(POSITION_SL), ctp=PositionGetDouble(POSITION_TP), vol=PositionGetDouble(POSITION_VOLUME);
+      if(csl>0.0 && (dir>0 ? csl>=lvl-_Point*0.5 : csl<=lvl+_Point*0.5)) { kept++; continue; }   // already at or tighter: never loosen
+      LogManualAction(k,"BLOC_LOCK",(dir>0 ? bid : ask),vol,vol,lvl);              // EA move (holds the external-edit detector)
+      if(g_trade.PositionModify((ulong)g_rows[k].posid,lvl,ctp)) moved++;
+      else { ok=false; why=StringFormat("modify_failed:%d posid=%I64d",(int)g_trade.ResultRetcode(),g_rows[k].posid); }
+     }
+   datetime now=TimeCurrent();
+   if(!ok)
+     {
+      for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) { g_rows[k].bl_tries++; g_rows[k].bl_time=now; }
+      if(g_rows[i].bl_tries>=5 || StringFind(why,"stops_level")==0)
+        {
+         for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) g_rows[k].bl_lock=2;
+         if(InpLiveMode) AuditLine("bloc_lock","","",tag,"refused",why,"");
+         Print("Signal #",sid," BLOC LOCK refused: ",why);
+         WriteJournal(g_journal_part); if(InpLiveMode) LiveWritePositions();
+        }
+      return;
+     }
+   for(int k=0;k<ArraySize(g_rows);k++) if(g_rows[k].id==sid && g_rows[k].symbol==_Symbol) { g_rows[k].bl_lock=1; g_rows[k].bl_time=now; }
+   if(InpLiveMode) AuditLine("bloc_lock","","",tag,"ok","",StringFormat("stop=%s (+%.2fR) moved=%d kept=%d",DoubleToString(lvl,_Digits),BLOC_LOCK_R,moved,kept));
+   Print("Signal #",sid," BLOC LOCK at +",DoubleToString(trigR,2),"R -> stop ",DoubleToString(lvl,_Digits)," (+",DoubleToString(BLOC_LOCK_R,2),"R) on ",moved," ticket(s)");
    WriteJournal(g_journal_part);
    if(InpLiveMode) LiveWritePositions();
   }

@@ -24,6 +24,9 @@ E = html.escape
 
 CSS = """
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--txt:#c9d1d9;--dim:#8b949e;--up:#3fb950;--dn:#f85149;--blue:#58a6ff;--gold:#ffd700;--warn:#d29922}
+.pill.grp{background:transparent;border:1px solid var(--c);color:var(--c);font-weight:600}
+.gbox{border-left:4px solid var(--c);background:rgba(127,127,127,.06);padding:6px 10px;margin:6px 0;border-radius:6px;font-size:13px;line-height:1.45}
+.gbox b{color:var(--c)}.gadv{color:var(--warn);font-weight:600;margin-top:3px}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.4 -apple-system,Segoe UI,Roboto,sans-serif}
 a{color:var(--blue);text-decoration:none}nav{display:flex;gap:4px;padding:8px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2;overflow-x:auto}
 nav a{padding:6px 10px;border-radius:6px;white-space:nowrap}nav a.on{background:var(--card)}main{padding:10px;max-width:980px;margin:0 auto}
@@ -274,6 +277,36 @@ def flash(msg: str | None, ok: bool = True) -> str:
 def status_pill(s: str) -> str:
     cls = {"open": "warn", "approved": "ok", "approved_pending": "ok", "skipped": "", "auto_skipped": "", "expired": "bad", "rejected": "bad", "cancelled": ""}.get(s, "")
     return f'<span class="pill {cls}">{E(s)}</span>'
+
+def grp_pill(symbol: str) -> str:
+    """trader 2026-10-04: every symbol carries its group label, colour-coded (single source: live/symbol_groups.py)."""
+    from live import symbol_groups as SG
+    g = SG.group_of(symbol or "")
+    return f' <span class="pill grp" style="--c:{g["col"]}">{E(g["name"])}</span>' if g else ""
+
+def grp_box(symbol: str) -> str:
+    """the group's brief strategy, plus the trader's advice for groups that have one (commodity bloc)."""
+    from live import symbol_groups as SG
+    g = SG.group_of(symbol or "")
+    if not g: return ""
+    adv = f'<div class="gadv">{E(g["advice"])}</div>' if g["advice"] else ""
+    return f'<div class="gbox" style="--c:{g["col"]}"><b>{E(g["name"])}</b> · {E(g["strategy"])}{adv}</div>'
+
+def bloc_pills(p: dict) -> str:
+    """commodity-bloc T+L1.0 status on a position (EA positions file: bloc, bloc_state, bloc_lock, bloc_cut_due)."""
+    if not p.get("bloc"): return ""
+    out = ""
+    st, lk = int(p.get("bloc_state") or 0), int(p.get("bloc_lock") or 0)
+    if lk == 1: out += ' <span class="pill ok">STOP +1R (bloc lock)</span>'
+    if st in (0, 5) and int(p.get("tranche") or 0) < 2:
+        due = C._srv_to_utc(p.get("bloc_cut_due"), CFG) if p.get("bloc_cut_due") else None
+        left = ""
+        if due:
+            mins = int((due - C.now_utc()).total_seconds() // 60)
+            left = f" in {mins // 60}h{mins % 60:02d}" if mins > 0 else " due now"
+        out += f' <span class="pill warn">24h CUT{left} unless +1.5R</span>'
+    if st == 2: out += ' <span class="pill ok">passed the 24h check</span>'
+    return out
 
 def cls_pill(dc: str) -> str:
     return f'<span class="pill {"take" if dc == "TAKE" else "disc"}">{E(dc or "?")}</span>'
@@ -749,10 +782,10 @@ def dashboard(q: dict) -> str:
     out.append("<h2>Pending signals</h2>")
     if not opn: out.append('<div class="card k">none</div>')
     for s in opn:
-        out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{cls_pill(s.get("decision_class"))}{'<span class="pill warn">RE-OFFERED</span>' if s.get("reoffer") else ""}<span class="k">#{s["signal_id"]}</span></div>'
+        out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{grp_pill(s["symbol"])}{cls_pill(s.get("decision_class"))}{'<span class="pill warn">RE-OFFERED</span>' if s.get("reoffer") else ""}<span class="k">#{s["signal_id"]}</span></div>'
                    f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span>'
                    + (f'<span class="k">D1 {ext[s["signal_key"]]:+.2f} ATR (obs)</span>' if ext.get(s["signal_key"]) is not None else '<span class="k">D1 ext n/a</span>')
-                   + '</div>'
+                   + '</div>' + grp_box(s["symbol"])
                    + advisor_rows(s["signal_key"], s) + '</div></a>')
     # pending orders (approved with "pending at the original entry"; resting on the broker until price comes back)
     out.append("<h2>Pending orders</h2>")
@@ -779,7 +812,7 @@ def dashboard(q: dict) -> str:
     for p, child in ordered:
         what = {2: "staged add", 3: "pyramid add (+1.5R)", 4: "improving add (day 2)"}.get(_tr(p), "")
         title = (f'↳ {E(what)} {E(p["direction"])}' if child else f'{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}'
-                 + (f' <span class="k">({E(what)})</span>' if what else ""))
+                 + (f' <span class="k">({E(what)})</span>' if what else "") + grp_pill(p["symbol"]) + bloc_pills(p))
         style = ' style="margin-left:28px;border-left:3px solid var(--line, #888)"' if child else ""
         if _tr(p) == 1 and int(p.get("staged_state") or 0) == 4:
             title += f' <span class="pill warn">ADD HELD until +1R · {p.get("lots_init")}/{p.get("full_lots")} lots</span>'
@@ -806,7 +839,7 @@ def dashboard(q: dict) -> str:
         rgc = (f'<span class="pill {"ok" if rg else "bad"}">{E(rg) if rg else "REGIME BLANK"}</span>'
                + (f' <span class="k">D1 {d1}</span>' if d1 is not None and (not rg or d1 < 211) else "")) if hb else ""
         tvs = C.tv_symbol(CFG, sym); tvl = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
-        rows_i.append(f'<tr><td>{E(sym)}{wf}</td><td><span class="pill {"ok" if alive else "bad"}">{"alive" if alive else "STALE"}</span>{flags} {rgc}</td>'
+        rows_i.append(f'<tr><td>{E(sym)}{grp_pill(sym)}{wf}</td><td><span class="pill {"ok" if alive else "bad"}">{"alive" if alive else "STALE"}</span>{flags} {rgc}</td>'
                       f'<td class="k">{C.rel_time(C.parse_iso(hb.get("ts")) if hb else None)}</td><td><a href="{tvl}" target="_blank">TV ↗</a></td></tr>'
                       + (f'<tr><td colspan="4" class="k">alerts: {E(", ".join(hb.get("alerts") or []))}</td></tr>' if hb and hb.get("alerts") else ""))
     tbl = f'<table><tr><th>symbol</th><th>EA · regime</th><th>beat</th><th></th></tr>{"".join(rows_i)}</table>'
@@ -819,7 +852,7 @@ def dashboard(q: dict) -> str:
     # recent decided signals
     out.append("<h2>Recent signals</h2><div class='card'><table><tr><th>#</th><th>signal</th><th>status</th><th>time</th></tr>")
     for s in [x for x in sigs if x.get("status") != "open"][:12]:
-        out.append(f'<tr><td><a href="/signal/{E(s["signal_key"])}">{s["signal_id"]}</a></td><td>{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</td><td>{status_pill(s.get("status", ""))}</td><td class="k">{E((s.get("published_at") or "")[:16].replace("T", " "))}</td></tr>')
+        out.append(f'<tr><td><a href="/signal/{E(s["signal_key"])}">{s["signal_id"]}</a></td><td>{E(s["symbol"])}{grp_pill(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</td><td>{status_pill(s.get("status", ""))}</td><td class="k">{E((s.get("published_at") or "")[:16].replace("T", " "))}</td></tr>')
     out.append("</table></div>")
     return page("Hybrid live", "".join(out), "home", refresh=30)
 
@@ -838,9 +871,9 @@ def signal_page(key: str, q: dict) -> str:
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
     is_open = s.get("status") == "open"
     out.append(f'<h1>{E(s["symbol"])} · {E(s["strategy"])} {E(s["direction"])} <span class="k">#{s["signal_id"]}</span></h1>'
-               f'<div class="row">{cls_pill(s.get("decision_class"))}{status_pill(s.get("status", ""))}<span class="pill">{E(rg.get("pretty", ""))}</span>'
+               f'<div class="row">{grp_pill(s["symbol"])}{cls_pill(s.get("decision_class"))}{status_pill(s.get("status", ""))}<span class="pill">{E(rg.get("pretty", ""))}</span>'
                + (f'<span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span>' if is_open else "") + f'<span class="k">{E(s.get("sigtime_text", ""))} · {E(s.get("session", ""))}</span></div>'
-               f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>')
+               f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>' + grp_box(s["symbol"]))
     if s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
     if s.get("reoffer"): out.append(f'<div class="flash"><span class="pill warn">RE-OFFERED</span> {E(C.reoffer_line(s, CFG))}</div>')   # coach item 26
     d = s.get("delay_count", 0)
@@ -981,7 +1014,7 @@ def cancel_txt(o: dict) -> str:
 
 def pending_card(o: dict, link: bool = False) -> str:
     s = C.signal(CFG, o["signal_key"]) if o.get("signal_key") else None
-    title = f'{E(o["symbol"])} {E(s["strategy"]) if s else ""} {E(o["type"])}'
+    title = f'{E(o["symbol"])}{grp_pill(o["symbol"])} {E(s["strategy"]) if s else ""} {E(o["type"])}'
     dist = o.get("distance"); dr = o.get("distance_r")
     near = dr is not None and dr <= 0.25
     body = (f'<div class="card"><div class="row"><span class="big">{title}</span><span class="pill warn">resting</span>'
@@ -1031,6 +1064,7 @@ def position_page(key: str, q: dict) -> str:
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
     closed = p.get("_closed")
     out.append(f'<h1>{E(p["symbol"])} · {E(p["strategy"])} {E(p["direction"])} <span class="k">pos {p["posid"]} · signal #{p.get("signal_id")}</span></h1>'
+               + f'<div class="row">{grp_pill(p["symbol"])}{bloc_pills(p)}</div>' + grp_box(p["symbol"]) +
                f'<div class="card" id="poslive" data-key="{E(key)}" data-closed="{1 if closed else 0}"><div class="grid2"><div><div class="k">open R</div><div id="p-open_r" class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</div></div><div><div class="k">banked R</div><div id="p-banked_r" class="big v">{C.r_fmt(p.get("banked_r"))}</div></div>'
                f'<div><span class="k">entry</span> <b class="v">{p.get("entry")}</b></div><div><span class="k">SL live</span> <b id="p-sl_live" class="v bad">{p.get("sl_live")}</b> <span class="k">(risk basis {p.get("sl_risk_basis")})</span></div>'
                f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b id="p-tp_live" class="v">{p.get("tp_live") or "-"}</b></div>'
@@ -1249,7 +1283,7 @@ def journal_page(q: dict) -> str:
     for r in rows:
         key = f'{r.get("symbol")}-{r.get("signal_id")}'
         rtxt = r.get("r_multiple") or ""; skip = f' ({r.get("skip_reason")}{" auto" if r.get("auto") == "1" else ""}{" superseded" if r.get("skip_reason") == "9" else (" FTMO auto-reject" if r.get("skip_reason") == "10" else "")})' if r.get("decision") == "skipped" else ""
-        out.append(f'<tr><td><a href="/signal/{E(key)}">{E(r.get("signal_id", ""))}</a></td><td class="k">{E((r.get("signal_time") or "")[:16])}</td><td>{E(r.get("strategy", ""))} {E(r.get("direction", ""))} <span class="k">{E(r.get("decision_class", ""))}</span></td>'
+        out.append(f'<tr><td><a href="/signal/{E(key)}">{E(r.get("signal_id", ""))}</a></td><td class="k">{E((r.get("signal_time") or "")[:16])}</td><td>{E(r.get("symbol", ""))}{grp_pill(r.get("symbol", ""))} {E(r.get("strategy", ""))} {E(r.get("direction", ""))} <span class="k">{E(r.get("decision_class", ""))}</span></td>'
                    f'<td>{E(r.get("decision", ""))}{E(skip)}</td><td class="v {"ok" if rtxt and float(rtxt) >= 0 else "bad" if rtxt else ""}">{E(rtxt)}</td><td class="k">{E((r.get("exit_time") or "")[:16])}</td></tr>')
     out.append("</table></div>")
     tot = [float(r["r_multiple"]) for r in rows if r.get("r_multiple")]

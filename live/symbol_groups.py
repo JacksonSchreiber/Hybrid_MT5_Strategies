@@ -27,8 +27,38 @@ GROUPS = [
 ]
 
 
+# trader 2026-10-04: every trade screen labels the symbol with its group, and shows the group's brief strategy (+ advice where
+# the trader gave one). Only the commodity bloc has its own management so far; every other group runs the standard stack.
+STANDARD = "Standard management: 25% at the signal, the rest at the 6th H4 bar close; bank at +1R, +50% at +1.5R."
+STRATEGY = {
+    "com": "Commodity-bloc T+L1.0: 25% at the signal. At the 6th H4 bar close (~24h of trading) everything is closed unless "
+           "+1.5R was reached; survivors get the add, and at +1.5R every stop moves to +1R. A-grade setups only.",
+}
+ADVICE = {
+    "com": "Slow commodity-bloc trades are dead trades. Winners win fast or not at all - ruthlessly cut negative or slow trades "
+           "within the first day. Tight stops; risky group - take it only if the setup looks very good.",
+}
+
+
 def as_json() -> list[dict]:
-    return [{"k": k, "name": n, "col": c, "syms": s, "how": h} for k, n, c, s, h in GROUPS]
+    return [{"k": k, "name": n, "col": c, "syms": s, "how": h, "strategy": STRATEGY.get(k, STANDARD), "advice": ADVICE.get(k, "")}
+            for k, n, c, s, h in GROUPS]
+
+
+def root(symbol: str) -> str:
+    """'AUDUSD.sim' / 'AUDUSD.dk' / 'audusd' -> 'AUDUSD' (broker / data suffix stripped)."""
+    return (symbol or "").split(".")[0].upper()
+
+
+_BY_ROOT = {s: (k, n, c) for k, n, c, ss, _ in GROUPS for s in ss}
+
+
+def group_of(symbol: str) -> dict | None:
+    """the symbol's group: {k, name, col, strategy, advice}, or None for a symbol outside every group (never an error)."""
+    g = _BY_ROOT.get(root(symbol))
+    if not g: return None
+    k, n, c = g
+    return {"k": k, "name": n, "col": c, "strategy": STRATEGY.get(k, STANDARD), "advice": ADVICE.get(k, "")}
 
 
 # trader 2026-10-03: the research lock (Data visualizers). When the lock is on the page hides every trade of a LOCKED symbol, and every

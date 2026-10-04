@@ -4,6 +4,7 @@ later (graders do NOT exclude touched signals - that would select the sample).
 Tags (all read from the journal + actions files; no EA field needed):
   STAGED        a staged add (tranche 2) went in          ADD_HELD     coach queue A held the add (reject_reason)
   DAY2_CUT      coach queue B closed it (actions)         IMPR_ADD     coach queue I added (tranche 4)
+  BLOC_CUT      commodity-bloc 24h cut closed it (actions) BLOC_LOCK    commodity-bloc stops to +1R at +1.5R (actions)
   PYRAMID       the +1.5R add (tranche 3)                 SHORT_RAISE  the shorts stop raise armed (short_raise=1)
   REOFFER       a re-offered spread reject (reoffer=1)    INVERSE      an Inverse signal
   MANUAL_SIZE   Full now / Promote now                    MANUAL_EXIT  a manual close / 50% close / stop edit in the actions file
@@ -14,7 +15,7 @@ import csv, glob, os
 
 from live import common as C
 
-AUTO = ("AUTO_", "DAY2_CUT", "SHORT_RAISE", "PYRAMID", "STAGED")
+AUTO = ("AUTO_", "DAY2_CUT", "SHORT_RAISE", "PYRAMID", "STAGED", "BLOC_CUT", "BLOC_LOCK")
 
 
 def tags_for(cfg: dict, rows: list[dict] | None = None) -> dict:
@@ -46,6 +47,8 @@ def tags_for(cfg: dict, rows: list[dict] | None = None) -> dict:
     for k, al in acts.items():
         s = t.setdefault(k, set())
         if "DAY2_CUT" in al: s.add("DAY2_CUT")
+        if "BLOC_CUT" in al: s.add("BLOC_CUT")            # commodity bloc T+L1.0 (trader 2026-10-04): the 24h cut
+        if "BLOC_LOCK" in al: s.add("BLOC_LOCK")          # ... and the +1R lock at +1.5R
         if any(a and not a.startswith(AUTO) for a in al): s.add("MANUAL_EXIT")
     return {k: ";".join(sorted(v)) for k, v in t.items()}
 

@@ -174,6 +174,14 @@ def inverse_block(sig: dict) -> str:
             f"Backtest: +0.20R/trade on 358 fills 2012-24 (t 2.7), +0.13R on 46 in 2025-26; the edge is gone at 0.10R slippage.\n")
 
 
+def group_line(sig: dict) -> str:
+    """trader 2026-10-04: the symbol's group, its brief strategy and (commodity bloc) the trader's advice - CLAUDE.live.md governs."""
+    from live import symbol_groups as SG
+    g = SG.group_of(sig.get("symbol", ""))
+    if not g: return ""
+    return (f"- **Group:** {g['name']} — {g['strategy']}" + (f" **Trader's advice:** {g['advice']}" if g["advice"] else "")
+            + (" (see CLAUDE.md, section Commodity bloc: no TAKE default, A-grade bar)" if g["k"] == "com" else "") + "\n")
+
 def build_setup_md(sig: dict, cfg: dict) -> str:
     lv = sig.get("levels") or {}; rr = sig.get("rr") or {}; sz = sig.get("sizing") or {}
     sig_t = C.parse_iso(sig.get("signal_time")); dl = C.parse_iso(sig.get("deadline"))
@@ -186,7 +194,7 @@ def build_setup_md(sig: dict, cfg: dict) -> str:
 _Sighted live consult (CLAUDE.live.md). Judge from the charts, the guide and the calendar below._
 
 - **Symbol / class:** {sig.get('symbol')} ({klass})
-{('- **Symbol rules (journaled):** ' + rules_line) if rules_line else '- **Symbol rules:** standard session rules apply (no per-symbol entry in config/symbol_rules.json)'}
+{group_line(sig)}{('- **Symbol rules (journaled):** ' + rules_line) if rules_line else '- **Symbol rules:** standard session rules apply (no per-symbol entry in config/symbol_rules.json)'}
 - **Time:** {sig.get('sigtime_text', '')} — signal bar {sig.get('signal_time_utc') or sig.get('signal_time')}, presented {sig.get('published_at')} (all UTC) · session: {sig.get('session')}
 - **Decision deadline:** {dl.strftime('%a %d %b %H:%M UTC') if dl else '-'} ({sig.get('max_age_bars')} H4 bars of silence = expired) · delays so far: {sig.get('delay_count', 0)}
 - **{regime_line(sig)}**

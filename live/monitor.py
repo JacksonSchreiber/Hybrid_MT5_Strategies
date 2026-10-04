@@ -43,7 +43,11 @@ class Monitor:
             if prev == stt: continue
             if prev is None and stt == "open":
                 dl = C.parse_iso(s.get("deadline"))
-                self.send(f"{'RE-OFFERED' if s.get('reoffer') else 'NEW'} SIGNAL #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class')}]\n"
+                from live import symbol_groups as SG                       # trader 2026-10-04: group label + its advice
+                g = SG.group_of(s["symbol"]) or {}
+                self.send(f"{'RE-OFFERED' if s.get('reoffer') else 'NEW'} SIGNAL #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} [{s.get('decision_class')}]"
+                          + (f" · {g['name']}" if g else "") + "\n"
+                          + (f"{g['name'].upper()}: {g['advice']}\n" if g.get("advice") else "")
                           + (C.reoffer_line(s, self.cfg) + "\n" if s.get("reoffer") else "") +
                           f"entry {lv.get('entry')} SL {lv.get('sl')} TP1 {lv.get('tp1')} ({rr.get('tp1')}R) · {(s.get('sizing') or {}).get('lots')} lots\n"
                           f"{(s.get('regime') or {}).get('pretty', '')} · deadline {C.fmt_dt(dl)} ({C.rel_time(dl)})\n{self.base}/signal/{key}")
@@ -195,6 +199,25 @@ class Monitor:
                                       f"so the EA closed it at {a.get('price')} (open {a.get('open_r')}R).")
             except OSError: pass
         self.st["day2_cut_sent"] = sent[-500:]
+        # commodity bloc T+L1.0 (trader 2026-10-04): the EA's 24h cut (BLOC_CUT) and +1R lock (BLOC_LOCK), one message per signal
+        bsent = self.st.setdefault("bloc_sent", [])
+        for path in glob.glob(os.path.join(self.cfg["root"], "journal", "*.actions.csv")):
+            try:
+                with open(path, encoding="ascii", errors="replace", newline="") as fh:
+                    for a in csv.DictReader(fh):
+                        act = a.get("action")
+                        if act not in ("BLOC_CUT", "BLOC_LOCK"): continue
+                        sym = os.path.basename(path).split("_")[0]; key = f"{act}:{sym}-{a.get('signal_id')}"
+                        if key in bsent: continue
+                        bsent.append(key)
+                        if not self.st.get("positions_initialised"): continue
+                        if act == "BLOC_CUT":
+                            self.send(f"BLOC 24h CUT: {sym} signal #{a.get('signal_id')} · +1.5R was not reached by the 6th H4 bar close, so the EA "
+                                      f"closed it at {a.get('price')} (open {a.get('open_r')}R). Slow commodity-bloc trades are dead trades.")
+                        else:
+                            self.send(f"BLOC LOCK: {sym} signal #{a.get('signal_id')} · +1.5R reached - every stop moved to +1R ({a.get('sl_after')}).")
+            except OSError: pass
+        self.st["bloc_sent"] = bsent[-1000:]
 
     def heartbeats(self):
         """instance health, trader ruling 2026-09-22: no per-symbol noise. A symbol is DOWN only after `down_after_s` (300 s =
