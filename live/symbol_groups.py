@@ -63,9 +63,9 @@ def group_of(symbol: str) -> dict | None:
 
 # trader 2026-10-03: the research lock (Data visualizers). When the lock is on the page hides every trade of a LOCKED symbol, and every
 # 2025-26 trade of any symbol not in EXPOSED. AUDUSD/NZDUSD/USDCAD are exposed (the trader has studied them, incl. 2025-26). The three
-# commodity-bloc holdouts (AUDNZD, AUDCAD, NZDCAD) are locked and join the page only after their pre-registered one look.
+# commodity-bloc crosses (AUDNZD, AUDCAD, NZDCAD) were locked until their one holdout look (spent 2026-10-04) and are now exposed too.
 RESEARCH_LOCK = {
-    "locked": ["USDCHF", "EURJPY", "GBPJPY", "EURGBP", "USDMXN", "XAGUSD", "US30", "AUDNZD", "AUDCAD", "NZDCAD"],
+    "locked": ["USDCHF", "EURJPY", "GBPJPY", "EURGBP", "USDMXN", "XAGUSD", "US30"],
     "period_from": 2025,
-    "exposed": ["AUDUSD", "NZDUSD", "USDCAD"],
+    "exposed": ["AUDUSD", "NZDUSD", "USDCAD", "AUDNZD", "AUDCAD", "NZDCAD"],   # the bloc crosses' one holdout look was spent 2026-10-04
 }

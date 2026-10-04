@@ -146,8 +146,7 @@
     d.innerHTML = `<summary>${state.lock ? "🔒 Research lock ON - the holdout is hidden on every chart" : "Research lock is off - everything is shown"} <span class="k">(what is locked?)</span></summary>` +
       `<div class="rp-lockgrid"><div><div class="rp-lbl">Locked symbols (hidden entirely)</div>${L.locked.map(chip).join(" ")}</div>` +
       `<div><div class="rp-lbl">Open symbols (shown)</div>${open.map(s => chip(s) + (L.exposed.includes(s) ? "<sup>all years</sup>" : "")).join(" ")}</div></div>` +
-      `<div class="k">Also hidden while locked: ${y}–26 on every open symbol except ${L.exposed.join(", ")} (studied already, all years). Greyed = not on the page yet ` +
-      `(the commodity-bloc holdouts join after their pre-registered test).</div>`;
+      `<div class="k">Also hidden while locked: ${y}–26 on every open symbol except ${L.exposed.join(", ")} (studied already, all years). Greyed = not on the page yet.</div>`;
     return d;
   }
   function dialCard() {
