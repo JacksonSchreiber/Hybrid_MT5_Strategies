@@ -15,7 +15,7 @@ BATCHES=("AUDJPY CADJPY NZDJPY CHFJPY"            # Yen (have USDJPY, EURJPY, GB
          "EURSEK EURNOK USDSEK USDNOK"            # Nordic
          "USDHUF USDPLN EURHUF EURPLN USDCZK")    # Central Europe
 prog(){ printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$P"; }
-busy(){ pgrep -x qdmcli >/dev/null 2>&1 || pgrep -f "$QDM/j64" >/dev/null 2>&1; }
+busy(){ pgrep -x qdmcli >/dev/null 2>&1 || pgrep -f "^$QDM/j64" >/dev/null 2>&1; }   # anchored: unanchored -f also matches any shell whose command text has the path
 free_wait(){ while busy; do sleep 15; done; }
 cd "$QDM" || exit 1
 prog "=== fleet2_download start (pid $$): ${#BATCHES[@]} batches, download + M1 export only"
