@@ -350,3 +350,15 @@ detectors from MT5 AA runs (same settings as the other new symbols), SCALED engi
 Bars (pooled over the three, all years): PRIMARY T+L1.0 increment vs live > 0 with paired t >= 1.5 AND worst DD not above live's.
 SECONDARY T alone increment > 0. Reported: per symbol, long / short, 2012-24 and 2025-26. ONE look; no rule changes after it.
 On the website these three sit in the research-lock group (hidden while locked), and only after the look.
+
+### ADDENDUM - v5.2 (trader 2026-10-04: "run 5.2 on the holdouts"), written and committed BEFORE the look
+v5.2 was developed on AUDUSD/NZDUSD/USDCAD over many rounds (in-sample, model cost: +0.0655R/trade, t 2.96, total +113.6, DD 12.5;
+live setup -0.066, DD 145). Frozen rules (engine pipeline/cbloc_v52.py, sha256 0e40f78623fac8bc...): 100% at the signal (signal stop, TP2 ~4R);
+stop to entry at +0.5R (longs) / +0.3R (shorts); 1h after entry sell if the average R since entry < -0.1; 3.5h after entry sell if
+< -0.15; at the bar-4 close (16h) sell if the average < +1.5; every stop to +1R at +1.5R; +100% at +2R before the bar-6 close; TP2.
+Computed in the SAME single look as T / T+L1.0 (pipeline/cbloc_holdout_look.py sha256 f258bb98c46b2c50..., in-sample check PASS: v5.2 path
+reproduces the in-sample numbers exactly).
+Bars (pooled over the three, all years, model cost): PRIMARY v5.2 mean R > 0 with one-sample t >= 1.5. SECONDARY v5.2 increment vs live
+> 0 AND worst DD not above live's. Reported: per symbol, long / short, 2012-24 and 2025-26, by detector.
+Cost: the model's spread (spread_profile.csv, M1 bar spreads) is a LOWER bound - real spreads on these crosses are wider and lower the R
+by about (spread pips / stop pips) x units traded. Extra-spread lines (+0.5/1/1.5/2 pips) are reported as information, not as a bar.

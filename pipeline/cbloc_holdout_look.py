@@ -19,6 +19,12 @@ Bars (pooled over the three, all years; frozen):
   PRIMARY    T+L1.0 increment vs live > 0  AND  paired t >= 1.5  AND  worst DD (T+L1.0) <= worst DD (live)
   SECONDARY  T increment vs live > 0
 Reported: pooled all years / 2012-24 / 2025-26, each all / long / short; per symbol the same. ONE look; no rule changes after it.
+ADDENDUM 2026-10-04 (trader: "run 5.2 on the holdouts"; written and committed BEFORE the look - docs/coach_queue.md "ADDENDUM - v5.2"):
+  v5.2 = pipeline/cbloc_v52.py (frozen engine), computed in the same single look, same population and frames.
+  PRIMARY    v5.2 pooled all years: mean R > 0 AND one-sample t >= 1.5
+  SECONDARY  v5.2 increment vs live > 0 AND worst DD (v5.2) <= worst DD (live)
+  Judged at model cost (spread_profile.csv = M1 bar spreads, a LOWER bound); the extra-spread lines (+0.5/1/1.5/2 pips per unit traded,
+  live charged for its own units) are information, not bars. All report text is built before either output file is written.
 
 Usage
   python3 pipeline/cbloc_holdout_look.py                    readiness check only: lists what is missing; computes nothing
@@ -39,6 +45,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 from pipeline import ask_side_study as A                  # noqa: E402
 from pipeline import cbloc_timestop_study as C            # noqa: E402  frozen engine (run_h) + the in-sample report
+from pipeline import cbloc_v52 as V52                     # noqa: E402  frozen v5.2 engine (addendum 2026-10-04)
 from pipeline import combo_build as CB                    # noqa: E402  sym_obj -> CachedSym(sym, profile, Q.REFS)
 from pipeline import exit_s025_study as S025              # noqa: E402  aa_rows (unchanged)
 from pipeline import m1_cache as M                        # noqa: E402
@@ -55,6 +62,8 @@ INSAMPLE = sorted(C.BLOC)                                  # AUDUSD.dk, NZDUSD.d
 REPORT = os.path.join(A.STUDY, "cbloc_holdout_report.txt")
 TRADES = os.path.join(A.STUDY, "cbloc_holdout_trades.pkl")
 CHECK = os.path.join(OI.HOLDOUT_AA, "cbloc_holdout_insample_check.txt")
+V52_REF = os.path.join(A.STUDY, "cbloc_v52_filters_report.txt")     # in-sample v5.2 reference (pipeline/cbloc_v52_filters.py)
+PIPS = (0.5, 1.0, 1.5, 2.0)
 PERIODS = (("2012-24", lambda z: z[1][:4] < "2025"), ("2025-26", lambda z: z[1][:4] >= "2025"))
 SIDES = (("all  ", lambda z: True), ("long ", lambda z: z[2]), ("short", lambda z: not z[2]))
 
@@ -139,7 +148,9 @@ def do_symbol(arg):
         e0 = float(F["eo"][0]); bankf = BANKF.get(x["strat"], 0.5); r = {}
         for name, ts, rt in VARIANTS:
             v, units, why = C.run_h(F, e0, e0, u["bank_R"], u["tp2_R"], bankf, A.F0, u["k_add"], u["up"], ts, rt)
-            r[name] = v; r[name + ":why"] = why
+            r[name] = v; r[name + ":why"] = why; r[name + ":units"] = units
+        r["v5.2"], r["v5.2:units"] = V52.trade(S, x, u, F)                   # addendum 2026-10-04
+        r["stop_pips"] = u["R"] / (10 * A.TICK[sym])
         out.append((sym, x["t"], x["up"], r, x["strat"]))
     return out
 
@@ -211,6 +222,63 @@ def tables(res, syms, L):
     return got, problems
 
 
+# ------------------------------------------------------------------------------------------------- v5.2 (addendum 2026-10-04)
+def t1(v):
+    if len(v) < 3: return float("nan")
+    sd = st.stdev(v); return st.mean(v) / (sd / len(v) ** 0.5) if sd > 0 else float("nan")
+
+
+def v52_block(L, title, zs, minn=10):
+    if len(zs) < minn:
+        L.append(f"{title}  n={len(zs)}  (fewer than {minn} trades - not shown)"); return None
+    b = [z[3]["live"] for z in zs]; v = [z[3]["v5.2"] for z in zs]
+    L.append(f"{title}  n={len(zs)}  v5.2 {st.mean(v):+.4f}R/trade (t vs 0 {t1(v):+.2f})  total {sum(v):+7.1f}  DD {maxdd(v):6.1f}  | live {st.mean(b):+.4f} "
+             f"total {sum(b):+7.1f} DD {maxdd(b):6.1f} | v5.2 vs live {st.mean(v) - st.mean(b):+.4f} (t {paired_t(b, v):+.2f})")
+    return {"n": len(zs), "mean": st.mean(v), "tot": sum(v), "dd": maxdd(v), "live_tot": sum(b)}
+
+
+def v52_verdict(zs):
+    b = [z[3]["live"] for z in zs]; v = [z[3]["v5.2"] for z in zs]
+    m, tt, inc, ddv, ddb = st.mean(v), t1(v), st.mean(v) - st.mean(b), maxdd(v), maxdd(b)
+    p1, p2, s1, s2 = m > 0, tt >= 1.5, inc > 0, ddv <= ddb
+    return {"primary": p1 and p2, "secondary": s1 and s2, "lines": [
+        f"PRIMARY   v5.2, pooled all years, n={len(zs)}: mean {m:+.4f}R/trade > 0 [{'yes' if p1 else 'NO'}]  AND  one-sample t {tt:+.2f} >= 1.5 "
+        f"[{'yes' if p2 else 'NO'}]  ->  {'PASS' if p1 and p2 else 'FAIL'}",
+        f"SECONDARY v5.2 vs live, pooled all years: increment {inc:+.4f}R/trade > 0 [{'yes' if s1 else 'NO'}]  AND  worst DD {ddv:.1f} <= live "
+        f"{ddb:.1f} [{'yes' if s2 else 'NO'}]  ->  {'PASS' if s1 and s2 else 'FAIL'}"]}
+
+
+def v52_tables(res, syms, L):
+    got = {}
+    scopes = [("POOLED", lambda z: True)] + [(s, (lambda s_: lambda z: z[0] == s_)(s)) for s in sorted(syms)]
+    for scope, kf in scopes:
+        L.append(f"\n----- v5.2 | {scope if scope != 'POOLED' else 'POOLED (' + ', '.join(x.split('.')[0] for x in sorted(syms)) + ')'} -----")
+        for per, pf in (("all years", lambda z: True),) + PERIODS:
+            for side, sf in SIDES:
+                got[(scope, per, side.strip())] = v52_block(L, f"{per} {side}", tsort([z for z in res if kf(z) and pf(z) and sf(z)]), minn=1 if scope == "POOLED" else 10)
+    L.append("\n----- v5.2 | POOLED by detector, all years -----")
+    for d in ("TrendCont", "SweepMSS", "DeepFib", "EMArevQ"):
+        v52_block(L, f"{d:10}", tsort([z for z in res if z[4] == d]), minn=10)
+    problems = []
+    for side in ("all", "long", "short"):
+        tot = got.get(("POOLED", "all years", side))
+        for parts, what in (([got.get(("POOLED", per, side)) for per, _ in PERIODS], "2012-24 + 2025-26"),
+                            ([got.get((s, "all years", side)) for s in sorted(syms)], "sum of symbols")):
+            if tot is None or any(p is None for p in parts): continue
+            if sum(p["n"] for p in parts) != tot["n"] or abs(sum(p["tot"] for p in parts) - tot["tot"]) > 1e-9:
+                problems.append(f"v5.2 {side}: pooled all-years != {what}")
+    L.append("v5.2 additivity check: " + ("OK" if not problems else "FAILED: " + "; ".join(problems)))
+    zs = tsort(res); sp = [z[3]["stop_pips"] for z in zs]
+    L.append(f"\n----- SPREAD SENSITIVITY (information, not a bar): extra round-trip spread per unit traded on top of the model's M1-bar spread; "
+             f"stop distance median {st.median(sp):.1f} pips, 10th pct {sorted(sp)[len(sp) // 10]:.1f} -----")
+    for pp in (0.0,) + PIPS:
+        v = [z[3]["v5.2"] - z[3]["v5.2:units"] * pp / z[3]["stop_pips"] for z in zs]
+        b = [z[3]["live"] - z[3]["live:units"] * pp / z[3]["stop_pips"] for z in zs]
+        per_sym = " ".join(f"{s.split('.')[0]} {st.mean([z[3]['v5.2'] - z[3]['v5.2:units'] * pp / z[3]['stop_pips'] for z in zs if z[0] == s]):+.4f}" for s in sorted(syms))
+        L.append(f"  +{pp:.1f} pip: v5.2 {st.mean(v):+.4f}R/trade (t {t1(v):+.2f})  total {sum(v):+7.1f}  DD {maxdd(v):6.1f} | live {st.mean(b):+.4f} DD {maxdd(b):6.1f} | {per_sym}")
+    return got, problems
+
+
 # ------------------------------------------------------------------------------------------------- in-sample validation
 def insample_check():
     T0 = time.time()
@@ -246,7 +314,18 @@ def insample_check():
     L.append(f"pooled all-years vs the reference's three by-symbol all-years lines: n {pa['n']} vs {n_sum}, live total "
              f"{pa['live']['tot']:+.2f} vs {t_sum:+.1f} (sum of rounded lines) -> {'OK' if c_ref else 'MISMATCH'}")
     v = verdict(tsort(res)); L += ["", "verdict code path on the in-sample bloc (NOT the holdout result):"] + ["   " + x for x in v["lines"]]
-    allok = ok and not problems and c_ref
+    # v5.2 (addendum): the look's v5.2 path must reproduce the in-sample reference (cbloc_v52_filters.py) - mean and total exactly
+    m = re.search(r"^v5\.2: ([+-]\d+\.\d{4})R/trade\s+total ([+-]\d+\.\d)\s+DD (\d+\.\d)", open(V52_REF).read(), re.M)
+    zs = tsort(res); vv = [z[3]["v5.2"] for z in zs]
+    mine52 = (f"{st.mean(vv):+.4f}", f"{sum(vv):+.1f}", maxdd(vv))
+    c52 = bool(m) and mine52[0] == m.group(1) and mine52[1] == m.group(2) and abs(mine52[2] - float(m.group(3))) <= 0.5 and len(vv) == 1735
+    L += ["", f"v5.2 path vs {os.path.relpath(V52_REF, ROOT)} (sha {sha256(V52_REF)[:16]}): n {len(vv)} (ref 1735), mean {mine52[0]} (ref "
+          f"{m.group(1) if m else '?'}), total {mine52[1]} (ref {m.group(2) if m else '?'}), DD {mine52[2]:.1f} (ref {m.group(3) if m else '?'}, "
+          f"+/-0.5 for tie order) -> {'OK' if c52 else 'MISMATCH'}"]
+    L.append("\nthe look's v5.2 report body, run on the in-sample bloc (code-path exercise; not the holdout):")
+    g52, p52 = v52_tables(res, INSAMPLE, L)
+    v2 = v52_verdict(zs); L += ["v5.2 verdict code path on the in-sample bloc (NOT the holdout result):"] + ["   " + x for x in v2["lines"]]
+    allok = ok and not problems and c_ref and c52 and not p52
     L.append(f"\nIN-SAMPLE CHECK: {'PASS' if allok else 'FAIL'}")
     open(CHECK, "w").write("\n".join(L) + "\n"); print("\n".join(L)); print(f"-> {CHECK}")
     return allok
@@ -279,6 +358,9 @@ def look():
     v = verdict(tsort(res))
     L += ["", "=" * 30 + " VERDICT (pre-registered bars) " + "=" * 30] + v["lines"] + ["=" * 91]
     got, problems = tables(res, HOLD, L)
+    v2 = v52_verdict(tsort(res))
+    L += ["", "=" * 24 + " ADDENDUM 2026-10-04: v5.2 VERDICT (pre-registered bars, model cost) " + "=" * 24] + v2["lines"] + ["=" * 117]
+    g52, p52 = v52_tables(res, HOLD, L)
     with open(TRADES, "xb") as f: pickle.dump(res, f)
     with open(REPORT, "x") as f: f.write("\n".join(L) + "\n")
     print("\n".join(L)); print(f"\n-> {REPORT}  sha256 {sha256(REPORT)}\n-> {TRADES}")
