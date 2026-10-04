@@ -336,3 +336,17 @@ symbols. Still, "M1 = bid" in `ask_side_study`'s docstring is not exact.
   2025-26: base -0.1254, DD 54.0 | A+B +0.0099, DD 47.0.
 - NOTE for the coach: the BASE is negative on all six pooled symbols (TrendCont from today's fixed detector); every one of the nine
   is in the live 47-symbol demo universe.
+
+## PRE-REGISTRATION - commodity-bloc time stop (trader hypothesis 2026-10-03), written BEFORE the holdout data exists
+Hypothesis (trader): commodity-bloc trades that win, win fast; slow ones drift to entry or the stop; cut them early and lock profit.
+In-sample (AUDUSD, NZDUSD, USDCAD; data/study/cbloc_timestop_report.txt): 2012-24 live -0.056R/trade, DD 122 ->
+T +0.007 (+0.063, t 2.7, DD 35) and T+L1.0 +0.022 (+0.078, t 2.6, DD 15); control (other 13): T hurts (-0.022), longs -0.058.
+Frozen rules (pipeline/cbloc_timestop_study.py run_h, live setup otherwise):
+  T      if the bid high has not reached +1.5R (first entry's R) by the close of bar 6 after the signal, close everything at that close
+         (the staged 75% add is not placed).
+  T+L1.0 T, and at the first +1.5R every stop (longs and shorts) moves to +1.0R.
+Holdout: AUDNZD, AUDCAD, NZDCAD (the rest of the commodity bloc; never downloaded or seen), 2012-01 .. signals before 2026-07-01, all four
+detectors from MT5 AA runs (same settings as the other new symbols), SCALED engine, live setup as the base.
+Bars (pooled over the three, all years): PRIMARY T+L1.0 increment vs live > 0 with paired t >= 1.5 AND worst DD not above live's.
+SECONDARY T alone increment > 0. Reported: per symbol, long / short, 2012-24 and 2025-26. ONE look; no rule changes after it.
+On the website these three sit in the research-lock group (hidden while locked), and only after the look.
