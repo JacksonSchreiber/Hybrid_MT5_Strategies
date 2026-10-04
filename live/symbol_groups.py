@@ -29,3 +29,13 @@ GROUPS = [
 
 def as_json() -> list[dict]:
     return [{"k": k, "name": n, "col": c, "syms": s, "how": h} for k, n, c, s, h in GROUPS]
+
+
+# trader 2026-10-03: the research lock (Data visualizers). When the lock is on the page hides every trade of a LOCKED symbol, and every
+# 2025-26 trade of any symbol not in EXPOSED. AUDUSD/NZDUSD/USDCAD are exposed (the trader has studied them, incl. 2025-26). The three
+# commodity-bloc holdouts (AUDNZD, AUDCAD, NZDCAD) are locked and join the page only after their pre-registered one look.
+RESEARCH_LOCK = {
+    "locked": ["USDCHF", "EURJPY", "GBPJPY", "EURGBP", "USDMXN", "XAGUSD", "US30", "AUDNZD", "AUDCAD", "NZDCAD"],
+    "period_from": 2025,
+    "exposed": ["AUDUSD", "NZDUSD", "USDCAD"],
+}

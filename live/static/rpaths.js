@@ -84,6 +84,9 @@
     return fetchCombo(comboIdx(d)).then(c => { X = c; render(); }).catch(e => { root.insertAdjacentHTML("afterbegin", `<div class="card bad">Could not load the combo: ${e.message}</div>`); });
   }
   const isHist = t => t.__i != null;
+  // research lock (live/symbol_groups.py RESEARCH_LOCK): locked symbols entirely + recent years of every non-exposed symbol
+  const RL = () => DATA.research_lock || { locked: [], period_from: 2025, exposed: [] };
+  const lockHides = t => state.lock && (RL().locked.includes(t.s) || (t.y >= RL().period_from && !RL().exposed.includes(t.s)));
   const exitXb = t => isHist(t) ? X.xb[t.__i] : t.xb;
   const outOf = t => isHist(t) ? KIND_OUT[X.kind[t.__i]] : t.o;
   // the path of t under the selected combo: time "rt" (one point per H4 bar close, last = the exit) or "pg" (41 points entry -> exit)
@@ -134,6 +137,19 @@
   const STG = { share: [0.25, 0.5], bar: [6, 3] }, BNK = { share: ["det", 0.25, 0.5, 0.75], lvl: [0.75, 1.0, 1.25] }, PYRD = { size: [0.25, 0.5], lvl: [1.25, 1.5, 2.0] };
   const dec = d => ({ st: d.stage ? { s: Math.floor((d.stage - 1) / 2), b: (d.stage - 1) % 2 } : null, bk: d.bank ? { s: Math.floor((d.bank - 1) / 3), l: (d.bank - 1) % 3 } : null,
                       py: d.pyr ? { s: Math.floor((d.pyr - 1) / 3), l: (d.pyr - 1) % 3 } : null });
+  function lockWindow() {    // the small "what is locked" window
+    const L = RL(), have = new Set(DATA.trades.map(t => t.s)), y = L.period_from;
+    const chip = s => `<span class="rp-lchip${have.has(s) ? "" : " na"}" title="${have.has(s) ? "" : "no data on the page yet"}">${s}</span>`;
+    const open = [...have].filter(s => !L.locked.includes(s)).sort((a, b) => (L.exposed.includes(b) - L.exposed.includes(a)) || a.localeCompare(b));
+    const d = el("details", "rp-lockwin" + (state.lock ? " on" : ""));
+    d.open = state.lock;
+    d.innerHTML = `<summary>${state.lock ? "🔒 Research lock ON - the holdout is hidden on every chart" : "Research lock is off - everything is shown"} <span class="k">(what is locked?)</span></summary>` +
+      `<div class="rp-lockgrid"><div><div class="rp-lbl">Locked symbols (hidden entirely)</div>${L.locked.map(chip).join(" ")}</div>` +
+      `<div><div class="rp-lbl">Open symbols (shown)</div>${open.map(s => chip(s) + (L.exposed.includes(s) ? "<sup>all years</sup>" : "")).join(" ")}</div></div>` +
+      `<div class="k">Also hidden while locked: ${y}–26 on every open symbol except ${L.exposed.join(", ")} (studied already, all years). Greyed = not on the page yet ` +
+      `(the commodity-bloc holdouts join after their pre-registered test).</div>`;
+    return d;
+  }
   function dialCard() {
     const card = el("div", "card rp-dials"), d = state.dial, D = dec(d), pre = presetOf(d);
     card.appendChild(el("div", "row", `<b>Management after the signal</b><span class="k">every chart below follows these dials · ${DATA.n_combos.toLocaleString()} combinations precomputed</span>` +
@@ -145,10 +161,10 @@
     const top = el("div", "rp-seg"); top.style.margin = "6px 0";
     Object.keys(PRESET).forEach(k => { const b = el("button", pre === k ? "on" : "", PNAME[k] + (k === "raw" ? " (nothing added)" : k === "all" ? " (everything)" : "")); b.type = "button"; b.onclick = () => useDial(PRESET[k]()); top.appendChild(b); });
     const lk = el("button", "rp-tog" + (state.lock ? " on" : ""), (state.lock ? "🔒 " : "") + "Research lock"); lk.type = "button";
-    lk.title = "Hide 2025-26 and the nine new symbols while you form an idea; unlock to test it on data you did not look at.";
+    lk.title = "Hide the holdout - the locked symbols and recent years - while you form an idea; unlock to test it on data you did not look at.";
     lk.onclick = () => { state.lock = !state.lock; store.set("rp.lock", state.lock ? "1" : "0"); state.brush = null; render(); };
     top.appendChild(lk); card.appendChild(top);
-    if (state.lock) card.appendChild(el("div", "k", "🔒 Locked: 2025–26 and the nine new symbols are hidden on every chart (the holdout). Unlock to check an idea on them."));
+    card.appendChild(lockWindow());
     const g = el("div", "rp-grid");
     g.appendChild(row("Staged entry", [["Off", !D.st, () => set({ stage: 0, gate: 0 })]].concat(STG.share.map((v, i) => [`${v * 100}% first`, D.st && D.st.s === i, () => set({ stage: 1 + i * 2 + (D.st ? D.st.b : 0) })])),
       DIALS[0][2]));
@@ -223,7 +239,7 @@
   function select(outcome) {
     return DATA.trades.filter(t =>
       (state.source === "all" || t.src === state.source) &&
-      !t.nodata && !state.hide.has(t.s) && !(state.lock && (t.y >= 2025 || t.g === 1)) &&
+      !t.nodata && !state.hide.has(t.s) && !lockHides(t) &&
       (outcome === "all" || outOf(t) === outcome) &&
       (state.dir === "all" || (state.dir === "long") === (t.l === 1)) &&
       (state.det === "all" || t.d === state.det) &&
@@ -641,7 +657,7 @@
   }
   const maxDD = v => { let c = 0, pk = 0, dd = 0; for (const x of v) { c += x; pk = Math.max(pk, c); dd = Math.max(dd, pk - c); } return dd; };
   function symRows() {   // historical trades passing every filter except Show / Compare (stats need every outcome)
-    return DATA.trades.filter(t => isHist(t) && !t.nodata && !state.hide.has(t.s) && !(state.lock && (t.y >= 2025 || t.g === 1)) &&
+    return DATA.trades.filter(t => isHist(t) && !t.nodata && !state.hide.has(t.s) && !lockHides(t) &&
       (state.dir === "all" || (state.dir === "long") === (t.l === 1)) && (state.det === "all" || t.d === state.det) &&
       (state.start === "all" || (state.start === "fast" ? t.f6 >= 1.5 : t.f6 < 1.0)) &&
       (state.period === "all" || (state.period === "dev" ? t.y < 2025 : t.y >= 2025))).sort((a, b) => a.dt < b.dt ? -1 : a.dt > b.dt ? 1 : 0);
