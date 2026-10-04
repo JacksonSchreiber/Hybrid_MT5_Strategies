@@ -84,6 +84,7 @@ mkdir -p "$SETDIR"
   [[ -n "${INVERSE:-}" ]]       && echo "InpInverse=true"   # coach item 21: publish + auto-arm the Inverse (tester study)
   [[ -n "${SHORT_RAISE:-}" ]]   && echo "InpShortRaiseR=${SHORT_RAISE}"   # coach item 25: SELL stop to +R at +1.5R (tester study)
   [[ -n "${ADD_GATE:-}" ]]      && echo "InpAddGate=true"                 # coach queue A: hold the bar-6 add until +1R when the trial average < 0
+  [[ -n "${BLOC_TL:-}" ]]       && echo "InpBlocTL=true"                  # commodity bloc T+L1.0 (trader 2026-10-04): bar-6 cut unless +1.5R, stops +1R at +1.5R
   [[ -n "${SHORT_CUT:-}" ]]     && echo "InpShortCutAvg=${SHORT_CUT}"     # coach queue B: SELL closed at the bar-12 close if its average <= this
   [[ -n "${IMPR_ADD:-}" ]]      && echo "InpImprovingAdd=${IMPR_ADD}"     # coach queue I: BUY day-2 avg > day-1 avg adds this share
   [[ -n "${STOP_FLOOR_ATR:-}" ]] && echo "InpStopFloorATR=${STOP_FLOOR_ATR}"     # §10.2 floor (window 15; default off)
