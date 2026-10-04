@@ -1,0 +1,209 @@
+cbloc_holdout_look.py - THE ONE LOOK at the commodity-bloc time stop on the HOLDOUT symbols AUDNZD, AUDCAD, NZDCAD.
+THE LOOK  RUN 2026-10-04 02:45:27: 1733 trades replayed of 1733 population rows (2s); engine cbloc_timestop_study.run_h (sha fdbd24580053c1b9), SCALED; ask_side_study sha 430ed8f1859de702; this script sha f258bb98c46b2c50
+Pre-registration: docs/coach_queue.md 'PRE-REGISTRATION - commodity-bloc time stop'. Bars on the POOLED ALL-YEARS block.
+INPUTS:
+  frozen inputs sha256[:16]: spread_profile.csv 246d26fbac34217d, universe_cost_filter.csv acfeb48f9004b137, holdout_inputs.json 76b9fd1085d45ddf
+  AUDCAD.dk  journal AA_AUDCAD.dk_20120125_20260629.csv sha 662b1781696a9283 | H4 sha ecdd92eb0a32b937 | M1 AUDCAD-M1-No Session.csv 20120101 22:00:00..20261002 20:59:00 | ref 0.99866 | tick 1e-05 | class FX | group commodity bloc
+  AUDNZD.dk  journal AA_AUDNZD.dk_20120125_20260629.csv sha 26edd9b3fd057352 | H4 sha 7fc39da456cbe980 | M1 AUDNZD-M1-No Session.csv 20120101 22:00:00..20261002 20:59:00 | ref 1.24509 | tick 1e-05 | class FX | group commodity bloc
+  NZDCAD.dk  journal AA_NZDCAD.dk_20120125_20260629.csv sha 4f54528e72bd1b61 | H4 sha 7a44bf9edd7c6fe2 | M1 NZDCAD-M1-No Session.csv 20120101 22:00:00..20261002 20:59:00 | ref 0.80206 | tick 1e-05 | class FX | group commodity bloc
+  AUDCAD.dk: m1 cache up to date (0s) | cache vs CSV-parsed Sym: IDENTICAL
+  AUDNZD.dk: m1 cache up to date (0s) | cache vs CSV-parsed Sym: IDENTICAL
+  NZDCAD.dk: m1 cache up to date (0s) | cache vs CSV-parsed Sym: IDENTICAL
+trades replayed by symbol x detector (SweepMSS/DeepFib/EMArevQ/TrendCont): AUDCAD 159/26/12/391; AUDNZD 123/32/19/422; NZDCAD 117/15/26/391; rows without M1 coverage: 0
+
+============================== VERDICT (pre-registered bars) ==============================
+PRIMARY   T+L1.0 vs live, pooled all years, n=1733: increment +0.0575R/trade > 0 [yes]  AND  paired t +2.12 >= 1.5 [yes]  AND  worst DD 52.6 <= live 155.5 [yes]  ->  PASS
+SECONDARY T vs live, pooled all years, n=1733: increment +0.0537R/trade > 0  ->  PASS
+===========================================================================================
+
+===== POOLED (AUDCAD, AUDNZD, NZDCAD) =====
+all years all    n=1733  live -0.0819R/trade  total -142.0  DD 155.5
+   T        -0.0282R/trade (vs live +0.0537, t +2.46)  total   -48.9  DD   62.8  | time-stopped 643 (37%)
+   T+L1.0   -0.0244R/trade (vs live +0.0575, t +2.12)  total   -42.3  DD   52.6  | time-stopped 643 (37%)
+all years long   n=847  live -0.0662R/trade  total -56.1  DD 74.8
+   T        -0.0020R/trade (vs live +0.0642, t +1.95)  total    -1.7  DD   36.5  | time-stopped 325 (38%)
+   T+L1.0   -0.0265R/trade (vs live +0.0397, t +0.98)  total   -22.4  DD   22.4  | time-stopped 325 (38%)
+all years short  n=886  live -0.0969R/trade  total -85.9  DD 97.2
+   T        -0.0533R/trade (vs live +0.0436, t +1.51)  total   -47.2  DD   51.8  | time-stopped 318 (36%)
+   T+L1.0   -0.0224R/trade (vs live +0.0745, t +2.05)  total   -19.8  DD   34.6  | time-stopped 318 (36%)
+
+2012-24 all    n=1561  live -0.0629R/trade  total -98.2  DD 111.1
+   T        -0.0131R/trade (vs live +0.0498, t +2.16)  total   -20.4  DD   34.4  | time-stopped 590 (38%)
+   T+L1.0   -0.0224R/trade (vs live +0.0405, t +1.40)  total   -34.9  DD   45.3  | time-stopped 590 (38%)
+2012-24 long   n=755  live -0.0452R/trade  total -34.1  DD 55.8
+   T        +0.0168R/trade (vs live +0.0620, t +1.80)  total   +12.7  DD   23.4  | time-stopped 295 (39%)
+   T+L1.0   -0.0220R/trade (vs live +0.0232, t +0.54)  total   -16.6  DD   16.6  | time-stopped 295 (39%)
+2012-24 short  n=806  live -0.0795R/trade  total -64.1  DD 73.1
+   T        -0.0411R/trade (vs live +0.0384, t +1.25)  total   -33.1  DD   39.6  | time-stopped 295 (37%)
+   T+L1.0   -0.0228R/trade (vs live +0.0567, t +1.45)  total   -18.3  DD   31.5  | time-stopped 295 (37%)
+
+2025-26 all    n=172  live -0.2544R/trade  total -43.8  DD 45.8
+   T        -0.1658R/trade (vs live +0.0886, t +1.31)  total   -28.5  DD   28.5  | time-stopped 53 (31%)
+   T+L1.0   -0.0427R/trade (vs live +0.2118, t +2.77)  total    -7.3  DD    7.3  | time-stopped 53 (31%)
+2025-26 long   n=92  live -0.2387R/trade  total -22.0  DD 22.0
+   T        -0.1563R/trade (vs live +0.0825, t +0.77)  total   -14.4  DD   14.4  | time-stopped 30 (33%)
+   T+L1.0   -0.0636R/trade (vs live +0.1752, t +1.42)  total    -5.8  DD    5.8  | time-stopped 30 (33%)
+2025-26 short  n=80  live -0.2725R/trade  total -21.8  DD 24.2
+   T        -0.1769R/trade (vs live +0.0957, t +1.25)  total   -14.1  DD   14.3  | time-stopped 23 (29%)
+   T+L1.0   -0.0187R/trade (vs live +0.2539, t +3.06)  total    -1.5  DD    3.4  | time-stopped 23 (29%)
+
+
+===== AUDCAD.dk =====
+all years all    n=588  live -0.0681R/trade  total -40.0  DD 59.8
+   T        -0.0034R/trade (vs live +0.0646, t +1.91)  total    -2.0  DD   26.7  | time-stopped 207 (35%)
+   T+L1.0   -0.0160R/trade (vs live +0.0520, t +1.13)  total    -9.4  DD   22.1  | time-stopped 207 (35%)
+all years long   n=267  live -0.0926R/trade  total -24.7  DD 35.9
+   T        -0.0084R/trade (vs live +0.0841, t +1.41)  total    -2.3  DD   15.0  | time-stopped 112 (42%)
+   T+L1.0   -0.0199R/trade (vs live +0.0727, t +0.99)  total    -5.3  DD    8.0  | time-stopped 112 (42%)
+all years short  n=321  live -0.0477R/trade  total -15.3  DD 27.3
+   T        +0.0007R/trade (vs live +0.0484, t +1.31)  total    +0.2  DD   17.3  | time-stopped 95 (30%)
+   T+L1.0   -0.0128R/trade (vs live +0.0349, t +0.60)  total    -4.1  DD   20.4  | time-stopped 95 (30%)
+
+2012-24 all    n=526  live -0.0426R/trade  total -22.4  DD 40.0
+   T        +0.0169R/trade (vs live +0.0595, t +1.68)  total    +8.9  DD   18.3  | time-stopped 188 (36%)
+   T+L1.0   -0.0152R/trade (vs live +0.0274, t +0.56)  total    -8.0  DD   19.7  | time-stopped 188 (36%)
+2012-24 long   n=237  live -0.0750R/trade  total -17.8  DD 26.3
+   T        +0.0135R/trade (vs live +0.0885, t +1.44)  total    +3.2  DD    9.6  | time-stopped 101 (43%)
+   T+L1.0   -0.0180R/trade (vs live +0.0570, t +0.73)  total    -4.3  DD    8.0  | time-stopped 101 (43%)
+2012-24 short  n=289  live -0.0161R/trade  total -4.7  DD 26.1
+   T        +0.0196R/trade (vs live +0.0357, t +0.89)  total    +5.7  DD   17.3  | time-stopped 87 (30%)
+   T+L1.0   -0.0130R/trade (vs live +0.0031, t +0.05)  total    -3.7  DD   18.9  | time-stopped 87 (30%)
+
+2025-26 all    n=62  live -0.2838R/trade  total -17.6  DD 19.7
+   T        -0.1758R/trade (vs live +0.1080, t +0.98)  total   -10.9  DD   10.9  | time-stopped 19 (31%)
+   T+L1.0   -0.0227R/trade (vs live +0.2611, t +2.18)  total    -1.4  DD    3.3  | time-stopped 19 (31%)
+2025-26 long   n=30  live -0.2314R/trade  total -6.9  DD 9.6
+   T        -0.1821R/trade (vs live +0.0493, t +0.23)  total    -5.5  DD    5.5  | time-stopped 11 (37%)
+   T+L1.0   -0.0346R/trade (vs live +0.1968, t +0.85)  total    -1.0  DD    2.6  | time-stopped 11 (37%)
+2025-26 short  n=32  live -0.3329R/trade  total -10.7  DD 10.7
+   T        -0.1699R/trade (vs live +0.1631, t +2.55)  total    -5.4  DD    5.4  | time-stopped 8 (25%)
+   T+L1.0   -0.0115R/trade (vs live +0.3214, t +4.05)  total    -0.4  DD    2.5  | time-stopped 8 (25%)
+
+
+===== AUDNZD.dk =====
+all years all    n=596  live -0.0852R/trade  total -50.8  DD 54.7
+   T        -0.0352R/trade (vs live +0.0500, t +1.34)  total   -21.0  DD   24.8  | time-stopped 219 (37%)
+   T+L1.0   -0.0350R/trade (vs live +0.0502, t +1.10)  total   -20.9  DD   24.2  | time-stopped 219 (37%)
+all years long   n=293  live -0.0355R/trade  total -10.4  DD 24.1
+   T        +0.0042R/trade (vs live +0.0397, t +0.69)  total    +1.2  DD   15.6  | time-stopped 103 (35%)
+   T+L1.0   -0.0403R/trade (vs live -0.0047, t -0.07)  total   -11.8  DD   16.8  | time-stopped 103 (35%)
+all years short  n=303  live -0.1333R/trade  total -40.4  DD 43.7
+   T        -0.0733R/trade (vs live +0.0600, t +1.25)  total   -22.2  DD   26.7  | time-stopped 116 (38%)
+   T+L1.0   -0.0300R/trade (vs live +0.1033, t +1.79)  total    -9.1  DD   12.0  | time-stopped 116 (38%)
+
+2012-24 all    n=540  live -0.0873R/trade  total -47.1  DD 54.7
+   T        -0.0329R/trade (vs live +0.0544, t +1.43)  total   -17.8  DD   24.8  | time-stopped 200 (37%)
+   T+L1.0   -0.0368R/trade (vs live +0.0505, t +1.07)  total   -19.9  DD   21.5  | time-stopped 200 (37%)
+2012-24 long   n=251  live -0.0203R/trade  total -5.1  DD 24.1
+   T        +0.0221R/trade (vs live +0.0424, t +0.70)  total    +5.5  DD   14.8  | time-stopped 90 (36%)
+   T+L1.0   -0.0345R/trade (vs live -0.0141, t -0.19)  total    -8.6  DD   13.0  | time-stopped 90 (36%)
+2012-24 short  n=289  live -0.1455R/trade  total -42.0  DD 43.7
+   T        -0.0807R/trade (vs live +0.0647, t +1.36)  total   -23.3  DD   26.7  | time-stopped 110 (38%)
+   T+L1.0   -0.0389R/trade (vs live +0.1066, t +1.83)  total   -11.2  DD   12.0  | time-stopped 110 (38%)
+
+2025-26 all    n=56  live -0.0655R/trade  total -3.7  DD 8.2
+   T        -0.0572R/trade (vs live +0.0082, t +0.05)  total    -3.2  DD    5.6  | time-stopped 19 (34%)
+   T+L1.0   -0.0179R/trade (vs live +0.0475, t +0.27)  total    -1.0  DD    2.7  | time-stopped 19 (34%)
+2025-26 long   n=42  live -0.1264R/trade  total -5.3  DD 6.8
+   T        -0.1029R/trade (vs live +0.0235, t +0.14)  total    -4.3  DD    4.6  | time-stopped 13 (31%)
+   T+L1.0   -0.0750R/trade (vs live +0.0514, t +0.25)  total    -3.2  DD    3.7  | time-stopped 13 (31%)
+2025-26 short  n=14  live +0.1174R/trade  total +1.6  DD 3.4
+   T        +0.0797R/trade (vs live -0.0377, t -0.11)  total    +1.1  DD    1.5  | time-stopped 6 (43%)
+   T+L1.0   +0.1534R/trade (vs live +0.0360, t +0.10)  total    +2.1  DD    0.4  | time-stopped 6 (43%)
+
+
+===== NZDCAD.dk =====
+all years all    n=549  live -0.0931R/trade  total -51.1  DD 62.4
+   T        -0.0472R/trade (vs live +0.0459, t +1.08)  total   -25.9  DD   28.4  | time-stopped 217 (40%)
+   T+L1.0   -0.0218R/trade (vs live +0.0714, t +1.44)  total   -11.9  DD   12.9  | time-stopped 217 (40%)
+all years long   n=287  live -0.0731R/trade  total -21.0  DD 27.6
+   T        -0.0023R/trade (vs live +0.0707, t +1.31)  total    -0.7  DD   11.1  | time-stopped 110 (38%)
+   T+L1.0   -0.0185R/trade (vs live +0.0545, t +0.83)  total    -5.3  DD    7.8  | time-stopped 110 (38%)
+all years short  n=262  live -0.1151R/trade  total -30.2  DD 38.7
+   T        -0.0964R/trade (vs live +0.0187, t +0.28)  total   -25.3  DD   25.4  | time-stopped 107 (41%)
+   T+L1.0   -0.0253R/trade (vs live +0.0898, t +1.20)  total    -6.6  DD    8.8  | time-stopped 107 (41%)
+
+2012-24 all    n=495  live -0.0578R/trade  total -28.6  DD 37.6
+   T        -0.0232R/trade (vs live +0.0346, t +0.75)  total   -11.5  DD   13.9  | time-stopped 202 (41%)
+   T+L1.0   -0.0142R/trade (vs live +0.0437, t +0.81)  total    -7.0  DD   10.6  | time-stopped 202 (41%)
+2012-24 long   n=267  live -0.0421R/trade  total -11.3  DD 17.9
+   T        +0.0147R/trade (vs live +0.0569, t +0.99)  total    +3.9  DD    8.1  | time-stopped 104 (39%)
+   T+L1.0   -0.0137R/trade (vs live +0.0284, t +0.41)  total    -3.7  DD    7.0  | time-stopped 104 (39%)
+2012-24 short  n=228  live -0.0762R/trade  total -17.4  DD 23.5
+   T        -0.0677R/trade (vs live +0.0085, t +0.11)  total   -15.4  DD   15.5  | time-stopped 98 (43%)
+   T+L1.0   -0.0147R/trade (vs live +0.0615, t +0.73)  total    -3.4  DD    7.2  | time-stopped 98 (43%)
+
+2025-26 all    n=54  live -0.4167R/trade  total -22.5  DD 24.9
+   T        -0.2670R/trade (vs live +0.1497, t +2.12)  total   -14.4  DD   14.5  | time-stopped 15 (28%)
+   T+L1.0   -0.0913R/trade (vs live +0.3254, t +3.91)  total    -4.9  DD    5.0  | time-stopped 15 (28%)
+2025-26 long   n=20  live -0.4856R/trade  total -9.7  DD 9.8
+   T        -0.2296R/trade (vs live +0.2560, t +2.68)  total    -4.6  DD    4.9  | time-stopped 6 (30%)
+   T+L1.0   -0.0830R/trade (vs live +0.4027, t +3.23)  total    -1.7  DD    1.9  | time-stopped 6 (30%)
+2025-26 short  n=34  live -0.3762R/trade  total -12.8  DD 15.2
+   T        -0.2891R/trade (vs live +0.0871, t +0.92)  total    -9.8  DD    9.9  | time-stopped 9 (26%)
+   T+L1.0   -0.0962R/trade (vs live +0.2800, t +2.56)  total    -3.3  DD    3.4  | time-stopped 9 (26%)
+
+additivity check (pooled all-years n and totals = 2012-24 + 2025-26 = sum of symbols, every variant, all/long/short): OK
+
+======================== ADDENDUM 2026-10-04: v5.2 VERDICT (pre-registered bars, model cost) ========================
+PRIMARY   v5.2, pooled all years, n=1733: mean -0.0777R/trade > 0 [NO]  AND  one-sample t -4.56 >= 1.5 [NO]  ->  FAIL
+SECONDARY v5.2 vs live, pooled all years: increment +0.0043R/trade > 0 [yes]  AND  worst DD 139.8 <= live 155.5 [yes]  ->  PASS
+=====================================================================================================================
+
+----- v5.2 | POOLED (AUDCAD, AUDNZD, NZDCAD) -----
+all years all    n=1733  v5.2 -0.0777R/trade (t vs 0 -4.56)  total  -134.6  DD  139.8  | live -0.0819 total  -142.0 DD  155.5 | v5.2 vs live +0.0043 (t +0.14)
+all years long   n=847  v5.2 -0.0806R/trade (t vs 0 -2.93)  total   -68.3  DD   68.7  | live -0.0662 total   -56.1 DD   74.8 | v5.2 vs live -0.0144 (t -0.31)
+all years short  n=886  v5.2 -0.0748R/trade (t vs 0 -3.66)  total   -66.3  DD   74.8  | live -0.0969 total   -85.9 DD   97.2 | v5.2 vs live +0.0221 (t +0.53)
+2012-24 all    n=1561  v5.2 -0.0825R/trade (t vs 0 -4.79)  total  -128.7  DD  128.8  | live -0.0629 total   -98.2 DD  111.1 | v5.2 vs live -0.0196 (t -0.60)
+2012-24 long   n=755  v5.2 -0.0747R/trade (t vs 0 -2.59)  total   -56.4  DD   57.0  | live -0.0452 total   -34.1 DD   55.8 | v5.2 vs live -0.0296 (t -0.61)
+2012-24 short  n=806  v5.2 -0.0897R/trade (t vs 0 -4.59)  total   -72.3  DD   72.3  | live -0.0795 total   -64.1 DD   73.1 | v5.2 vs live -0.0102 (t -0.23)
+2025-26 all    n=172  v5.2 -0.0340R/trade (t vs 0 -0.48)  total    -5.8  DD   12.0  | live -0.2544 total   -43.8 DD   45.8 | v5.2 vs live +0.2205 (t +2.31)
+2025-26 long   n=92  v5.2 -0.1290R/trade (t vs 0 -1.41)  total   -11.9  DD   11.9  | live -0.2387 total   -22.0 DD   22.0 | v5.2 vs live +0.1097 (t +0.77)
+2025-26 short  n=80  v5.2 +0.0753R/trade (t vs 0 +0.68)  total    +6.0  DD    3.5  | live -0.2725 total   -21.8 DD   24.2 | v5.2 vs live +0.3478 (t +2.83)
+
+----- v5.2 | AUDCAD.dk -----
+all years all    n=588  v5.2 -0.0851R/trade (t vs 0 -2.93)  total   -50.1  DD   50.9  | live -0.0681 total   -40.0 DD   59.8 | v5.2 vs live -0.0171 (t -0.33)
+all years long   n=267  v5.2 -0.0888R/trade (t vs 0 -1.74)  total   -23.7  DD   24.6  | live -0.0926 total   -24.7 DD   35.9 | v5.2 vs live +0.0037 (t +0.05)
+all years short  n=321  v5.2 -0.0820R/trade (t vs 0 -2.55)  total   -26.3  DD   32.4  | live -0.0477 total   -15.3 DD   27.3 | v5.2 vs live -0.0343 (t -0.51)
+2012-24 all    n=526  v5.2 -0.0776R/trade (t vs 0 -2.50)  total   -40.8  DD   42.4  | live -0.0426 total   -22.4 DD   40.0 | v5.2 vs live -0.0350 (t -0.63)
+2012-24 long   n=237  v5.2 -0.0620R/trade (t vs 0 -1.11)  total   -14.7  DD   22.7  | live -0.0750 total   -17.8 DD   26.3 | v5.2 vs live +0.0130 (t +0.15)
+2012-24 short  n=289  v5.2 -0.0905R/trade (t vs 0 -2.72)  total   -26.1  DD   29.8  | live -0.0161 total    -4.7 DD   26.1 | v5.2 vs live -0.0744 (t -1.03)
+2025-26 all    n=62  v5.2 -0.1487R/trade (t vs 0 -1.87)  total    -9.2  DD    9.2  | live -0.2838 total   -17.6 DD   19.7 | v5.2 vs live +0.1352 (t +0.89)
+2025-26 long   n=30  v5.2 -0.3009R/trade (t vs 0 -3.00)  total    -9.0  DD    9.0  | live -0.2314 total    -6.9 DD    9.6 | v5.2 vs live -0.0696 (t -0.26)
+2025-26 short  n=32  v5.2 -0.0059R/trade (t vs 0 -0.05)  total    -0.2  DD    2.6  | live -0.3329 total   -10.7 DD   10.7 | v5.2 vs live +0.3271 (t +2.14)
+
+----- v5.2 | AUDNZD.dk -----
+all years all    n=596  v5.2 -0.0675R/trade (t vs 0 -2.14)  total   -40.2  DD   54.1  | live -0.0852 total   -50.8 DD   54.7 | v5.2 vs live +0.0177 (t +0.33)
+all years long   n=293  v5.2 -0.0589R/trade (t vs 0 -1.11)  total   -17.3  DD   25.2  | live -0.0355 total   -10.4 DD   24.1 | v5.2 vs live -0.0234 (t -0.28)
+all years short  n=303  v5.2 -0.0758R/trade (t vs 0 -2.16)  total   -23.0  DD   32.2  | live -0.1333 total   -40.4 DD   43.7 | v5.2 vs live +0.0575 (t +0.86)
+2012-24 all    n=540  v5.2 -0.0975R/trade (t vs 0 -3.34)  total   -52.6  DD   52.7  | live -0.0873 total   -47.1 DD   54.7 | v5.2 vs live -0.0102 (t -0.19)
+2012-24 long   n=251  v5.2 -0.0815R/trade (t vs 0 -1.49)  total   -20.4  DD   22.0  | live -0.0203 total    -5.1 DD   24.1 | v5.2 vs live -0.0611 (t -0.69)
+2012-24 short  n=289  v5.2 -0.1113R/trade (t vs 0 -4.16)  total   -32.2  DD   32.2  | live -0.1455 total   -42.0 DD   43.7 | v5.2 vs live +0.0341 (t +0.52)
+2025-26 all    n=56  v5.2 +0.2211R/trade (t vs 0 +1.23)  total   +12.4  DD    2.0  | live -0.0655 total    -3.7 DD    8.2 | v5.2 vs live +0.2866 (t +1.39)
+2025-26 long   n=42  v5.2 +0.0758R/trade (t vs 0 +0.44)  total    +3.2  DD    3.3  | live -0.1264 total    -5.3 DD    6.8 | v5.2 vs live +0.2022 (t +0.89)
+2025-26 short  n=14  v5.2 +0.6571R/trade (t vs 0 +1.32)  total    +9.2  DD    0.5  | live +0.1174 total    +1.6 DD    3.4 | v5.2 vs live +0.5398 (t +1.17)
+
+----- v5.2 | NZDCAD.dk -----
+all years all    n=549  v5.2 -0.0807R/trade (t vs 0 -2.94)  total   -44.3  DD   44.3  | live -0.0931 total   -51.1 DD   62.4 | v5.2 vs live +0.0125 (t +0.22)
+all years long   n=287  v5.2 -0.0952R/trade (t vs 0 -2.51)  total   -27.3  DD   28.5  | live -0.0731 total   -21.0 DD   27.6 | v5.2 vs live -0.0221 (t -0.30)
+all years short  n=262  v5.2 -0.0647R/trade (t vs 0 -1.63)  total   -17.0  DD   17.3  | live -0.1151 total   -30.2 DD   38.7 | v5.2 vs live +0.0504 (t +0.59)
+2012-24 all    n=495  v5.2 -0.0712R/trade (t vs 0 -2.46)  total   -35.3  DD   35.3  | live -0.0578 total   -28.6 DD   37.6 | v5.2 vs live -0.0134 (t -0.22)
+2012-24 long   n=267  v5.2 -0.0798R/trade (t vs 0 -2.02)  total   -21.3  DD   22.5  | live -0.0421 total   -11.3 DD   17.9 | v5.2 vs live -0.0376 (t -0.48)
+2012-24 short  n=228  v5.2 -0.0613R/trade (t vs 0 -1.43)  total   -14.0  DD   14.4  | live -0.0762 total   -17.4 DD   23.5 | v5.2 vs live +0.0149 (t +0.16)
+2025-26 all    n=54  v5.2 -0.1669R/trade (t vs 0 -2.01)  total    -9.0  DD   10.0  | live -0.4167 total   -22.5 DD   24.9 | v5.2 vs live +0.2498 (t +1.98)
+2025-26 long   n=20  v5.2 -0.3012R/trade (t vs 0 -2.24)  total    -6.0  DD    6.0  | live -0.4856 total    -9.7 DD    9.8 | v5.2 vs live +0.1844 (t +0.93)
+2025-26 short  n=34  v5.2 -0.0879R/trade (t vs 0 -0.84)  total    -3.0  DD    4.0  | live -0.3762 total   -12.8 DD   15.2 | v5.2 vs live +0.2883 (t +1.77)
+
+----- v5.2 | POOLED by detector, all years -----
+TrendCont   n=1204  v5.2 -0.0768R/trade (t vs 0 -3.98)  total   -92.5  DD   92.5  | live -0.0925 total  -111.4 DD  129.8 | v5.2 vs live +0.0157 (t +0.40)
+SweepMSS    n=399  v5.2 -0.0897R/trade (t vs 0 -3.08)  total   -35.8  DD   36.1  | live -0.0376 total   -15.0 DD   30.9 | v5.2 vs live -0.0521 (t -0.94)
+DeepFib     n=73  v5.2 +0.0398R/trade (t vs 0 +0.22)  total    +2.9  DD   10.7  | live -0.1622 total   -11.8 DD   20.6 | v5.2 vs live +0.2020 (t +1.48)
+EMArevQ     n=57  v5.2 -0.1613R/trade (t vs 0 -2.05)  total    -9.2  DD    9.8  | live -0.0655 total    -3.7 DD    8.6 | v5.2 vs live -0.0958 (t -0.69)
+v5.2 additivity check: OK
+
+----- SPREAD SENSITIVITY (information, not a bar): extra round-trip spread per unit traded on top of the model's M1-bar spread; stop distance median 34.0 pips, 10th pct 16.8 -----
+  +0.0 pip: v5.2 -0.0777R/trade (t -4.56)  total  -134.6  DD  139.8 | live -0.0819 DD  155.5 | AUDCAD -0.0851 AUDNZD -0.0675 NZDCAD -0.0807
+  +0.5 pip: v5.2 -0.0950R/trade (t -5.58)  total  -164.6  DD  168.0 | live -0.0928 DD  172.7 | AUDCAD -0.1022 AUDNZD -0.0863 NZDCAD -0.0966
+  +1.0 pip: v5.2 -0.1123R/trade (t -6.61)  total  -194.5  DD  196.2 | live -0.1037 DD  190.0 | AUDCAD -0.1194 AUDNZD -0.1050 NZDCAD -0.1125
+  +1.5 pip: v5.2 -0.1296R/trade (t -7.64)  total  -224.5  DD  224.5 | live -0.1146 DD  207.4 | AUDCAD -0.1365 AUDNZD -0.1237 NZDCAD -0.1285
+  +2.0 pip: v5.2 -0.1468R/trade (t -8.66)  total  -254.5  DD  254.5 | live -0.1256 DD  224.8 | AUDCAD -0.1536 AUDNZD -0.1425 NZDCAD -0.1444

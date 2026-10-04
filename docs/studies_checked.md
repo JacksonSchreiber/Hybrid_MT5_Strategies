@@ -83,3 +83,9 @@ nothing is re-run by accident and the coach can see what was tried.
   - Alone: +0.008R (t 2.1), drawdown 26.6R.
   - In the package, A+B+C gave +0.017 / DD 22.4R against A+B+I's +0.032 / 23.5R.
   - `day2_avg_add_study.py`, `combo3_study.py`
+- **Commodity-bloc draft v5.2** (trader 2026-10-04; 100% entry, 1h/3.5h average checks, stop to entry +0.5R longs / +0.3R shorts, 16h
+  cut at average < +1.5R, +1R lock at +1.5R, +100% at +2R, TP2).
+  - In-sample (AUDUSD/NZDUSD/USDCAD): +0.066R/trade, DD 12.5 at model cost; each extra pip of spread ~ -0.034R.
+  - Holdout one look (AUDCAD/AUDNZD/NZDCAD): -0.078R/trade (t -4.6), FAIL. `cbloc_v52.py`, `cbloc_holdout_look.py`,
+    docs/cbloc_holdout_report_2026-10-04.txt
+

@@ -362,3 +362,13 @@ Bars (pooled over the three, all years, model cost): PRIMARY v5.2 mean R > 0 wit
 > 0 AND worst DD not above live's. Reported: per symbol, long / short, 2012-24 and 2025-26, by detector.
 Cost: the model's spread (spread_profile.csv, M1 bar spreads) is a LOWER bound - real spreads on these crosses are wider and lower the R
 by about (spread pips / stop pips) x units traded. Extra-spread lines (+0.5/1/1.5/2 pips) are reported as information, not as a bar.
+
+### RESULT - the one look, 2026-10-04 02:45 (report docs/cbloc_holdout_report_2026-10-04.txt, sha256 b6c50e983811731a...)
+1,733 trades (AUDCAD 588, AUDNZD 596, NZDCAD 549), all replayed. Live setup on the three: -0.082R/trade, DD 155.5.
+- T+L1.0: PRIMARY **PASS** - increment +0.0575R/trade vs live (t 2.12), DD 52.6 vs 155.5. Still -0.024R/trade in absolute terms.
+- T: SECONDARY **PASS** - increment +0.0537 (t 2.46); -0.028R/trade absolute.
+- v5.2 (addendum): PRIMARY **FAIL** - -0.0777R/trade, one-sample t -4.56; negative on all three symbols, both sides, 2012-24 and
+  TrendCont/SweepMSS/EMArevQ (DeepFib +0.04, n 73). SECONDARY PASS only nominally (+0.004 vs live, t 0.14; DD 139.8 vs 155.5).
+  Every extra pip of spread makes it worse (-0.112 at +1 pip).
+Read: the simple pre-registered time stop generalised as an improvement over live; v5.2's in-sample +0.066 did not (tuned on the
+three in-sample pairs). On these crosses the signals themselves lose money - no tested management makes them positive.
