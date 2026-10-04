@@ -118,6 +118,11 @@ nothing is re-run by accident and the coach can see what was tried.
     - with a 75% bank at TP1: +0.008 / **+0.012 (DD 20)** / +0.007 / -0.005 / -0.004 / -0.011 / -0.013.
     - A lower threshold keeps more TP2s (76 -> 100) but lets many more trades run to -1R (127 -> 295). 0 to -0.05 is the flat top;
       the -0.05 + bank peak is probably noise after about 30 variants on the same data. `--avgthr X`
+  - **The same thresholds with the average check at 2h and 4h:** every setting is below the 1h check.
+    - 2h at 0 / -0.05R: -0.006 / -0.006R/trade (DD 35 / 31); 4h at 0R: -0.008 (DD 38).
+    - With the 75% bank, at best +0.003 (2h at -0.05R).
+    - A later check lets more trades reach -1R first (127 at 1h -> 149 at 2h -> 207 at 4h, at a 0R threshold) and saves only a
+      few TP2s.
   - Fixed 2026-10-04: checks inside the entry bar now start at the first M1 minute. Sunday-open bars have no data for 60-120 min, so
     about 2% of trades were skipping every step. The 4h/8h/12h runs were unaffected. `--avgcheck H`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
