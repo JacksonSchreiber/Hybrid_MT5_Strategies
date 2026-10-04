@@ -109,6 +109,10 @@ nothing is re-run by accident and the coach can see what was tried.
   - **+ stop to -0.5R at 1..7h on top of "8h entry + 1h average check":** -0.002 / -0.002 / +0.000 / -0.001 / -0.003 / -0.002 /
     +0.001R/trade, DD 31-38, against +0.004 / DD 31 without it. Fewer full -1R stops, but dips to -0.5R that would have recovered (fewer
     TP2s) cost the same. Shorts slightly better, longs worse (as in the bloc drafts). `--hours T,8,24 --levels -0.5,0,0.5 --avgcheck 1`
+  - **+ bank at TP1 on "8h entry + 1h average check"** (TP1 is about +2R for TrendCont/SweepMSS; it is reached on 161 trades):
+    - stop unchanged, 25 / 50 / 75%: +0.005 / +0.007 / +0.008R/trade, DD 26 / 22 / 22 (no bank: +0.004, DD 31);
+    - stop to entry at the bank: about the same.
+    - Small and monotonic: banking more at TP1 helps a hair and trims the drawdown. Still below the live bloc setup. `--bank F [--bank-be]`
   - Fixed 2026-10-04: checks inside the entry bar now start at the first M1 minute. Sunday-open bars have no data for 60-120 min, so
     about 2% of trades were skipping every step. The 4h/8h/12h runs were unaffected. `--avgcheck H`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
