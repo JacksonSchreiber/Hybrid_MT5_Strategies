@@ -16,12 +16,20 @@ DIALS (defaults = the live setup). Every dial is independent unless noted.
   cutB   off | threshold {0.25, 0.5, 0.75}: a SHORT is closed at the bar-12 close if its average R since entry is <= the threshold.
   addI   off | size {25%, 50%}: a LONG gets that share of full size at the bar-12 close if day 2 (bar 6 -> 12) averages better than
          day 1 (entry -> bar 6). Day boundaries are fixed at bars 6 / 12 whatever the staging bar.
-Per minute the order is: stop, bank, pyramid, raise, held-add release, TP2, staged add, B cut, I add (run_v's order). Raw signal = all
+  bloc   off | on (trader 2026-10-04, the commodity-bloc T+L1.0 rules, live in the EA on the six bloc symbols): the 24h CUT - at the
+         bar-6 close everything is closed unless the bid high reached +1.5R (before the staged add of that minute) - and the LOCK -
+         when the bid first reaches +1.5R (armed like the raise) every stop, longs AND shorts, goes to +1R; it replaces the shorts
+         raise, so bloc-on combos have no raise dimension. The cut bar is fixed at 6 whatever the staging (the EA cuts at its
+         staged-add bar, 6 live): with staging off the full position is cut there, with 25%/50%@3 the add has gone in at bar 3.
+         Reproduces cbloc_timestop_study.run_h "T+L1.0" exactly at the live dials (checked in --verify). The page's "bloc symbols
+         only" setting (= live) takes bloc-on for the bloc symbols and bloc-off for the rest, per trade.
+Per minute the order is: stop, (+1.5R reached flag), bank, pyramid, raise/lock, held-add release, TP2, bloc 24h cut, staged add,
+B cut, I add (run_v's order; run_h's for the bloc steps). Raw signal = all
 off: 100% at the signal, the signal's stop, out at TP2 or the stop (or the end of the replay window).
 
 OUTPUT (trade-major memmap, data/combos/<run>/results.u8 + meta.json):
   per trade x combo: R float32 (full position, costs in), exit H4 bars x10 uint16, exit kind uint8 (0 stop -1R, 1 stop at entry,
-  2 raised stop, 3 TP2, 4 cut B, 5 window end, 255 no data), event times (H4 bars x10, 65535 = none) for the staged add, bank,
+  2 raised stop (incl. the bloc lock), 3 TP2, 4 cut B, 5 window end, 6 bloc 24h cut, 255 no data), event times (H4 bars x10, 65535 = none) for the staged add, bank,
   pyramid and I add.
     python3 pipeline/combo_build.py --verify            the verification ladder (see verify())
     python3 pipeline/combo_build.py --bench SYM [N ...] full grid on one symbol with N workers, timing + RAM
@@ -51,21 +59,26 @@ RAISE = [("off", 0.0), ("0.25", 0.25), ("0.5", 0.5)]
 CUTB = [("off", None), ("0.25", 0.25), ("0.5", 0.5), ("0.75", 0.75)]
 ADDI = [("off", 0.0), ("0.25", 0.25), ("0.5", 0.5)]
 SR_TRIG = 1.5
+BLOC = [("off", 0), ("on", 1)]
+BLOC_TRIG, BLOC_LOCK, BLOC_BAR = 1.5, 1.0, 6       # = cbloc_timestop_study TRIG / "L1.0" / the bar-6 cut (EA BLOC_TRIG_R / BLOC_LOCK_R)
 
 
 def grid():
-    """-> list of combos, each (stage_i, gateA, bank_i, pyr_i, raise_i, cut_i, addi_i); gateA only with staging."""
+    """-> list of combos, each (stage_i, gateA, bank_i, pyr_i, raise_i, cut_i, addi_i, bloc); gateA only with staging.
+    Bloc off first, in the original order (indices unchanged from the pre-bloc builds), then bloc on with raise_i = 0 (the lock
+    replaces the raise)."""
     out = []
-    for si, st in enumerate(STAGE):
-        for ga in ((0,) if st[1] >= 1.0 else (0, 1)):
-            for bi, pi, ri, ci, ii in itertools.product(range(len(BANK)), range(len(PYR)), range(len(RAISE)), range(len(CUTB)), range(len(ADDI))):
-                out.append((si, ga, bi, pi, ri, ci, ii))
+    for bl in (0, 1):
+        for si, st in enumerate(STAGE):
+            for ga in ((0,) if st[1] >= 1.0 else (0, 1)):
+                for bi, pi, ri, ci, ii in itertools.product(range(len(BANK)), range(len(PYR)), range(len(RAISE)) if not bl else (0,), range(len(CUTB)), range(len(ADDI))):
+                    out.append((si, ga, bi, pi, ri, ci, ii, bl))
     return out
 
 
-def find(combos, stage, ga, bank, pyr, rai, cut, addi):
+def find(combos, stage, ga, bank, pyr, rai, cut, addi, bloc="off"):
     nm = lambda L, v: [x[0] for x in L].index(v)
-    return combos.index((nm(STAGE, stage), ga, nm(BANK, bank), nm(PYR, pyr), nm(RAISE, rai), nm(CUTB, cut), nm(ADDI, addi)))
+    return combos.index((nm(STAGE, stage), ga, nm(BANK, bank), nm(PYR, pyr), nm(RAISE, rai) if bloc == "off" else 0, nm(CUTB, cut), nm(ADDI, addi), nm(BLOC, bloc)))
 
 
 # ------------------------------------------------------------------------------------------------------------- kernel
@@ -78,13 +91,14 @@ def _val(locked, ls, le, nl, r):
 
 @njit(cache=True)
 def run_one(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, up, has_tp2, tp2_R,
-            F0, k_add, gate, gate_lvl, bank_on, bank_R, bankf, pyr_f, pyr_lvl, sr_lvl, sr_trig, kc, ka2, add_f):
-    """one trade, one combo -> (R, units, exit_j, kind, add_j, bank_j, pyr_j, imp_j). Mirrors run_v / run_g check for check."""
+            F0, k_add, gate, gate_lvl, bank_on, bank_R, bankf, pyr_f, pyr_lvl, sr_lvl, sr_trig, kc, ka2, add_f, tk, sr_both, tk_trig):
+    """one trade, one combo -> (R, units, exit_j, kind, add_j, bank_j, pyr_j, imp_j). Mirrors run_v / run_g check for check;
+    tk >= 0 = the bloc 24h cut minute (run_h's tstop), sr_both = the raise applies to longs too (the bloc lock)."""
     ls = np.zeros(4); le = np.zeros(4); nl = 1; ls[0] = F0; le[0] = e0
     locked = 0.0; stop = -1.0; banked = False; units = F0
     pyr_pend = pyr_f > 0.0; sr_pend = sr_lvl > 0.0
     add_pend = F0 < 1.0 and k_add >= 0 and k_add < n
-    held = False
+    held = False; reached = False
     if gate and add_pend:
         add_pend = False; held = True
     add_j = -1; bank_j = -1; pyr_j = -1; imp_j = -1
@@ -93,6 +107,7 @@ def run_one(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, up, has_tp2, tp2_R,
             r = stop if stop < xo[j] else xo[j]
             kind = 0 if stop == -1.0 else (1 if stop == be else 2)
             return _val(locked, ls, le, nl, r), units, j, kind, add_j, bank_j, pyr_j, imp_j
+        if tk >= 0 and bh[j] >= tk_trig: reached = True
         if bank_on and (not banked) and xh[j] >= bank_R:
             banked = True
             tot = 0.0
@@ -105,7 +120,7 @@ def run_one(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, up, has_tp2, tp2_R,
         if armed and pyr_pend and bh[j] >= pyr_lvl:
             ls[nl] = pyr_f; le[nl] = (pyr_lvl if pyr_lvl > bo[j] else bo[j]) + eo[j]; nl += 1; units += pyr_f; pyr_pend = False; pyr_j = j
         if armed and sr_pend and bh[j] >= sr_trig:
-            if not up:
+            if sr_both or not up:
                 v = be + sr_lvl
                 if v > stop: stop = v
             sr_pend = False
@@ -113,6 +128,8 @@ def run_one(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, up, has_tp2, tp2_R,
             ls[nl] = 1 - F0; le[nl] = (gate_lvl if gate_lvl > bo[j] else bo[j]) + eo[j]; nl += 1; units += 1 - F0; held = False; add_j = j
         if has_tp2 and xh[j] >= tp2_R:
             return _val(locked, ls, le, nl, tp2_R), units, j, 3, add_j, bank_j, pyr_j, imp_j
+        if tk >= 0 and j == tk and not reached:
+            return _val(locked, ls, le, nl, xc[j]), units, j, 6, add_j, bank_j, pyr_j, imp_j
         if add_pend and j == k_add:
             ls[nl] = 1 - F0; le[nl] = bc[j] + eo[j]; nl += 1; units += 1 - F0; add_pend = False; add_j = j
         if kc >= 0 and j == kc:
@@ -125,11 +142,11 @@ def run_one(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, up, has_tp2, tp2_R,
 @njit(cache=True)
 def run_all(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, up, has_tp2, tp2_R, P, I, outR, outU, outI):
     """all combos of one trade. P float params (F0, gate_lvl, bank_R, bankf, pyr_f, pyr_lvl, sr_lvl, sr_trig, add_f),
-    I int params (k_add, gate, bank_on, kc, ka2). outI columns: exit_j, kind, add_j, bank_j, pyr_j, imp_j."""
+    I int params (k_add, gate, bank_on, kc, ka2, tk, sr_both). outI columns: exit_j, kind, add_j, bank_j, pyr_j, imp_j."""
     for c in range(P.shape[0]):
         r = run_one(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, up, has_tp2, tp2_R,
                     P[c, 0], I[c, 0], I[c, 1] == 1, P[c, 1], I[c, 2] == 1, P[c, 2], P[c, 3], P[c, 4], P[c, 5], P[c, 6], P[c, 7],
-                    I[c, 3], I[c, 4], P[c, 8])
+                    I[c, 3], I[c, 4], P[c, 8], I[c, 5], I[c, 6] == 1, BLOC_TRIG)
         outR[c] = r[0]; outU[c] = r[1]
         outI[c, 0] = r[2]; outI[c, 1] = r[3]; outI[c, 2] = r[4]; outI[c, 3] = r[5]; outI[c, 4] = r[6]; outI[c, 5] = r[7]
 
@@ -168,15 +185,17 @@ def prep(S, x):
 
 def params(p, combos):
     """per-trade parameter matrices for run_all."""
-    nc = len(combos); P = np.zeros((nc, 9)); I = np.full((nc, 5), -1, dtype=np.int64)
-    for c, (si, ga, bi, pi, ri, ci, ii) in enumerate(combos):
+    nc = len(combos); P = np.zeros((nc, 9)); I = np.full((nc, 7), -1, dtype=np.int64)
+    for c, (si, ga, bi, pi, ri, ci, ii, bo) in enumerate(combos):
         _, F0, N = STAGE[si]; _, bs, bl = BANK[bi]; _, pf, pl = PYR[pi]; _, sr = RAISE[ri]; _, th = CUTB[ci]; _, af = ADDI[ii]
+        if bo: sr = BLOC_LOCK
         P[c] = (F0, K3.GATE_LVL, p["bank_R"](bl) if bl is not None else 0.0, (p["bankf_det"] if bs == "det" else bs) if bs is not None else 0.0,
-                pf, pl, sr, SR_TRIG, af)
+                pf, pl, sr, SR_TRIG if not bo else BLOC_TRIG, af)
         k_add = p["kbar"][N] if F0 < 1.0 else -1
         kc = p["k12"] if (th is not None and p["avg2"] is not None and not p["up"] and p["avg2"] <= th) else -1
         ka2 = p["k12"] if (af > 0 and p["impr"]) else -1
-        I[c] = (k_add, 1 if (ga and F0 < 1.0 and p["gate"][N]) else 0, 1 if bs is not None else 0, kc if kc is not None else -1, ka2)
+        I[c] = (k_add, 1 if (ga and F0 < 1.0 and p["gate"][N]) else 0, 1 if bs is not None else 0, kc if kc is not None else -1, ka2,
+                p["kbar"][BLOC_BAR] if bo else -1, 1 if bo else 0)
     return P, I
 
 
@@ -186,7 +205,7 @@ def _cidx(combos):
     key = id(combos)
     if _CI.get("key") != key:
         a = np.array(combos, dtype=np.int64)
-        _CI.update(key=key, si=a[:, 0], ga=a[:, 1], bi=a[:, 2], pi=a[:, 3], ri=a[:, 4], ci=a[:, 5], ii=a[:, 6])
+        _CI.update(key=key, si=a[:, 0], ga=a[:, 1], bi=a[:, 2], pi=a[:, 3], ri=a[:, 4], ci=a[:, 5], ii=a[:, 6], bo=a[:, 7])
     return _CI
 
 
@@ -203,10 +222,12 @@ def params_fast(p, combos):
     sr = np.array([v for _, v in RAISE]); af = np.array([v for _, v in ADDI])
     cut_k = np.array([(p["k12"] if (th is not None and p["avg2"] is not None and not p["up"] and p["avg2"] <= th) else -1) for _, th in CUTB], dtype=np.int64)
     add_k = np.array([(p["k12"] if (v > 0 and p["impr"]) else -1) for _, v in ADDI], dtype=np.int64)
-    P = np.empty((nc, 9)); I = np.empty((nc, 5), dtype=np.int64)
+    P = np.empty((nc, 9)); I = np.empty((nc, 7), dtype=np.int64); bo = c["bo"] == 1
     P[:, 0] = st_F0[c["si"]]; P[:, 1] = K3.GATE_LVL; P[:, 2] = bk_R[c["bi"]]; P[:, 3] = bk_f[c["bi"]]
-    P[:, 4] = py_f[c["pi"]]; P[:, 5] = py_l[c["pi"]]; P[:, 6] = sr[c["ri"]]; P[:, 7] = SR_TRIG; P[:, 8] = af[c["ii"]]
+    P[:, 4] = py_f[c["pi"]]; P[:, 5] = py_l[c["pi"]]; P[:, 6] = np.where(bo, BLOC_LOCK, sr[c["ri"]]); P[:, 7] = np.where(bo, BLOC_TRIG, SR_TRIG)
+    P[:, 8] = af[c["ii"]]
     I[:, 0] = st_kadd[c["si"]]; I[:, 1] = st_gate[c["si"]] * c["ga"]; I[:, 2] = bk_on[c["bi"]]; I[:, 3] = cut_k[c["ci"]]; I[:, 4] = add_k[c["ii"]]
+    I[:, 5] = np.where(bo, p["kbar"][BLOC_BAR], -1); I[:, 6] = bo.astype(np.int64)
     return P, I
 
 
@@ -276,8 +297,11 @@ def pack(S, p, R, U, I):
 
 
 POP: list = []; COMBOS: list = []; OUTP = ""
+# trader 2026-10-04: a full-speed build saturated the PC's disk (WSL swap + bursty writes) and froze Windows. CB_WRITE_MBPS caps the
+# build's aggregate write rate (split across the workers; each unit is flushed, then the worker sleeps off any excess). 0 = no cap.
+WRITE_MBPS = float(os.environ.get("CB_WRITE_MBPS", "0")); NWORK = 1
 def _work(rng):
-    a, b = rng
+    a, b = rng; t0 = time.time()
     mm = np.memmap(OUTP, dtype=REC, mode="r+", shape=(len(POP), len(COMBOS)))
     for i in range(a, b):
         x = POP[i]; S = sym_obj(x["sym"]); p = prep(S, x)
@@ -285,6 +309,8 @@ def _work(rng):
         R, U, I = run_trade(p, COMBOS)
         mm[i] = pack(S, p, R, U, I)
     mm.flush(); del mm
+    if WRITE_MBPS > 0:
+        time.sleep(max(0.0, (b - a) * len(COMBOS) * REC.itemsize / (WRITE_MBPS * 1e6 / NWORK) - (time.time() - t0)))
     return b - a
 
 
@@ -307,8 +333,8 @@ def _warm():
 
 def run_pool(pop, outp, workers, chunk=10, progress=False):
     import multiprocessing as mp
-    global POP, COMBOS, OUTP
-    POP, COMBOS, OUTP = pop, grid(), outp
+    global POP, COMBOS, OUTP, NWORK
+    POP, COMBOS, OUTP, NWORK = pop, grid(), outp, workers
     np.memmap(outp, dtype=REC, mode="w+", shape=(len(POP), len(COMBOS))).flush()
     _warm(); _SYMS.clear()
     units = units_of(POP, chunk)
@@ -333,8 +359,10 @@ def mem_sampler(stop_evt, out):
 def _vsym(arg):
     """verification work for one symbol's trades -> counters."""
     from pipeline import mgmt_variants as MV
+    from pipeline import cbloc_timestop_study as CT
     sym, xs = arg; combos = COMBOS; old = VOLD; sel = VSEL; i_raw, i_live = VRAW, VLIVE
-    st = {"n": 0, "nv": 0, "mx1": 0.0, "mx2": 0.0, "mx3": 0.0, "pmx": 0, "det": 0, "pyr": 0, "cut": 0, "addi": 0, "stage3": 0, "units": 0}
+    st = {"n": 0, "nv": 0, "mx1": 0.0, "mx2": 0.0, "mx3": 0.0, "pmx": 0, "det": 0, "pyr": 0, "cut": 0, "addi": 0, "stage3": 0, "units": 0,
+          "mx4": 0.0, "bk4": 0, "bcut": 0, "bk6": 0, "bpre": 0, "blong": 0}
     S = sym_obj(sym)
     for x in xs:
         p = prep(S, x); mv = MV.variants(S, x, MODE)
@@ -364,21 +392,39 @@ def _vsym(arg):
         if I[sel["i25"], 5] < 0 and abs(R[sel["i25"]] - R[i_live]) > 1e-12: st["addi"] += 1
         if 0 <= p["kbar"][3] and I[i_live, 0] < p["kbar"][3] and abs(R[sel["s3"]] - R[i_live]) > 1e-12: st["stage3"] += 1
         if np.any(~np.isfinite(R)) or np.any(U < 0.24) or np.any(U > 2.51): st["units"] += 1
+        # bloc dial (trader 2026-10-04): bloc on at the live dials == the study's T+L1.0 (cbloc_timestop_study.run_h), value and exit
+        ib = sel["bloc_live"]; k6 = p["kbar"][BLOC_BAR]
+        v, _, why = CT.run_h(F, p["e0"], p["be"], p["bank_R"](1.0), p["tp2"], p["bankf_det"], A.F0, p["kbar"][6] if p["kbar"][6] >= 0 else None,
+                             p["up"], 1, BLOC_LOCK)
+        st["mx4"] = max(st["mx4"], abs(R[ib] - v))
+        st["bk4"] += int((why == "time") != (I[ib, 1] == 6))
+        # kind 6 only on bloc-on combos, and only at the bar-6 close
+        k6c = I[:, 1] == 6
+        st["bcut"] += int(np.any(k6c & (CBO == 0)) or (k6c.any() and np.any(I[k6c, 0] != k6)))
+        # a trade that never reached +1.5R before the bar-6 close and was out before it is untouched by the bloc rules
+        jx = int(I[sel["live_r0"], 0])
+        if (k6 < 0 or jx < k6) and F["bh"][:jx + 1].max() < BLOC_TRIG and abs(R[ib] - R[sel["live_r0"]]) > 1e-12: st["bpre"] += 1
+        # every bloc-on combo == the same dials with no cut when the trade reached +1.5R by the bar-6 close and no stop was raised
+        if k6 >= 0 and k6 < p["n"] and F["bh"][:k6 + 1].max() >= BLOC_TRIG: st["bk6"] += int(I[ib, 1] == 6)
+        if p["up"] and I[ib, 1] == 2: st["blong"] += 1          # longs can now exit on a raised (locked) stop
         st["n"] += 1
     return st
 
 
-VOLD: dict = {}; VSEL: dict = {}; VRUN: dict = {}; VRAW = VLIVE = 0
+VOLD: dict = {}; VSEL: dict = {}; VRUN: dict = {}; VRAW = VLIVE = 0; CBO = None
 def verify(n_det=None, workers=8):
     """the ladder; every line prints PASS / FAIL."""
     import multiprocessing as mp
     from pipeline import mgmt_variants as MV
-    global COMBOS, VOLD, VSEL, VRUN, VRAW, VLIVE
-    pop = population(); combos = grid(); COMBOS = combos; ok_all = True
+    global COMBOS, VOLD, VSEL, VRUN, VRAW, VLIVE, CBO
+    pop = population(); combos = grid(); COMBOS = combos; ok_all = True; CBO = np.array([c[7] for c in combos])
     if n_det: pop = pop[::max(1, len(pop) // n_det)]
     def say(ok, msg):
         nonlocal ok_all; ok_all &= bool(ok); print(("PASS " if ok else "FAIL ") + msg, flush=True)
     say(len(combos) == len(set(combos)), f"grid: {len(combos)} distinct combos")
+    n_off = sum(1 for c in combos if c[7] == 0)
+    say(n_off == 29484 and all(c[7] == 0 for c in combos[:n_off]) and n_off + n_off // len(RAISE) == len(combos),
+        f"bloc off = the first {n_off} combos (the pre-bloc grid, same order), then {len(combos) - n_off} bloc-on combos (no raise dimension)")
     SA = {0: ("off", 0), 1: ("25@6", 0), 2: ("25@6", 1)}
     for sa, k, pp, r, b, i in itertools.product((0, 1, 2), (0, 1), (0, 1), (0, 1), (0, 1), (0, 1)):
         VOLD[MV.idx(sa, k, pp, r, b, i)] = find(combos, SA[sa][0], SA[sa][1], "det@1.0" if k else "off", "0.5@1.5" if pp else "off",
@@ -392,7 +438,9 @@ def verify(n_det=None, workers=8):
                  "c25": find(combos, "25@6", 0, "det@1.0", "0.5@1.5", "0.25", "0.25", "off"),
                  "c75": find(combos, "25@6", 0, "det@1.0", "0.5@1.5", "0.25", "0.75", "off"),
                  "i25": find(combos, "25@6", 0, "det@1.0", "0.5@1.5", "0.25", "off", "0.25"),
-                 "s3": find(combos, "25@3", 0, "det@1.0", "0.5@1.5", "0.25", "off", "off")})
+                 "s3": find(combos, "25@3", 0, "det@1.0", "0.5@1.5", "0.25", "off", "off"),
+                 "bloc_live": find(combos, "25@6", 0, "det@1.0", "0.5@1.5", "off", "off", "off", bloc="on"),
+                 "live_r0": find(combos, "25@6", 0, "det@1.0", "0.5@1.5", "off", "off", "off")})
     for F0, pyr in ((1.0, False), (1.0, True), (0.25, False), (0.25, True)):
         VRUN[(F0, pyr)] = find(combos, "off" if F0 >= 1 else "25@6", 0, "det@1.0", "0.5@1.5" if pyr else "off", "off", "off", "off")
     POP[:] = pop; _warm(); _SYMS.clear()
@@ -412,6 +460,12 @@ def verify(n_det=None, workers=8):
     say(T["addi"] == 0, f"I size only matters when the I add fired (violations {T['addi']})")
     say(T["stage3"] == 0, f"bar-3 staging == bar-6 staging for trades out before bar 3 (violations {T['stage3']})")
     say(T["units"] == 0, f"R finite, position size within 25%..250% (violations {T['units']})")
+    say(T["mx4"] < 1e-12, f"bloc on at the live dials == cbloc_timestop_study.run_h T+L1.0: max |diff| {T['mx4']:.2e}")
+    say(T["bk4"] == 0, f"bloc 24h cut fires exactly when run_h time-stops (mismatches {T['bk4']})")
+    say(T["bcut"] == 0, f"exit kind 6 only on bloc-on combos and only at the bar-6 close (violations {T['bcut']})")
+    say(T["bpre"] == 0, f"trades out before bar 6 that never reached +1.5R are untouched by the bloc rules (violations {T['bpre']})")
+    say(T["bk6"] == 0, f"no 24h cut for trades that reached +1.5R by the bar-6 close (violations {T['bk6']})")
+    say(T["blong"] > 0, f"the lock reaches longs too ({T['blong']} long trades exit on the +1R lock at the live dials)")
     sub_pop = [x for x in pop if x["sym"] == pop[0]["sym"]][:60]
     d = os.path.join(OUTDIR, "_verify"); os.makedirs(d, exist_ok=True)
     run_pool(sub_pop, os.path.join(d, "a.u8"), 1); run_pool(sub_pop, os.path.join(d, "b.u8"), workers, chunk=7)
@@ -442,7 +496,8 @@ def build(workers):
     run = time.strftime("%Y%m%d_%H%M"); d = os.path.join(OUTDIR, run); os.makedirs(d, exist_ok=True)
     t = time.time(); run_pool(pop, os.path.join(d, "results.u8"), workers, progress=True)
     meta = {"built": time.strftime("%Y-%m-%d %H:%M"), "mode": MODE, "minutes": round((time.time() - t) / 60, 1), "record": str(REC.descr),
-            "dials": {"stage": STAGE, "bank": BANK, "pyr": PYR, "raise": RAISE, "cutB": CUTB, "addI": ADDI, "raise_trigger": SR_TRIG},
+            "dials": {"stage": STAGE, "bank": BANK, "pyr": PYR, "raise": RAISE, "cutB": CUTB, "addI": ADDI, "raise_trigger": SR_TRIG,
+                      "bloc": BLOC, "bloc_trigger": BLOC_TRIG, "bloc_lock": BLOC_LOCK, "bloc_bar": BLOC_BAR},
             "combos": combos, "trades": [[x["sym"], x["t"], x["strat"], int(x["up"])] for x in pop]}
     json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
     print(f"{len(pop)} trades x {len(combos)} combos in {meta['minutes']} min -> {d}")

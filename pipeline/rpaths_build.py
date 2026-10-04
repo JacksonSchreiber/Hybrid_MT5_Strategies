@@ -10,6 +10,8 @@ only what does NOT depend on the dials, per trade, in the combo file's trade ord
   long enough for the latest exit of ANY combo (capped at 180 bars = 30 trading days).
 Population = pipeline/per_symbol_stats.py's (all four detectors from today's EA build; originals' TrendCont from the pinned AA journals).
     python3 pipeline/rpaths_build.py          (after combo_build.py --build and combo_pack.py)
+    python3 pipeline/rpaths_build.py --out data/combos/<run>     write rpaths.json(.gz) into the run folder instead of live/static
+                                              (a build that is not uploaded yet: deploy_live.sh --code ships live/static as it is)
 """
 from __future__ import annotations
 import glob, gzip, json, os, sys, time
@@ -62,7 +64,7 @@ def main():
     by: dict = {}
     for i, (s_, t_, st_, up_) in enumerate(CM["trades"]): by.setdefault(s_, []).append(i)
     trades = [None] * len(CM["trades"]); bar = Bar(len(by), "paths", "symbols")
-    with Pool(16) as pool:
+    with Pool(int(os.environ.get("RP_WORKERS", "16"))) as pool:
         for res in pool.imap_unordered(do_symbol, sorted(by.items(), key=lambda kv: -len(kv[1]))):
             for i, t in res: trades[i] = t
             bar.update(1)
@@ -74,10 +76,11 @@ def main():
            "rec_bytes": CM["rec_bytes"], "dials": CM["dials"], "symbols_orig": [s.split(".")[0] for s in ORIG],
            "partial": [s.split(".")[0] for s in sorted(PARTIAL)], "trades": trades}
     raw = json.dumps(doc, separators=(",", ":")).encode()
-    with open(OUT, "wb") as f: f.write(raw)
-    with gzip.open(OUT + ".gz", "wb", compresslevel=9) as f: f.write(raw)
+    out = os.path.join(sys.argv[sys.argv.index("--out") + 1], "rpaths.json") if "--out" in sys.argv else OUT
+    with open(out, "wb") as f: f.write(raw)
+    with gzip.open(out + ".gz", "wb", compresslevel=9) as f: f.write(raw)
     print(f"{len(trades)} trades ({missing} without data) in {(time.time() - T0) / 60:.1f} min; {len(raw) / 1e6:.2f} MB raw, "
-          f"{os.path.getsize(OUT + '.gz') / 1e6:.2f} MB gzip; combo build {CM['build']}")
+          f"{os.path.getsize(out + '.gz') / 1e6:.2f} MB gzip; combo build {CM['build']} -> {out}")
 
 
 if __name__ == "__main__": main()
