@@ -14,6 +14,8 @@ SCALED (model cost = the M1 bar minimum spread, a LOWER bound - real FX costs ar
     python3 pipeline/cbloc_timeraise_study.py     -> data/study/cbloc_timeraise_report.txt
     python3 pipeline/cbloc_timeraise_study.py --levels 0,0.5,0.8 --raw    other stop levels (bars 3/6/18), raw only
                                                   -> data/study/cbloc_timeraise_raw_0_0.5_0.8_report.txt
+    python3 pipeline/cbloc_timeraise_study.py --hours 4,24 --levels 0,0.5 --raw   steps at hours after the entry (any hour: 6 = 2h
+                                                  into the 2nd H4 bar), up to three steps
 """
 from __future__ import annotations
 import os, statistics as st, sys, time
@@ -28,17 +30,19 @@ from pipeline.exit_mgmt_study import maxdd, paired_t      # noqa: E402
 
 SYMS = ["AUDUSD.dk", "NZDUSD.dk", "USDCAD.dk"]
 REPORT = os.path.join(A.STUDY, "cbloc_timeraise_report.txt")
-BARS = (3, 6, 18); LVLS = np.array([0.0, 0.25, 0.5])
+HOURS = [12, 24, 72]; LVLS = np.array([0.0, 0.25, 0.5])
 if "--levels" in sys.argv: LVLS = np.array([float(v) for v in sys.argv[sys.argv.index("--levels") + 1].split(",")])
+if "--hours" in sys.argv: HOURS = [float(v) for v in sys.argv[sys.argv.index("--hours") + 1].split(",")]
+assert len(HOURS) == len(LVLS) <= 3
 RAW_ONLY = "--raw" in sys.argv
-if "--levels" in sys.argv or RAW_ONLY:
-    REPORT = REPORT.replace("_report.txt", ("_raw" if RAW_ONLY else "") + "_" + "_".join(f"{v:g}" for v in LVLS) + "_report.txt")
+if "--levels" in sys.argv or "--hours" in sys.argv or RAW_ONLY:
+    REPORT = REPORT.replace("_report.txt", ("_raw" if RAW_ONLY else "") + "_" + "_".join(f"{h:g}h{v:g}" for h, v in zip(HOURS, LVLS)) + "_report.txt")
 # (name, setup 0 raw / 1 live bloc / 2 live standard (check only), time raise 0 off / 1 close / 2 skip)
 V = [("raw", 0, 0), ("raw + time raise (close)", 0, 1), ("raw + time raise (skip)", 0, 2),
      ("live (bloc T+L1.0)", 1, 0), ("live + time raise (close)", 1, 1), ("live + time raise (skip)", 1, 2), ("_live standard", 2, 0)]
 LBL = [("entry" if v == 0 else f"+{v:g}R") for v in LVLS]
-KIND = {0: "stop (not a time-raised stop)", 1: "TP2", 2: "24h cut", 3: "window end", 10: f"closed at 12h (below {LBL[0]})", 11: f"closed at 1 day (below {LBL[1]})",
-        12: f"closed at 3 days (below {LBL[2]})"}
+KIND = {0: "stop (not a time-raised stop)", 1: "TP2", 2: "24h cut", 3: "window end"}
+KIND.update({10 + q: f"closed at {h:g}h (below {LBL[q]})" for q, h in enumerate(HOURS)})
 
 
 @njit(cache=True)
@@ -99,15 +103,18 @@ def do(sym):
         p = CB.prep(S, x)
         if p is None: continue
         F = p["F"]; h4, i0, k0 = x["bars"], p["i0"], p["k0"]
-        kb = lambda N: (int(np.searchsorted(S.t, A.tmin(h4[i0 + N][0]))) - 1 - k0) if i0 + N < len(h4) else -1
-        rk = np.array([kb(N) for N in BARS], dtype=np.int64)
-        assert rk[0] == p["kbar"][3] and rk[1] == p["kbar"][6]
+        def kt(H):     # the last minute before H trading hours after the entry (H4 bar b = H // 4, then H % 4 hours into it)
+            b, r = int(H // 4), (H % 4) * 60
+            return (int(np.searchsorted(S.t, A.tmin(h4[i0 + b][0]) + r)) - 1 - k0) if i0 + b < len(h4) else -1
+        assert kt(12) == p["kbar"][3] and kt(24) == p["kbar"][6]
+        rk = np.full(3, -1, dtype=np.int64); rk[:len(HOURS)] = [kt(H) for H in HOURS]
+        lv = np.zeros(3); lv[:len(LVLS)] = LVLS
         ka = p["kbar"][6]; tp2 = p["tp2"]; R = {}
         for name, su, tr in V:
             live = su > 0
             R[name] = kern(F["xo"], F["xh"], F["xl"], F["xc"], F["bo"], F["bh"], F["bc"], F["eo"], p["n"], p["e0"], p["be"], tp2 is not None,
                            tp2 if tp2 is not None else 0.0, live, p["bank_R"](1.0), p["bankf_det"], A.F0 if live else 1.0, ka if live else -1,
-                           p["up"], live, A.PYR_R, A.PYR_F, su == 1, 2 if su == 1 else 1, CB.BLOC_LOCK, CT.K.SR, CT.TRIG, rk, LVLS, tr)
+                           p["up"], live, A.PYR_R, A.PYR_F, su == 1, 2 if su == 1 else 1, CB.BLOC_LOCK, CT.K.SR, CT.TRIG, rk, lv, tr)
         # exactness: time raise off == run_h (live bloc / live standard) and the raw replay
         k_add = ka if ka >= 0 else None
         for name, ts, rt in (("live (bloc T+L1.0)", 1, CB.BLOC_LOCK), ("_live standard", None, None)):
@@ -131,7 +138,7 @@ def main():
          f"{time.time() - T0:.0f}s; time raise off vs run_h (live bloc, live standard) and the raw replay: max |diff| {dmax:.1e} "
          f"({'EXACT' if dmax < 1e-12 else 'MISMATCH'})\n"]
     col = lambda nm, f=lambda z: True: [z[4][nm][0] for z in res if f(z)]
-    L[-1] = L[-1].rstrip("\n") + f"; time raise levels {' / '.join(LBL)} at bars {' / '.join(map(str, BARS))}\n"
+    L[-1] = L[-1].rstrip("\n") + f"; time raise {' / '.join(f'{l} at {h:g}h' for l, h in zip(LBL, HOURS))}\n"
     for base, names in (("raw", V[1:3]), ("live (bloc T+L1.0)", V[4:6]))[:1 if RAW_ONLY else 2]:
         b = col(base)
         L.append(f"  {base:28} {st.mean(b):+.4f}R  total {sum(b):+7.1f}  DD {maxdd(b):6.1f}  tot/DD {sum(b) / maxdd(b):+6.2f}" + " " * 25 +
@@ -156,7 +163,7 @@ def main():
                 if not ss: continue
                 L.append(f"    {KIND[k]:30} {side} n {len(ss):4}  avg {st.mean(z[4][nm][0] for z in ss):+.3f}R  (base {st.mean(z[4][base][0] for z in ss):+.3f}R)")
         stp = [z for z in res if z[4][nm][1] == 0 and z[4][nm][2] >= 0]
-        for q in range(3):
+        for q in range(len(HOURS)):
             ss = [z for z in stp if z[4][nm][2] == q]
             if ss: L.append(f"    stopped on the raised stop ({LBL[q]:6}) n {len(ss):4}  avg {st.mean(z[4][nm][0] for z in ss):+.3f}R  (base {st.mean(z[4][base][0] for z in ss):+.3f}R)")
     open(REPORT, "w").write("\n".join(L) + "\n"); print("\n".join(L))

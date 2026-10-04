@@ -97,4 +97,6 @@ nothing is re-run by accident and the coach can see what was tried.
     through" version is +0.019 (t 0.3). The 24h cut and the +1R lock already do the job.
   - **Raw, levels entry / +0.5R / +0.8R** (same bars): -0.012R/trade (t 2.65 vs raw), DD 89. That is barely different from the first
     levels (-0.017, DD 82), and still below the live bloc setup (+0.018). `--levels 0,0.5,0.8 --raw`
+  - **Raw, entry at 4/6/8/12h then +0.5R at 24h (no 3-day step):** -0.021 / -0.029 / -0.025 / -0.017R/trade, DD 65 / 70 / 67 / 92.
+    An earlier entry stop cuts the drawdown but not the average; the hours are within noise of each other. `--hours H,24 --levels 0,0.5 --raw`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
