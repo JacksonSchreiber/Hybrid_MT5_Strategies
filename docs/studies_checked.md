@@ -126,7 +126,7 @@ nothing is re-run by accident and the coach can see what was tried.
   - **Out-of-sample check of the best set on the crosses** (AUDCAD/AUDNZD/NZDCAD; never used to build this family; 1h average check
     < 0R, entry at 8h, +0.5R at 24h):
     - raw -0.099 -> rule -0.046R/trade (t 1.3), DD 83;
-    - with a 75% TP1 bank -0.053 (the bank effect does not carry over);
+    - with a TP1 bank of 25% -0.048, of 75% -0.053 (the bank effect does not carry over);
     - long -0.037 / short -0.056: the USD "shorts carry it" does not carry over either.
     - Worse than the live T+L1.0 on the same crosses (-0.024). The 8h close and the entry stop cost R on the crosses (-6 and -38R
       vs raw), where on the USD pairs they gained. Not forwarded. `--syms AUDCAD.dk,AUDNZD.dk,NZDCAD.dk`
