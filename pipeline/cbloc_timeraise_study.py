@@ -56,7 +56,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, ban
             r = stop if stop < xo[j] else xo[j]
             v = locked
             for a in range(nl): v += ls[a] * (r - le[a])
-            return v, 0, rstop
+            return v, 0, rstop, j
         if bh[j] >= trig: reached = True
         if bank_on and (not banked) and xh[j] >= bank_R:
             banked = True; tot = 0.0
@@ -74,11 +74,11 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, ban
         if has_tp2 and xh[j] >= tp2_R:
             v = locked
             for a in range(nl): v += ls[a] * (tp2_R - le[a])
-            return v, 1, rstop
+            return v, 1, rstop, j
         if tstop and k_add >= 0 and j == k_add and not reached:
             v = locked
             for a in range(nl): v += ls[a] * (xc[j] - le[a])
-            return v, 2, rstop
+            return v, 2, rstop, j
         if tr > 0 and q < 3 and j == rk[q]:
             lvl = be + rl[q]
             if lvl > stop:
@@ -86,7 +86,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, ban
                     if tr == 1:
                         v = locked
                         for a in range(nl): v += ls[a] * (xc[j] - le[a])
-                        return v, 10 + q, rstop
+                        return v, 10 + q, rstop, j
                 else:
                     stop = lvl; rstop = q
             q += 1
@@ -94,7 +94,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, ban
             ls[nl] = 1 - F0; le[nl] = bc[j] + eo[j]; nl += 1; add_pend = False
     v = locked
     for a in range(nl): v += ls[a] * (xc[n - 1] - le[a])
-    return v, 3, rstop
+    return v, 3, rstop, n - 1
 
 
 def do(sym):
@@ -124,6 +124,10 @@ def do(sym):
         hit = np.nonzero((xl <= -1.0) | ((xh >= tp2) if tp2 is not None else np.zeros(p["n"], bool)))[0]
         raw = ((min(-1.0, xo[hit[0]]) if xl[hit[0]] <= -1.0 else tp2) if hit.size else xc[p["n"] - 1]) - p["e0"]
         dmax = max(dmax, abs(R["raw"][0] - raw))
+        # per variant: (R, exit kind, which time raise set the stop, trading hours to the exit, best R (exit side) before the exit)
+        for name in R:
+            v, kd, rs, j = R[name]; tm = S.t[k0 + j]; hb = int(np.searchsorted(S.h4t, tm, side="right")) - 1
+            R[name] = (v, kd, rs, 4 * ((hb - i0) + (tm - S.h4t[hb]) / 240.0), float(F["xh"][:j + 1].max()))
         out.append((x["t"], x["up"], sym, x["strat"], R))
     return out, dmax
 
@@ -166,6 +170,41 @@ def main():
         for q in range(len(HOURS)):
             ss = [z for z in stp if z[4][nm][2] == q]
             if ss: L.append(f"    stopped on the raised stop ({LBL[q]:6}) n {len(ss):4}  avg {st.mean(z[4][nm][0] for z in ss):+.3f}R  (base {st.mean(z[4][base][0] for z in ss):+.3f}R)")
+    # where R is won and lost (trader 2026-10-04): every exit type, with what the same trades made on the raw signal
+    def bucket(r):
+        kd, rs = r[1], r[2]
+        if kd == 0: return f"stopped on the raised stop ({LBL[rs]})" if rs >= 0 else "stopped at the signal stop (-1R)"
+        return {1: "TP2", 2: "24h cut", 3: "still open at the window end"}.get(kd, KIND.get(kd))
+    for nm in [n for n, su, tr in V if su == 0 and tr != 2] + ([] if RAW_ONLY else [n for n, su, tr in V if su == 1 and tr != 2]):
+        base = "raw" if nm.startswith("raw") else "live (bloc T+L1.0)"
+        L.append(f"\nWHERE R IS WON AND LOST - {nm}" + ("" if nm == base else f" (vs {base} on the same trades)"))
+        L.append(f"  {'how the trade ended':38} {'trades':>6} {'avg R':>7} {'total R':>8} {'long':>7} {'short':>7}" +
+                 ("" if nm == base else f" {'base':>8} {'gained':>7}") + f" {'med h':>6} {'best R':>6}")
+        groups: dict = {}
+        for z in res: groups.setdefault(bucket(z[4][nm]), []).append(z)
+        for b_, zs in sorted(groups.items(), key=lambda kv: sum(z[4][nm][0] for z in kv[1])):
+            v = [z[4][nm][0] for z in zs]; bb = sum(z[4][base][0] for z in zs)
+            L.append(f"  {b_:38} {len(zs):6} {st.mean(v):+7.3f} {sum(v):+8.1f} {sum(z[4][nm][0] for z in zs if z[1]):+7.1f} "
+                     f"{sum(z[4][nm][0] for z in zs if not z[1]):+7.1f}" + ("" if nm == base else f" {bb:+8.1f} {sum(v) - bb:+7.1f}") +
+                     f" {st.median(z[4][nm][3] for z in zs):6.1f} {st.mean(z[4][nm][4] for z in zs):+6.2f}")
+        v = [z[4][nm][0] for z in res]; bb = sum(z[4][base][0] for z in res)
+        L.append(f"  {'TOTAL':38} {len(v):6} {st.mean(v):+7.3f} {sum(v):+8.1f} {sum(z[4][nm][0] for z in res if z[1]):+7.1f} "
+                 f"{sum(z[4][nm][0] for z in res if not z[1]):+7.1f}" + ("" if nm == base else f" {bb:+8.1f} {sum(v) - bb:+7.1f}"))
+    # ... and by time: when the exit happened (trading hours after the entry; an exit exactly at a check falls in the bucket ending there)
+    EDGES = [4, 8, 12, 24, 48, 72, 120, float("inf")]
+    LAB = ["0-4h", "4-8h", "8-12h", "12-24h", "1-2 days", "2-3 days", "3-5 days", "5+ days"]
+    for nm in [n for n, su, tr in V if su == 0 and tr != 2] + ([] if RAW_ONLY else [n for n, su, tr in V if su == 1 and tr != 2]):
+        L.append(f"\nWHEN R IS WON AND LOST - {nm}  (by time of the exit)")
+        L.append(f"  {'exit time':10} {'trades':>6} {'avg R':>7} {'total R':>8} {'won R':>7} {'lost R':>8} {'long':>7} {'short':>7}  {'mostly':<s}")
+        for e, lab in zip(EDGES, LAB):
+            lo = EDGES[EDGES.index(e) - 1] if e != EDGES[0] else -1
+            zs = [z for z in res if lo < z[4][nm][3] + 1e-9 <= e + 1e-6]
+            if not zs: continue
+            v = [z[4][nm][0] for z in zs]; cnt: dict = {}
+            for z in zs: b_ = bucket(z[4][nm]); cnt[b_] = cnt.get(b_, 0) + 1
+            top = ", ".join(f"{k} {n}" for k, n in sorted(cnt.items(), key=lambda kv: -kv[1])[:2])
+            L.append(f"  {lab:10} {len(zs):6} {st.mean(v):+7.3f} {sum(v):+8.1f} {sum(x for x in v if x > 0):+7.1f} {sum(x for x in v if x < 0):+8.1f} "
+                     f"{sum(z[4][nm][0] for z in zs if z[1]):+7.1f} {sum(z[4][nm][0] for z in zs if not z[1]):+7.1f}  {top}")
     open(REPORT, "w").write("\n".join(L) + "\n"); print("\n".join(L))
 
 
