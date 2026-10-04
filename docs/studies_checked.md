@@ -161,3 +161,6 @@ nothing is re-run by accident and the coach can see what was tried.
     - the 10 / 1 closest are far worse (-0.10 / -1.0: single outcomes are noise).
   - Preset picked by the matches: -0.001 to -0.028 vs the group's best preset (no gain). A faint top-vs-bottom fifth spread on
     live-setup R (+0.12..+0.16, t 2.4-3.2) recurs, but it does not survive as a prediction (skill < 0). `shape_match_test.py`
+- **Locked-symbol look, XAGUSD + USDCHF** (trader 2026-10-04; pre-registered in docs/locked_look_2026-10-04.md; both now spent).
+  - Live stack vs raw -0.017R/trade (t -0.4): FITTED to its design symbols (the original seven).
+  - Live + bloc rules vs raw +0.023 (noise). The raw signal is negative on both (-0.044).
