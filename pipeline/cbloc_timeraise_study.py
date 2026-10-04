@@ -19,6 +19,7 @@ SCALED (model cost = the M1 bar minimum spread, a LOWER bound - real FX costs ar
     ... --avgcheck 0.5        + an AVERAGE CHECK at that hour: if the average bid close since the entry (in R) is below 0 there,
                               the trade is closed at that minute's close (applies with the time raise only)
     ... --avgthr -0.1         the average check's threshold (default 0: close when the average is below it)
+    ... --syms AUDCAD.dk,AUDNZD.dk,NZDCAD.dk   other symbols (the commodity-bloc crosses come in through CB_HOLDOUT)
     ... --bank 0.5 [--bank-be]  + BANK that share at TP1 (capped at TP2; no TP1 = no bank), with --bank-be the stop also goes to
                               entry at the bank (as live); applies with the time raise only
 """
@@ -35,6 +36,9 @@ from pipeline.exit_mgmt_study import maxdd, paired_t      # noqa: E402
 
 SYMS = ["AUDUSD.dk", "NZDUSD.dk", "USDCAD.dk"]
 REPORT = os.path.join(A.STUDY, "cbloc_timeraise_report.txt")
+if "--syms" in sys.argv:
+    SYMS = sys.argv[sys.argv.index("--syms") + 1].split(","); os.environ["CB_HOLDOUT"] = "1"
+    REPORT = REPORT.replace("_report.txt", "_" + "-".join(s_.split(".")[0] for s_ in SYMS) + "_report.txt")
 HOURS = [12, 24, 72]; LVLS = np.array([0.0, 0.25, 0.5])
 if "--levels" in sys.argv: LVLS = np.array([float(v) for v in sys.argv[sys.argv.index("--levels") + 1].split(",")])
 if "--hours" in sys.argv: HOURS = [float(v) for v in sys.argv[sys.argv.index("--hours") + 1].split(",")]
