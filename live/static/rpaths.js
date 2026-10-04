@@ -702,6 +702,7 @@
       tip.style.left = Math.min(W - tw - 4, Math.max(4, X(i / 2) + 12)) + "px"; tip.style.top = (pad.t + 6) + "px";
     };
     let base = null; const drawAvgBase = () => { if (base) ctx.putImageData(base, 0, 0); };
+    if (!cv.width || !cv.height) return;            // the canvas left the page (a newer render replaced it) before this frame ran
     base = ctx.getImageData(0, 0, cv.width, cv.height);
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.scale(dpr, dpr);
     cv.onpointermove = show; cv.onpointerdown = show; cv.onpointerleave = () => { tip.style.display = "none"; drawAvgBase(); };
@@ -875,6 +876,7 @@
     for (let y = y0 + 1; y <= y1; y += yst) { const x = X(Date.UTC(y, 0, 1)); ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + ph); ctx.stroke(); ctx.fillStyle = C.dim; ctx.fillText(String(y), x, pad.t + ph + 6); }
     series.forEach(sr => { ctx.strokeStyle = sr.col; ctx.lineWidth = state.symCurve === "pooled" ? 2 : 1.5; ctx.setLineDash(sr.dash); ctx.beginPath();
       sr.pts.forEach((p, i) => i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))); ctx.stroke(); ctx.setLineDash([]); });
+    if (!cv.width || !cv.height) return;            // the canvas left the page before this frame ran
     const base = ctx.getImageData(0, 0, cv.width, cv.height);
     const restore = () => { ctx.putImageData(base, 0, 0); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.scale(dpr, dpr); };
     cv.onpointermove = e => { const rr = cv.getBoundingClientRect(), x = e.clientX - rr.left; const tx = t0 + (x - pad.l) / pw * (t1 - t0);
