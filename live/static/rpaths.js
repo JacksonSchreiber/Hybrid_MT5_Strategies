@@ -10,7 +10,11 @@
  * enough for any combo's exit); a dial setting fetches that combo's exits for every trade from /combo/<build>/<index> (9-byte records:
  * R int16 x1000, exit H4 bars uint16 x10, exit kind, event bars for the staged add / bank / pyramid / I add - pipeline/combo_pack.py).
  * Y axis: the price (as before) or the position's value (rebuilt from the events; its last point is the exact R). Research lock: hide
- * 2025-26 and the nine new symbols while forming an idea. Live trades always show what actually happened. */
+ * 2025-26 and the nine new symbols while forming an idea. Live trades always show what actually happened.
+ * 2026-10-04: the commodity-bloc dial (Off / bloc symbols = live / every symbol): bloc-on combos follow the bloc-off block in the combo
+ * file, same layout without the raise dimension (the bloc lock replaces it); "bloc symbols" merges the two slices per trade. Hidden
+ * when the data has no bloc dial (an older combo build). The research lock is the trader's own list (edited here, POST /research_lock,
+ * kept on the box) or the default (live/symbol_groups.py). */
 (function () {
   "use strict";
   const C = {
@@ -19,8 +23,8 @@
     hueHex: { tp2: "#3987e5", be: "#d95926", sl: "#9085e9", cut: "#2ea88c", all: "#3987e5" },
     stop: "#f85149", bank: "#8b949e",
   };
-  const OUTCOME = { tp2: "TP2 winners", be: "Back to entry", sl: "Stopped out", cut: "Cut at day 2", all: "All trades" };
-  const KIND_OUT = ["sl", "be", "be", "tp2", "cut", "end"];          // combo exit kind -> outcome group ("end" = still open at the window end: All only)
+  const OUTCOME = { tp2: "TP2 winners", be: "Back to entry", sl: "Stopped out", cut: "Cut early", all: "All trades" };
+  const KIND_OUT = ["sl", "be", "be", "tp2", "cut", "end", "cut"];   // combo exit kind -> outcome group ("end" = still open at the window end: All only; 6 = the bloc 24h cut)
   const DETS = ["TrendCont", "SweepMSS", "DeepFib", "EMArevQ"];
   const state = {
     show: "tp2", cmp: "none", time: "rt", dir: "all", det: "all", start: "all", period: "all", shade: "open",
@@ -48,14 +52,22 @@
     ["pyr", "Pyramid", "Add this share of full size at this R (after the bank when the bank is on)"],
     ["raise", "Shorts stop raise", "Shorts: every stop to this R when +1.5R trades"],
     ["cut", "B: shorts day-2 cut", "Close a short at the day-2 close if its average R is at or below this"],
-    ["addi", "I: improving-longs add", "Longs: add this share at the day-2 close when day 2 averages better than day 1"]];
+    ["addi", "I: improving-longs add", "Longs: add this share at the day-2 close when day 2 averages better than day 1"],
+    ["bloc", "Commodity-bloc rules", "24h cut: at the 6th H4 bar close everything is closed unless +1.5R was reached. Lock: at +1.5R every stop, longs and shorts, moves to +1R (it replaces the shorts raise). Live = on for the bloc symbols (BLOCSYMS). The cut bar is fixed at bar 6 whatever the staging"]];
   const DKEY = { stage: "stage", bank: "bank", pyr: "pyr", raise: "raise", cut: "cutB", addi: "addI" };
   const dl = k => DATA.dials[DKEY[k]];
   const di = (k, name) => Math.max(0, dl(k).findIndex(x => String(x[0]) === name));
+  // commodity-bloc dial (2026-10-04): 0 off, 1 bloc symbols only (= live), 2 every symbol. Only when the combo build has it.
+  const HAS_BLOC = () => !!(DATA && DATA.dials && DATA.dials.bloc);
+  let BLOCSET = null;
+  const blocSet = () => BLOCSET || (BLOCSET = new Set((((DATA.groups || []).find(g => g.k === "com")) || {}).syms || ["AUDUSD", "NZDUSD", "USDCAD", "AUDNZD", "AUDCAD", "NZDCAD"]));
+  const blocMode = d => (HAS_BLOC() && d && Number.isInteger(d.bloc)) ? d.bloc : 0;
+  const blocOn = (d, t) => { const m = blocMode(d); return m === 2 || (m === 1 && blocSet().has(t.s)); };
+  const LIVE_BLOC = () => HAS_BLOC() ? 1 : 0;
   const PRESET = {
-    raw: () => ({ stage: 0, gate: 0, bank: 0, pyr: 0, raise: 0, cut: 0, addi: 0 }),
-    live: () => ({ stage: di("stage", "25@6"), gate: 0, bank: di("bank", "det@1.0"), pyr: di("pyr", "0.5@1.5"), raise: di("raise", "0.25"), cut: 0, addi: 0 }),
-    all: () => ({ stage: di("stage", "25@6"), gate: 1, bank: di("bank", "det@1.0"), pyr: di("pyr", "0.5@1.5"), raise: di("raise", "0.25"), cut: di("cut", "0.5"), addi: di("addi", "0.5") }) };
+    raw: () => ({ stage: 0, gate: 0, bank: 0, pyr: 0, raise: 0, cut: 0, addi: 0, bloc: 0 }),
+    live: () => ({ stage: di("stage", "25@6"), gate: 0, bank: di("bank", "det@1.0"), pyr: di("pyr", "0.5@1.5"), raise: di("raise", "0.25"), cut: 0, addi: 0, bloc: LIVE_BLOC() }),
+    all: () => ({ stage: di("stage", "25@6"), gate: 1, bank: di("bank", "det@1.0"), pyr: di("pyr", "0.5@1.5"), raise: di("raise", "0.25"), cut: di("cut", "0.5"), addi: di("addi", "0.5"), bloc: LIVE_BLOC() }) };
   const PNAME = { raw: "Raw signal", live: "Live setup", all: "Live + A+B+I" };
   function comboIdx(d) {
     const D = DATA.dials, nP = D.pyr.length, nR = D.raise.length, nC = D.cutB.length, nI = D.addI.length;
@@ -64,24 +76,49 @@
     block += D.stage[d.stage][1] >= 1 ? 0 : (d.gate ? 1 : 0);
     return block * inner + ((((d.bank * nP + d.pyr) * nR + d.raise) * nC + d.cut) * nI + d.addi);
   }
-  const presetOf = d => Object.keys(PRESET).find(k => comboIdx(PRESET[k]()) === comboIdx(d));
+  function comboIdxOn(d) {      // the bloc-on combo: after every bloc-off combo, the same layout without the raise dimension
+    const D = DATA.dials, nP = D.pyr.length, nR = D.raise.length, nC = D.cutB.length, nI = D.addI.length;
+    let blocks = 0, block = 0;
+    for (let si = 0; si < D.stage.length; si++) blocks += D.stage[si][1] >= 1 ? 1 : 2;
+    for (let si = 0; si < d.stage; si++) block += D.stage[si][1] >= 1 ? 1 : 2;
+    block += D.stage[d.stage][1] >= 1 ? 0 : (d.gate ? 1 : 0);
+    return blocks * D.bank.length * nP * nR * nC * nI + block * D.bank.length * nP * nC * nI + (((d.bank * nP + d.pyr) * nC + d.cut) * nI + d.addi);
+  }
+  // one cache key per dial setting: a single slice ("c<index>") or the per-trade merge of the bloc-off and bloc-on slices ("m<off>:<on>")
+  const dialKey = d => { const m = blocMode(d); return m === 0 ? "c" + comboIdx(d) : m === 2 ? "c" + comboIdxOn(d) : "m" + comboIdx(d) + ":" + comboIdxOn(d); };
+  const comboLabel = d => { const m = blocMode(d); return m === 0 ? `combination ${comboIdx(d)}` : m === 2 ? `combination ${comboIdxOn(d)}, bloc rules on every symbol` :
+    `combinations ${comboIdx(d)} + ${comboIdxOn(d)}, bloc rules on the bloc symbols`; };
+  const presetOf = d => Object.keys(PRESET).find(k => dialKey(PRESET[k]()) === dialKey(d));
   const selName = () => { const p = presetOf(state.dial); return p ? PNAME[p] : "Your combo"; };
   const CACHE = new Map(); let X = null, NH = 0;                       // X = the selected combo's exits; NH = historical trades
+  const cacheSet = (k, c) => { CACHE.set(k, c); if (CACHE.size > 60) CACHE.delete(CACHE.keys().next().value); };
+  function fetchDial(d) {
+    const key = dialKey(d), m = blocMode(d);
+    if (CACHE.has(key)) return Promise.resolve(CACHE.get(key));
+    if (m !== 1) return fetchCombo(m === 2 ? comboIdxOn(d) : comboIdx(d));
+    return Promise.all([fetchCombo(comboIdx(d)), fetchCombo(comboIdxOn(d))]).then(([off, on]) => {     // bloc symbols: on, the rest: off
+      const n = off.R.length, R = new Float32Array(n), xb = new Float32Array(n), kind = new Uint8Array(n), ev = new Uint8Array(n * 4), B = blocSet();
+      for (let i = 0; i < n; i++) {
+        const src = DATA.trades[i] && B.has(DATA.trades[i].s) ? on : off;
+        R[i] = src.R[i]; xb[i] = src.xb[i]; kind[i] = src.kind[i]; for (let q = 0; q < 4; q++) ev[i * 4 + q] = src.ev[i * 4 + q];
+      }
+      const c = { idx: key, R, xb, kind, ev }; cacheSet(key, c); return c; });
+  }
   function fetchCombo(idx) {
-    if (CACHE.has(idx)) return Promise.resolve(CACHE.get(idx));
+    if (CACHE.has("c" + idx)) return Promise.resolve(CACHE.get("c" + idx));
     return fetch(`/combo/${DATA.combo_build}/${idx}`).then(r => { if (!r.ok) throw new Error("combo " + idx + ": HTTP " + r.status); return r.arrayBuffer(); }).then(buf => {
       const dv = new DataView(buf), n = buf.byteLength / DATA.rec_bytes, R = new Float32Array(n), xb = new Float32Array(n), kind = new Uint8Array(n), ev = new Uint8Array(n * 4);
       for (let i = 0, o = 0; i < n; i++, o += 9) { R[i] = dv.getInt16(o, true) / 1000; xb[i] = dv.getUint16(o + 2, true) / 10; kind[i] = dv.getUint8(o + 4);
         for (let q = 0; q < 4; q++) ev[i * 4 + q] = dv.getUint8(o + 5 + q); }
-      const c = { idx, R, xb, kind, ev }; CACHE.set(idx, c);
-      if (CACHE.size > 40) CACHE.delete(CACHE.keys().next().value);
+      const c = { idx, R, xb, kind, ev }; cacheSet("c" + idx, c);
       return c; });
   }
   function useDial(d) {
     if (DATA.dials.stage[d.stage][1] >= 1) d.gate = 0;
+    if (!HAS_BLOC()) delete d.bloc; else if (!Number.isInteger(d.bloc) || d.bloc < 0 || d.bloc > 2) d.bloc = 0;
     state.dial = d; store.set("rp.dial", JSON.stringify(d)); state.brush = null;
     const ind = document.getElementById("rp-loading"); if (ind) ind.style.visibility = "visible";
-    return fetchCombo(comboIdx(d)).then(c => { X = c; render(); }).catch(e => { root.insertAdjacentHTML("afterbegin", `<div class="card bad">Could not load the combo: ${e.message}</div>`); });
+    return fetchDial(d).then(c => { X = c; render(); }).catch(e => { root.insertAdjacentHTML("afterbegin", `<div class="card bad">Could not load the combo: ${e.message}</div>`); });
   }
   const isHist = t => t.__i != null;
   // research lock (live/symbol_groups.py RESEARCH_LOCK): locked symbols entirely + recent years of every non-exposed symbol
@@ -92,7 +129,7 @@
   // the path of t under the selected combo: time "rt" (one point per H4 bar close, last = the exit) or "pg" (41 points entry -> exit)
   function exitPrice(t, i) {
     const k = X.kind[i];
-    if (k === 0) return -1; if (k === 1) return 0; if (k === 2) return +dl("raise")[state.dial.raise][1]; if (k === 3) return t.tp;
+    if (k === 0) return -1; if (k === 1) return 0; if (k === 2) return blocOn(state.dial, t) ? +(DATA.dials.bloc_lock || 1) : +dl("raise")[state.dial.raise][1]; if (k === 3) return t.tp;
     const b = Math.max(1, Math.min(t.rt.length, Math.ceil(X.xb[i]))); return t.rt.length ? t.rt[b - 1] / 100 : 0;
   }
   function posValues(t, i, nb) {      // the position's value (full-position R) at the close of bars 1..nb, from the combo's events
@@ -137,17 +174,69 @@
   const STG = { share: [0.25, 0.5], bar: [6, 3] }, BNK = { share: ["det", 0.25, 0.5, 0.75], lvl: [0.75, 1.0, 1.25] }, PYRD = { size: [0.25, 0.5], lvl: [1.25, 1.5, 2.0] };
   const dec = d => ({ st: d.stage ? { s: Math.floor((d.stage - 1) / 2), b: (d.stage - 1) % 2 } : null, bk: d.bank ? { s: Math.floor((d.bank - 1) / 3), l: (d.bank - 1) % 3 } : null,
                       py: d.pyr ? { s: Math.floor((d.pyr - 1) / 3), l: (d.pyr - 1) % 3 } : null });
-  function lockWindow() {    // the small "what is locked" window
+  function lockWindow() {    // the small "what is locked" window; Edit = the trader's own list (kept on the box, POST /research_lock)
     const L = RL(), have = new Set(DATA.trades.map(t => t.s)), y = L.period_from;
+    const d = el("details", "rp-lockwin" + (state.lock ? " on" : ""));
+    d.open = state.lock || !!state.lockEdit;
+    const summary = `<summary>${state.lock ? "🔒 Research lock ON - the holdout is hidden on every chart" : "Research lock is off - everything is shown"} <span class="k">(what is locked?)</span></summary>`;
+    if (state.lockEdit) { d.innerHTML = summary; d.appendChild(lockEditor(L, have)); return d; }
     const chip = s => `<span class="rp-lchip${have.has(s) ? "" : " na"}" title="${have.has(s) ? "" : "no data on the page yet"}">${s}</span>`;
     const open = [...have].filter(s => !L.locked.includes(s)).sort((a, b) => (L.exposed.includes(b) - L.exposed.includes(a)) || a.localeCompare(b));
-    const d = el("details", "rp-lockwin" + (state.lock ? " on" : ""));
-    d.open = state.lock;
-    d.innerHTML = `<summary>${state.lock ? "🔒 Research lock ON - the holdout is hidden on every chart" : "Research lock is off - everything is shown"} <span class="k">(what is locked?)</span></summary>` +
-      `<div class="rp-lockgrid"><div><div class="rp-lbl">Locked symbols (hidden entirely)</div>${L.locked.map(chip).join(" ")}</div>` +
+    const exp = L.exposed.filter(s => have.has(s));
+    d.innerHTML = summary +
+      `<div class="rp-lockgrid"><div><div class="rp-lbl">Locked symbols (hidden entirely)</div>${L.locked.length ? L.locked.map(chip).join(" ") : '<span class="k">none</span>'}</div>` +
       `<div><div class="rp-lbl">Open symbols (shown)</div>${open.map(s => chip(s) + (L.exposed.includes(s) ? "<sup>all years</sup>" : "")).join(" ")}</div></div>` +
-      `<div class="k">Also hidden while locked: ${y}–26 on every open symbol except ${L.exposed.join(", ")} (studied already, all years). Greyed = not on the page yet.</div>`;
+      `<div class="k">Also hidden while locked: ${y}–26 on every open symbol${exp.length ? " except " + exp.join(", ") + " (studied already, all years)" : ""}. Greyed = not on the page yet.</div>` +
+      `<div class="rp-lockfoot"><span class="k">${L.custom ? "Your own lock" + (L.updated ? ", saved " + L.updated.replace("T", " ").replace("Z", " UTC") : "") : "The default lock"}</span>` +
+      `<button type="button" class="rp-tog rp-lockedit">✎ Edit the lock</button></div>`;
+    d.querySelector(".rp-lockedit").onclick = ev => { ev.preventDefault(); state.lockEdit = true; state.lockDraft = null; render(); };
     return d;
+  }
+  function lockEditor(L, have) {     // per symbol: Hidden | Before <year> | All years; grouped by symbol group; saved on the box
+    const y = L.period_from, segs = new Map(), draft = state.lockDraft || (state.lockDraft = new Map());     // the draft survives re-renders
+    const groups = (DATA.groups || []).length ? DATA.groups : [{ name: "Symbols", col: "#8b949e", syms: [...new Set([...L.locked, ...L.exposed, ...have])].sort() }];
+    const all = []; groups.forEach(g => g.syms.forEach(s => { if (!all.includes(s)) all.push(s); }));
+    const was = s => L.locked.includes(s) ? "hide" : L.exposed.includes(s) ? "all" : "pre";
+    all.forEach(s => { if (!draft.has(s)) draft.set(s, was(s)); });
+    const OPTS = [["hide", "Hidden"], ["pre", `Before ${y}`], ["all", "All years"]];
+    const box = el("div", "rp-led");
+    box.appendChild(el("div", "k", `Choose what the lock hides, symbol by symbol. <b>Hidden</b>: off every chart while the lock is on. <b>Before ${y}</b>: shown up to ${y - 1}, ` +
+      `${y}–26 hidden. <b>All years</b>: always shown (already studied). Dashed = no data on the page yet - set it now and it applies when the data arrives. ` +
+      `Saved on the box, so it is the same on every device.`));
+    const st = el("span", "k rp-ledst");
+    const dirty = () => { const n = all.filter(s => draft.get(s) !== was(s)).length; st.className = "k rp-ledst"; st.textContent = n ? `${n} unsaved change${n === 1 ? "" : "s"}` : "No changes"; };
+    const setSym = (s, v) => { draft.set(s, v); const sg = segs.get(s); if (sg) sg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === v)); };
+    groups.forEach(g => {
+      const gb = el("div", "rp-ledg"); gb.style.borderLeftColor = g.col || "#8b949e";
+      const hd = el("div", "rp-ledh", `<span>${g.name}</span>`), q = el("div", "rp-seg rp-ledq");
+      q.appendChild(el("span", "k", "whole group:"));
+      OPTS.forEach(([v, t]) => { const b = el("button", "", t); b.type = "button"; b.onclick = () => { g.syms.forEach(s => setSym(s, v)); dirty(); }; q.appendChild(b); });
+      hd.appendChild(q); gb.appendChild(hd);
+      const list = el("div", "rp-ledl");
+      g.syms.forEach(s => {
+        const r = el("div", "rp-ledr");
+        r.appendChild(el("span", "rp-lchip" + (have.has(s) ? "" : " na"), s));
+        const sg = el("div", "rp-seg rp-ledseg");
+        OPTS.forEach(([v, t]) => { const b = el("button", draft.get(s) === v ? "on" : "", t); b.type = "button"; b.dataset.v = v;
+          b.onclick = () => { setSym(s, v); dirty(); }; sg.appendChild(b); });
+        segs.set(s, sg); r.appendChild(sg); list.appendChild(r);
+      });
+      gb.appendChild(list); box.appendChild(gb);
+    });
+    const post = body => fetch("/research_lock", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) })
+      .then(r => r.json().catch(() => ({ ok: false, error: "HTTP " + r.status })))
+      .then(j => { if (!j.ok) throw new Error(j.error || "not saved"); DATA.research_lock = j.research_lock; state.lockEdit = false; state.lockDraft = null; state.brush = null; render(); })
+      .catch(e => { st.className = "k rp-ledst bad"; st.textContent = "Not saved: " + e.message; btns.forEach(b => { b.disabled = false; }); });
+    const f = el("div", "rp-ledf");
+    const save = el("button", "rp-tog pri", "Save"), cancel = el("button", "rp-tog", "Cancel"), reset = el("button", "rp-tog", "Reset to default");
+    const btns = [save, cancel, reset]; btns.forEach(b => { b.type = "button"; });
+    save.onclick = () => { btns.forEach(b => { b.disabled = true; }); st.className = "k rp-ledst"; st.textContent = "Saving…";
+      post({ locked: all.filter(s => draft.get(s) === "hide").join(","), exposed: all.filter(s => draft.get(s) === "all").join(",") }); };
+    cancel.onclick = () => { state.lockEdit = false; state.lockDraft = null; render(); };
+    reset.onclick = () => { if (!window.confirm("Put the research lock back to the default list? Your own list is deleted.")) return;
+      btns.forEach(b => { b.disabled = true; }); st.className = "k rp-ledst"; st.textContent = "Resetting…"; post({ reset: "1" }); };
+    btns.forEach(b => f.appendChild(b)); f.appendChild(st); box.appendChild(f); dirty();
+    return box;
   }
   function dialCard() {
     const card = el("div", "card rp-dials"), d = state.dial, D = dec(d), pre = presetOf(d);
@@ -169,7 +258,10 @@
       DIALS[0][2]));
     g.appendChild(row("Add at", STG.bar.map((v, i) => [`bar ${v} close`, D.st && D.st.b === i, () => set({ stage: 1 + (D.st ? D.st.s : 0) * 2 + i })]), "", !D.st));
     g.appendChild(row("A: hold weak adds", [["Off", !d.gate, () => set({ gate: 0 })], ["On", !!d.gate, () => set({ gate: 1 })]], DIALS[1][2], !D.st));
-    g.appendChild(row("Shorts stop raise", dl("raise").map((r, i) => [i ? `to +${r[1]}R` : "Off", d.raise === i, () => set({ raise: i })]), DIALS[4][2]));
+    const bm = blocMode(d);
+    g.appendChild(row("Shorts stop raise", dl("raise").map((r, i) => [i ? `to +${r[1]}R` : "Off", d.raise === i, () => set({ raise: i })]),
+      DIALS[4][2] + (bm === 1 ? ". With the bloc rules on the bloc symbols, this still applies to every other symbol (the bloc lock replaces it on the bloc)" :
+                     bm === 2 ? ". Replaced by the bloc lock (every stop to +1R at +1.5R, longs and shorts) while the bloc rules are on for every symbol" : ""), bm === 2));
     g.appendChild(row("Bank share", [["Off", !D.bk, () => set({ bank: 0 })]].concat(BNK.share.map((v, i) => [v === "det" ? "Detector (live)" : `${v * 100}%`, D.bk && D.bk.s === i, () => set({ bank: 1 + i * 3 + (D.bk ? D.bk.l : 1) })])),
       DIALS[2][2]));
     g.appendChild(row("Bank at", BNK.lvl.map((v, i) => [`+${v}R`, D.bk && D.bk.l === i, () => set({ bank: 1 + (D.bk ? D.bk.s : 0) * 3 + i })]), "", !D.bk));
@@ -178,6 +270,8 @@
     g.appendChild(row("Pyramid at", PYRD.lvl.map((v, i) => [`+${v}R`, D.py && D.py.l === i, () => set({ pyr: 1 + (D.py ? D.py.s : 0) * 3 + i })]), "", !D.py));
     g.appendChild(row("B: shorts day-2 cut", dl("cut").map((c, i) => [i ? `avg ≤ ${c[1]}R` : "Off", d.cut === i, () => set({ cut: i })]), DIALS[5][2]));
     g.appendChild(row("I: improving-longs add", dl("addi").map((c, i) => [i ? `+${c[1] * 100}%` : "Off", d.addi === i, () => set({ addi: i })]), DIALS[6][2]));
+    if (HAS_BLOC()) g.appendChild(row("Commodity-bloc rules", [["Off", bm === 0, () => set({ bloc: 0 })], ["Bloc symbols (live)", bm === 1, () => set({ bloc: 1 })],
+      ["Every symbol", bm === 2, () => set({ bloc: 2 })]], DIALS[7][2].replace("BLOCSYMS", [...blocSet()].join(", "))));
     card.appendChild(g);
     return card;
   }
@@ -188,13 +282,13 @@
   function compareCard() {
     const card = el("div", "card rp-cmp");
     card.appendChild(el("div", "row", `<b>Your settings vs the presets</b><span class="k">return and worst drawdown · the Symbols, Direction, Detector, Start, Period filters and the research lock apply</span>`));
-    const sets = [["sel", "Your settings", comboIdx(state.dial)], ["raw", "Raw signal", comboIdx(PRESET.raw())], ["live", "Live setup", comboIdx(PRESET.live())], ["all", "Live + A+B+I", comboIdx(PRESET.all())]];
-    const miss = sets.filter(([, , i]) => !CACHE.has(i));
-    if (miss.length) { Promise.all(miss.map(([, , i]) => fetchCombo(i))).then(() => render()); card.appendChild(el("div", "k", "Loading the presets…")); return card; }
+    const sets = [["sel", "Your settings", state.dial], ["raw", "Raw signal", PRESET.raw()], ["live", "Live setup", PRESET.live()], ["all", "Live + A+B+I", PRESET.all()]];
+    const miss = sets.filter(([, , d]) => !CACHE.has(dialKey(d)));
+    if (miss.length) { Promise.all(miss.map(([, , d]) => fetchDial(d))).then(() => render()); card.appendChild(el("div", "k", "Loading the presets…")); return card; }
     const rows = symRows();
     if (!rows.length) { card.appendChild(el("div", "k", "No historical trades for the filters chosen.")); return card; }
     const pre = presetOf(state.dial);
-    const st = sets.map(([k, name, i]) => { const c = CACHE.get(i), v = rows.map(t => c.R[t.__i]), tot = v.reduce((a, b) => a + b, 0);
+    const st = sets.map(([k, name, d]) => { const c = CACHE.get(dialKey(d)), v = rows.map(t => c.R[t.__i]), tot = v.reduce((a, b) => a + b, 0);
       return { k, name: k === "sel" && pre ? `Your settings (= ${PNAME[pre]})` : name, tot, mean: tot / v.length, dd: maxDD(v), win: v.filter(x => x > 0).length / v.length }; });
     const mg = el("div", "rp-ctl"); mg.appendChild(el("div", "rp-lbl", "Return shown as")); const g = el("div", "rp-seg");
     [["total", "Total R"], ["mean", "R per trade"]].forEach(([v, t]) => { const b = el("button", state.cmpMetric === v ? "on" : "", t); b.type = "button";
@@ -315,7 +409,8 @@
       ["all", "Combined", nLive ? null : "no closed live trades yet"]],
       "Historical: 13 years of backtest trades. Live only: your closed live trades, added automatically every hour. Combined: both together."));
     ctl.appendChild(symbolControl());
-    ctl.appendChild(seg("Show", "show", Object.entries(OUTCOME).map(([k, v]) => [k, v])));
+    ctl.appendChild(seg("Show", "show", Object.entries(OUTCOME).map(([k, v]) => [k, v]),
+      "How the trade ended under the dials. Back to entry: the stop at entry, or a raised stop (the shorts raise, the bloc +1R lock). Cut early: closed by a rule before its stop or TP2 - the bloc 24h cut (bar-6 close) or B's day-2 cut (bar-12 close)"));
     ctl.appendChild(seg("Compare with", "cmp", [["none", "Nothing"]].concat(Object.entries(OUTCOME).filter(([k]) => k !== "all").map(([k, v]) => [k, v, k === state.show ? "already shown" : null])),
       "Draws a second panel with the same filters, and each group's typical path on both panels"));
     ctl.appendChild(seg("Time axis", "time", [["rt", "Days since entry"], ["pg", "Progress to exit"]],
@@ -374,7 +469,7 @@
     // table view
     root.appendChild(tableView(S, G));
     const nh = NH, nl = DATA.trades.length - nh;
-    root.appendChild(el("div", "k rp-foot", `Historical: ${nh.toLocaleString()} trades (all four detectors, ${symList().filter(x => x.hist).length} symbols, 2012–2026; signals from today's EA build), every management combination replayed on M1 (ask-corrected, live spreads) - shown: ${selName()} (combination ${state.dial ? comboIdx(state.dial) : "-"} of build ${DATA.combo_build}). ` +
+    root.appendChild(el("div", "k rp-foot", `Historical: ${nh.toLocaleString()} trades (all four detectors, ${symList().filter(x => x.hist).length} symbols, 2012–2026; signals from today's EA build), every management combination replayed on M1 (ask-corrected, live spreads) - shown: ${selName()} (${state.dial ? comboLabel(state.dial) : "-"} of build ${DATA.combo_build}). ` +
       `Live: ${nl} closed live trade${nl === 1 ? "" : "s"} from the journal and the MT5 feed${DATA.live_built ? ", updated " + DATA.live_built : ""} (refreshed hourly). The line is the price in the trade's own R from the signal's entry.`));
   }
   function maxShare(st, G) {
@@ -680,9 +775,9 @@
     const cmpName = state.mgCmp === "none" ? null : PNAME[state.mgCmp];
     let XC = null;
     if (cmpName) {
-      const ci = comboIdx(PRESET[state.mgCmp]());
-      XC = CACHE.get(ci) || null;
-      if (!XC) { fetchCombo(ci).then(() => render()); card.appendChild(el("div", "k", "Loading the comparison…")); return card; }
+      const cd = PRESET[state.mgCmp]();
+      XC = CACHE.get(dialKey(cd)) || null;
+      if (!XC) { fetchDial(cd).then(() => render()); card.appendChild(el("div", "k", "Loading the comparison…")); return card; }
     }
     const fS = t => X.R[t.__i], fC = XC ? (t => XC.R[t.__i]) : null;
     const L = symList(), by = new Map();
@@ -814,8 +909,11 @@
         DATA = d; NH = 0;
         DATA.trades.forEach((t, i) => { if (t.src !== "live") { t.__i = i; NH = i + 1; } });
         let dd = null; try { dd = JSON.parse(store.get("rp.dial") || "null"); } catch (_) {}
-        const ok = dd && ["stage", "gate", "bank", "pyr", "raise", "cut", "addi"].every(k => Number.isInteger(dd[k]) && dd[k] >= 0) && dd.stage < DATA.dials.stage.length && dd.bank < DATA.dials.bank.length &&
+        const K7 = ["stage", "gate", "bank", "pyr", "raise", "cut", "addi"];
+        const ok = dd && K7.every(k => Number.isInteger(dd[k]) && dd[k] >= 0) && dd.stage < DATA.dials.stage.length && dd.bank < DATA.dials.bank.length &&
                    dd.pyr < DATA.dials.pyr.length && dd.raise < DATA.dials.raise.length && dd.cut < DATA.dials.cutB.length && dd.addi < DATA.dials.addI.length;
+        if (ok && HAS_BLOC() && !(Number.isInteger(dd.bloc) && dd.bloc >= 0 && dd.bloc <= 2)) {      // saved before the bloc dial existed
+          const L = PRESET.live(); dd.bloc = K7.every(k => dd[k] === L[k]) ? L.bloc : 0; }
         return useDial(ok ? dd : PRESET.live()).then(() => window.addEventListener("resize", () => { clearTimeout(window.__rpT); window.__rpT = setTimeout(render, 150); })); })
         .catch(e => { root.innerHTML = '<div class="card bad">Could not load the path data: ' + e + "</div>"; });
     },

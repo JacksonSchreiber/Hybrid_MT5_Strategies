@@ -101,6 +101,13 @@ RPATHS_CSS = """
 .rp-lockwin summary{cursor:pointer}.rp-lockgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin:6px 0}@media(max-width:700px){.rp-lockgrid{grid-template-columns:1fr}}
 .rp-lchip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin:2px 2px 0 0;font-size:12px}.rp-lchip.na{opacity:.45;border-style:dashed}
 .rp-lockwin sup{color:var(--dim);font-size:10px;margin-right:4px}
+.rp-lockfoot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px;margin-top:6px}.rp-lockfoot .rp-tog{padding:4px 12px;font-size:13px}
+.rp-led{margin:6px 0 2px}.rp-ledg{border-left:4px solid #8b949e;padding:2px 0 4px 10px;margin:12px 0}.rp-ledh{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px;font-weight:600;margin-bottom:6px}
+.rp-ledq{align-items:center;font-weight:400}.rp-ledq button{padding:2px 8px;font-size:11px}.rp-ledq .k{font-size:11px;margin-right:2px}
+.rp-ledl{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:6px 18px}.rp-ledr{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.rp-ledr .rp-lchip{min-width:66px;text-align:center;margin:0}.rp-ledseg{flex-wrap:nowrap}.rp-ledseg button{padding:4px 9px;font-size:12px;white-space:nowrap}
+.rp-ledf{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;padding:8px 0 2px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--card)}
+.rp-tog.pri{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}.rp-tog:disabled{opacity:.5;cursor:wait}.rp-ledst.bad{color:var(--dn)}
 .rp-cmpw{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:700px){.rp-cmpw{grid-template-columns:1fr}}.rp-cmpp .k{margin-top:6px}.rp-seg button:disabled{opacity:.35;cursor:not-allowed}
 .rp-tog{background:#0d1117;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:14px;cursor:pointer}.rp-tog.on{color:#fff;border-color:#8b949e;background:#21262d}
 .rp-more summary{cursor:pointer;margin:8px 0 2px}.rp-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px}@media(max-width:700px){.rp-grid{grid-template-columns:1fr}}
@@ -240,14 +247,50 @@ def combo_slice(build: str, idx: str) -> bytes | None:
         f.seek(c * blk); return f.read(blk)
 
 
+def research_lock_path() -> str:
+    return os.path.join(CFG["root"], "web", "research_lock.json")
+
+
+def research_lock() -> dict:
+    """trader 2026-10-04: the Data visualizers' research lock - the trader's own list (<root>/web/research_lock.json, edited on the
+    page, POST /research_lock) when present and valid, else the default (symbol_groups.RESEARCH_LOCK). The single reader."""
+    from live import symbol_groups as SG
+    d = SG.RESEARCH_LOCK; known = {s for g in SG.GROUPS for s in g[3]}
+    j = C.load_json(research_lock_path(), None)
+    if isinstance(j, dict) and isinstance(j.get("locked"), list) and isinstance(j.get("exposed"), list):
+        lk = [s for s in j["locked"] if s in known]; ex = [s for s in j["exposed"] if s in known and s not in lk]
+        return {"locked": lk, "period_from": d["period_from"], "exposed": ex, "custom": True, "updated": j.get("updated")}
+    return {"locked": list(d["locked"]), "period_from": d["period_from"], "exposed": list(d["exposed"]), "custom": False, "updated": None}
+
+
+def research_lock_post(form: dict) -> tuple[bool, dict]:
+    """POST /research_lock: reset=1 (back to the default) or locked=CSV & exposed=CSV (symbol roots). -> (ok, JSON reply)."""
+    from live import symbol_groups as SG
+    order = [s for g in SG.GROUPS for s in g[3]]; known = set(order); aud = os.path.join(CFG["root"], "web", "web_audit.log")
+    if form.get("reset") == "1":
+        if os.path.exists(research_lock_path()): os.remove(research_lock_path())
+        C.append_line(aud, f"{C.now_iso()}|research_lock|reset to default|by=web")
+        return True, {"ok": True, "research_lock": research_lock()}
+    csv = lambda k: [SG.root(x) for x in (form.get(k) or "").split(",") if x.strip()]
+    lk, ex = csv("locked"), csv("exposed")
+    bad = sorted({x for x in lk + ex if x not in known})
+    if bad: return False, {"ok": False, "error": f"unknown symbol(s): {', '.join(bad)}"}
+    both = sorted(set(lk) & set(ex))
+    if both: return False, {"ok": False, "error": f"a symbol can't be both hidden and shown for all years: {', '.join(both)}"}
+    lk = [s for s in order if s in set(lk)]; ex = [s for s in order if s in set(ex)]
+    C.atomic_write_json(research_lock_path(), {"locked": lk, "exposed": ex, "updated": C.now_iso(), "by": "web"})
+    C.append_line(aud, f"{C.now_iso()}|research_lock|locked={','.join(lk)}|exposed={','.join(ex)}|by=web")
+    return True, {"ok": True, "research_lock": research_lock()}
+
+
 _RP_CACHE: dict = {}
 def rpaths_merged() -> tuple[bytes, bytes]:
     """the historical trade paths (live/static/rpaths.json) + the live ones (<root>/web/rpaths_live.json, live/rpaths_live.py,
-    rebuilt hourly by the monitor), merged; cached until either file changes."""
+    rebuilt hourly by the monitor), merged; cached until any of them or the trader's research lock changes."""
     import gzip
     hist = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "rpaths.json")
     live_p = os.path.join(CFG["root"], "web", "rpaths_live.json")
-    key = tuple(os.path.getmtime(p) if os.path.exists(p) else 0 for p in (hist, live_p))
+    key = tuple(os.path.getmtime(p) if os.path.exists(p) else 0 for p in (hist, live_p, research_lock_path()))
     if _RP_CACHE.get("key") != key:
         doc = json.load(open(hist))
         lv = C.load_json(live_p, {}) or {}
@@ -255,7 +298,8 @@ def rpaths_merged() -> tuple[bytes, bytes]:
         doc["live_built"] = lv.get("built")
         from live import symbol_groups as SG
         doc["groups"] = SG.as_json()
-        doc["research_lock"] = SG.RESEARCH_LOCK
+        doc["research_lock"] = research_lock()
+        doc["research_lock_default"] = SG.RESEARCH_LOCK
         raw = json.dumps(doc, separators=(",", ":")).encode()
         _RP_CACHE.update(key=key, raw=raw, gz=gzip.compress(raw, 6))
     return _RP_CACHE["raw"], _RP_CACHE["gz"]
@@ -1524,6 +1568,12 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/telegram_test":
                 ok = C.telegram_send(CFG, f"Test from the web app ({C.now_iso()}). If you read this, alerts from the box reach you.", LOG)
                 return self._redirect("/", "Telegram test sent" if ok else "Telegram send FAILED - check token/chat id/network on the box", ok)
+            if u.path == "/research_lock":                         # trader 2026-10-04: the Data visualizers' lock, edited on the page; always JSON
+                try: ok, rep = research_lock_post(form)
+                except Exception as e:
+                    if LOG: LOG(f"POST /research_lock error {e!r}")
+                    ok, rep = False, {"ok": False, "error": f"server error: {e!r}"}
+                return self._send(json.dumps(rep), "application/json", 200 if ok else 400)
             if u.path == "/kill":
                 en = form.get("enable") == "1"; C.set_kill_switch(CFG, en)
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|kill_switch|{'enabled' if en else 'disabled'}|by=web")
