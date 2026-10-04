@@ -50,7 +50,7 @@
 ## 4. Data visualizers: AUDNZD, AUDCAD, NZDCAD added
 - **Combo build:** 20261004_0346, 8,606 trades x 29,484 combos; verify ALL PASS.
 - **Upload:** combos.bin 2.28 GB, SHA-verified.
-- **Research lock:** the three sit in the research-lock group (hidden while the lock is on).
+- **Research lock:** the three were first left on the locked list. On 2026-10-04 at 17:15Z they were moved to exposed (all years), since their holdout look was spent.
 - **Status: LIVE.** The upload was SHA-verified, `deploy --code` shipped the matching rpaths.json at 07:57Z, and the combo slices serve the right size.
 
 ## 5. Downloads started (download + M1 export only, no MT5 processing)
