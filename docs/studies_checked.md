@@ -139,3 +139,15 @@ nothing is re-run by accident and the coach can see what was tried.
   - Fixed 2026-10-04: checks inside the entry bar now start at the first M1 minute. Sunday-open bars have no data for 60-120 min, so
     about 2% of trades were skipping every step. The 4h/8h/12h runs were unaffected. `--avgcheck H`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
+- **Similar-trades (nearest neighbour) test** (trader 2026-10-04, for the per-signal settings / path chart proposal).
+  - **Setup:** 8,599 trades. Neighbours are the 50 nearest in the same group + direction + detector, matched on 12 signal-time
+    features, and taken from other years (and, separately, from earlier years only).
+  - **Outcomes: not predicted.**
+    - raw R skill vs the plain group average -0.016; live-setup R -0.013; reached TP2 -0.009 (all < 0);
+    - no group > +0.004; larger k only approaches 0;
+    - no single feature has positive skill.
+  - **Letting the neighbours pick the preset: no gain** (-0.007 vs the group's best preset -0.002, t -0.4).
+  - **Move size: predicted.** Best R in the first 24h: skill +0.08, quintiles +0.60 -> +1.55R. That is mostly mechanical (stop size
+    vs ATR alone gives +0.16); without stop/TP features the context still gives +0.03. The 12-bar path +0.08.
+  - Read: neighbours tell you how far a trade typically travels (in R), not whether it wins or which management to use.
+    `neighbor_path_test.py`, `data/study/neighbor_path_report.txt`
