@@ -134,8 +134,9 @@ nothing is re-run by accident and the coach can see what was tried.
     - **+ 24h cut unless +1.5R + +1R lock at +1.5R (no 8h step):** at 0R USD **+0.035** (DD 21) / crosses -0.037 (DD 75); at
       -0.05R +0.052 / -0.048. The best worse-group so far; pooled about 0.
     - **+ -0.5R at 8h + +0.5R at 24h:** at 0R +0.005 / -0.060; at -0.05R +0.002 / -0.070.
-    - On the crosses longs carry the loss (-0.062 vs shorts -0.013), and the lock and the cut lose R vs raw there (-6 / -13R), where
-      on USD they gain (+71 / +23R). `--hours none --avgcheck 1 --bloc`
+    - On the crosses longs carry the loss (-0.062 vs shorts -0.013). (The "lock / cut vs raw" figures, -6 / -13R on the crosses vs
+      +71 / +23R on USD, group trades by how they exited, which sorts them by outcome. The coach ruled 2026-10-04 that they are not
+      evidence of context dependence; don't cite them.) `--hours none --avgcheck 1 --bloc`
   - Fixed 2026-10-04: checks inside the entry bar now start at the first M1 minute. Sunday-open bars have no data for 60-120 min, so
     about 2% of trades were skipping every step. The 4h/8h/12h runs were unaffected. `--avgcheck H`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
