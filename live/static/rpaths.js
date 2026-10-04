@@ -167,6 +167,59 @@
     return card;
   }
 
+  // ---------------------------------------------------------------- your settings vs the presets (trader 2026-10-03)
+  const CMPC = { sel: "#c98bff", raw: "#8b949e", live: "#3987e5", all: "#2ea88c" };
+  state.cmpMetric = store.get("rp.cmpm") === "mean" ? "mean" : "total";
+  function compareCard() {
+    const card = el("div", "card rp-cmp");
+    card.appendChild(el("div", "row", `<b>Your settings vs the presets</b><span class="k">return and worst drawdown · the Symbols, Direction, Detector, Start, Period filters and the research lock apply</span>`));
+    const sets = [["sel", "Your settings", comboIdx(state.dial)], ["raw", "Raw signal", comboIdx(PRESET.raw())], ["live", "Live setup", comboIdx(PRESET.live())], ["all", "Live + A+B+I", comboIdx(PRESET.all())]];
+    const miss = sets.filter(([, , i]) => !CACHE.has(i));
+    if (miss.length) { Promise.all(miss.map(([, , i]) => fetchCombo(i))).then(() => render()); card.appendChild(el("div", "k", "Loading the presets…")); return card; }
+    const rows = symRows();
+    if (!rows.length) { card.appendChild(el("div", "k", "No historical trades for the filters chosen.")); return card; }
+    const pre = presetOf(state.dial);
+    const st = sets.map(([k, name, i]) => { const c = CACHE.get(i), v = rows.map(t => c.R[t.__i]), tot = v.reduce((a, b) => a + b, 0);
+      return { k, name: k === "sel" && pre ? `Your settings (= ${PNAME[pre]})` : name, tot, mean: tot / v.length, dd: maxDD(v), win: v.filter(x => x > 0).length / v.length }; });
+    const mg = el("div", "rp-ctl"); mg.appendChild(el("div", "rp-lbl", "Return shown as")); const g = el("div", "rp-seg");
+    [["total", "Total R"], ["mean", "R per trade"]].forEach(([v, t]) => { const b = el("button", state.cmpMetric === v ? "on" : "", t); b.type = "button";
+      b.onclick = () => { state.cmpMetric = v; store.set("rp.cmpm", v); render(); }; g.appendChild(b); });
+    mg.appendChild(g); card.appendChild(mg);
+    const wrap = el("div", "rp-cmpw");
+    const mkPanel = (title, vals, fmt) => { const pnl = el("div", "rp-cmpp"); pnl.appendChild(el("div", "k", title)); const box = el("div", "rp-cv"); const cv = el("canvas");
+      cv.style.height = "240px"; cv.style.cursor = "default"; box.appendChild(cv); pnl.appendChild(box); wrap.appendChild(pnl);
+      requestAnimationFrame(() => drawColumns(cv, st.map((r, q) => ({ name: r.name, k: r.k, v: vals[q] })), fmt)); };
+    const fR = state.cmpMetric === "mean" ? (v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3) + "R") : (v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1) + "R");
+    mkPanel(state.cmpMetric === "mean" ? "Return: R per trade" : "Return: total R", st.map(r => state.cmpMetric === "mean" ? r.mean : r.tot), fR);
+    mkPanel("Worst drawdown (smaller is better)", st.map(r => -r.dd), v => Math.abs(v).toFixed(1) + "R");
+    card.appendChild(wrap);
+    let h = "<table><tr><th></th><th>R per trade</th><th>total R</th><th>worst DD</th><th>total R / DD</th><th>win%</th></tr>";
+    st.forEach(r => { h += `<tr><td><span class="rp-sw sm" style="background:${CMPC[r.k]}"></span>${r.name}</td><td>${(r.mean >= 0 ? "+" : "−") + Math.abs(r.mean).toFixed(3)}</td><td>${(r.tot >= 0 ? "+" : "−") + Math.abs(r.tot).toFixed(1)}</td>` +
+      `<td>${r.dd.toFixed(1)}</td><td>${r.dd > 0 ? (r.tot / r.dd).toFixed(2) : "–"}</td><td>${(r.win * 100).toFixed(0)}%</td></tr>`; });
+    card.appendChild(el("div", "rp-tablewrap", h + "</table>"));
+    card.appendChild(el("div", "k", `${rows.length.toLocaleString()} historical trades · full-position R, costs in · drawdown = worst peak-to-trough of the cumulative R in signal-date order`));
+    return card;
+  }
+  function drawColumns(cv, cols, fmt) {
+    const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr; const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
+    const pad = { l: 8, r: 8, t: 22, b: 38 }, pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+    let lo = Math.min(0, ...cols.map(c => c.v)), hi = Math.max(0, ...cols.map(c => c.v)); const sp = (hi - lo) || 1;
+    if (lo < 0) lo -= sp * 0.12; if (hi > 0) hi += sp * 0.12;
+    const Y = v => pad.t + (1 - (v - lo) / (hi - lo)) * ph;
+    ctx.fillStyle = C.surface; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "#6e7681"; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(pad.l, Y(0)); ctx.lineTo(W - pad.r, Y(0)); ctx.stroke();
+    const slot = pw / cols.length, bw = Math.min(70, slot * 0.6);
+    ctx.font = "12px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.textAlign = "center";
+    cols.forEach((c, i) => {
+      const x = pad.l + slot * i + slot / 2, y0 = Y(0), y1 = Y(c.v);
+      ctx.fillStyle = CMPC[c.k]; ctx.fillRect(x - bw / 2, Math.min(y0, y1), bw, Math.max(1, Math.abs(y1 - y0)));
+      if (c.k === "sel") { ctx.strokeStyle = "#f0f6fc"; ctx.lineWidth = 1.5; ctx.strokeRect(x - bw / 2, Math.min(y0, y1), bw, Math.max(1, Math.abs(y1 - y0))); }
+      ctx.fillStyle = C.text; ctx.textBaseline = c.v >= 0 ? "bottom" : "top"; ctx.fillText(fmt(c.v), x, c.v >= 0 ? y1 - 4 : y1 + 4);
+      ctx.fillStyle = C.dim; ctx.textBaseline = "top"; ctx.fillText(c.name.split(" (")[0], x, H - pad.b + 8);
+    });
+  }
+
   function select(outcome) {
     return DATA.trades.filter(t =>
       (state.source === "all" || t.src === state.source) &&
@@ -239,6 +292,7 @@
     const groups = [{ key: state.show, trades: select(state.show) }];
     if (state.cmp !== "none") groups.push({ key: state.cmp, trades: select(state.cmp) });
     root.appendChild(dialCard());
+    root.appendChild(compareCard());
     // controls
     const ctl = el("div", "card rp-ctls");
     const nLive = DATA.trades.filter(t => t.src === "live").length;
