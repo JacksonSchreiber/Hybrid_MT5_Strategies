@@ -110,14 +110,18 @@ def do(sym):
 
 POP = []
 def main():
-    global POP
+    global POP, SYMS, REPORT
     T0 = time.time(); POP = [x for x in CB.population() if x["sym"] in SYMS]
+    if "--all6" in sys.argv:                 # trader 2026-10-04: all six bloc symbols. AUDCAD/AUDNZD/NZDCAD's one look was spent the
+        from pipeline import cbloc_holdout_look as HL     # same day (T / T+L1.0 / v5.2) - this is a check, not a clean test.
+        HL.register_holdout(); hp, _ = HL.population(HL.HOLD)
+        POP = POP + hp; SYMS = SYMS + HL.HOLD; REPORT = REPORT.replace(".txt", "_all6.txt")
     assert [v[0] for v in C.VARIANTS[:2] + [C.VARIANTS[6]]] == ["live", "T", "T+L1.0"]
     with Pool(3) as pool: res = sorted([z for r in pool.map(do, SYMS) for z in r], key=lambda z: z[0])
     d = max(abs(z[4][q] - z[5][q]) for z in res for q in range(3))
     col = lambda q: [z[4][q] for z in res]; ref = col(0); tl = col(2)
-    L = [__doc__.rstrip(), f"\nRUN {time.strftime('%Y-%m-%d %H:%M')}: {len(res)} trades, {time.time() - T0:.0f}s; live / T / T+L1.0 vs run_h: max |diff| {d:.1e} "
-         f"({'EXACT' if d < 1e-9 else 'MISMATCH'})\n"]
+    L = [__doc__.rstrip(), f"\nRUN {time.strftime('%Y-%m-%d %H:%M')}: {len(res)} trades ({', '.join(s.split('.')[0] for s in SYMS)}), {time.time() - T0:.0f}s; "
+         f"live / T / T+L1.0 vs run_h: max |diff| {d:.1e} ({'EXACT' if d < 1e-9 else 'MISMATCH'})\n"]
     for q, (nm, *_) in enumerate(V):
         v = col(q); sub = lambda f: st.mean([z[4][q] for z in res if f(z)])
         L.append(f"  {nm:40} {st.mean(v):+.4f}R  total {sum(v):+7.1f}  DD {maxdd(v):6.1f}  tot/DD {sum(v) / maxdd(v):+6.2f}"
