@@ -221,10 +221,26 @@ def run_trade(p, combos, PI=None):
 
 
 # ------------------------------------------------------------------------------------------------------------- population
+_HOLD_ROWS = None
+def holdout_rows():
+    """trader 2026-10-04: AUDNZD / AUDCAD / NZDCAD (the commodity-bloc holdout, its one look spent 2026-10-04) for the Data
+    visualizers - registered the way cbloc_holdout_look does it, journals from data/study/holdout_aa, drag from its drag file.
+    They sit in symbol_groups.RESEARCH_LOCK, so the page hides them while the lock is on."""
+    global _HOLD_ROWS
+    if _HOLD_ROWS is None:
+        from pipeline import cbloc_holdout_look as HL
+        HL.register_holdout()
+        drag = json.load(open(OI.HOLDOUT_DRAGF))
+        rows, _ = HL.population(HL.HOLD)
+        _HOLD_ROWS = [dict(x, cost=drag[OI.root(x["sym"])]["drag_scaled"]) for x in rows]
+    return _HOLD_ROWS
+
+
 def population():
     new = [s for s in OI.NEW if s != "US30.dk"]
     bad, drag = Q.check_new(new)
     ALL = Q.pop_original(set(ORIG), aa_trendcont=True) + Q.pop_new([s for s in new if s not in bad], drag)
+    if os.environ.get("CB_HOLDOUT") == "1": ALL = ALL + holdout_rows()      # opt-in: the visualizer build only
     return sorted(ALL, key=lambda x: (x["sym"], x["t"]))       # symbol-major: concurrent workers share one symbol's pages
 
 
