@@ -219,6 +219,20 @@ def wiki_page(q: dict) -> str:
     return page("Wiki", body, "wiki")
 
 
+def combo_slice(build: str, idx: str) -> bytes | None:
+    """trader 2026-10-03: combo <idx> of combo build <build> - n_trades x rec_bytes from live/static/combos.bin (pipeline/combo_pack.py;
+    combos.json beside it names the build). None when the build is stale or the index is out of range."""
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    try:
+        m = json.load(open(os.path.join(d, "combos.json"))); c = int(idx)
+    except (OSError, ValueError):
+        return None
+    if build != m.get("build") or not (0 <= c < m["n_combos"]): return None
+    blk = m["n_trades"] * m["rec_bytes"]
+    with open(os.path.join(d, "combos.bin"), "rb") as f:
+        f.seek(c * blk); return f.read(blk)
+
+
 _RP_CACHE: dict = {}
 def rpaths_merged() -> tuple[bytes, bytes]:
     """the historical trade paths (live/static/rpaths.json) + the live ones (<root>/web/rpaths_live.json, live/rpaths_live.py,
@@ -1387,6 +1401,15 @@ class H(BaseHTTPRequestHandler):
                     self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Encoding", "gzip")
                     self.send_header("Content-Length", str(len(gz))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(gz); return
                 return self._send(raw, "application/json")
+            if parts[0] == "combo" and len(parts) == 3:                                    # one management combo's exits for every trade
+                body = combo_slice(parts[1], parts[2])
+                if body is None: return self._send("unknown combo / build", "text/plain", 404)
+                import gzip as _gz
+                gz = "gzip" in (self.headers.get("Accept-Encoding") or ""); data = _gz.compress(body, 5) if gz else body
+                self.send_response(200); self.send_header("Content-Type", "application/octet-stream")
+                if gz: self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self.end_headers(); self.wfile.write(data); return
             if parts[0] == "paths": return self._send(paths_page(q))
             if parts[0] == "wiki": return self._send(wiki_page(q))
             if parts[0] == "api" and len(parts) == 3 and parts[1] == "bars":

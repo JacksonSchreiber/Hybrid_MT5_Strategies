@@ -39,6 +39,7 @@ from pipeline import oos_build_inputs as OI                  # noqa: E402
 from pipeline.inverse_study import BANKF                     # noqa: E402
 from pipeline.m1_cache import CachedSym                      # noqa: E402
 from pipeline.per_symbol_stats import ORIG                   # noqa: E402
+from pipeline.progress import Bar                            # noqa: E402
 
 MODE = "SCALED"
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "combos")
@@ -288,17 +289,18 @@ def _warm():
         if p: run_trade(p, COMBOS[:3]); return
 
 
-def run_pool(pop, outp, workers, chunk=10):
+def run_pool(pop, outp, workers, chunk=10, progress=False):
     import multiprocessing as mp
     global POP, COMBOS, OUTP
     POP, COMBOS, OUTP = pop, grid(), outp
     np.memmap(outp, dtype=REC, mode="w+", shape=(len(POP), len(COMBOS))).flush()
     _warm(); _SYMS.clear()
     units = units_of(POP, chunk)
+    bar = Bar(len(POP), "build", "trades") if progress else None
     with mp.get_context("fork").Pool(workers) as pool:
-        done = 0
         for k in pool.imap_unordered(_work, units):
-            done += k
+            if bar: bar.update(k)
+    if bar: bar.done()
     return len(POP), len(COMBOS)
 
 
@@ -422,7 +424,7 @@ def bench(sym, workers_list, limit=None):
 def build(workers):
     pop = population(); combos = grid()
     run = time.strftime("%Y%m%d_%H%M"); d = os.path.join(OUTDIR, run); os.makedirs(d, exist_ok=True)
-    t = time.time(); run_pool(pop, os.path.join(d, "results.u8"), workers)
+    t = time.time(); run_pool(pop, os.path.join(d, "results.u8"), workers, progress=True)
     meta = {"built": time.strftime("%Y-%m-%d %H:%M"), "mode": MODE, "minutes": round((time.time() - t) / 60, 1), "record": str(REC.descr),
             "dials": {"stage": STAGE, "bank": BANK, "pyr": PYR, "raise": RAISE, "cutB": CUTB, "addI": ADDI, "raise_trigger": SR_TRIG},
             "combos": combos, "trades": [[x["sym"], x["t"], x["strat"], int(x["up"])] for x in pop]}

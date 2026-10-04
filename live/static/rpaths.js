@@ -5,25 +5,33 @@
  * Layers: heatmap (share of trades in each time x R cell), fan (median + middle 50% / 80% bands), faint sample paths.
  * Drag a box on the chart: the share of the selection whose path passed through it.
  * 2026-10-03: all 16 downloaded symbols (dt date, g 0 original / 1 new, p partial years, rb / ra full-position R x1000 under the live
- * stack / live + A+B+I); a Symbols show/hide filter on every chart (remembered per browser); the "By symbol" card. */
+ * stack / live + A+B+I); a Symbols show/hide filter on every chart (remembered per browser); the "By symbol" card.
+ * 2026-10-03 (research tool): EVERY chart follows the management dials. Historical trades carry only their price path (rt, x100, long
+ * enough for any combo's exit); a dial setting fetches that combo's exits for every trade from /combo/<build>/<index> (9-byte records:
+ * R int16 x1000, exit H4 bars uint16 x10, exit kind, event bars for the staged add / bank / pyramid / I add - pipeline/combo_pack.py).
+ * Y axis: the price (as before) or the position's value (rebuilt from the events; its last point is the exact R). Research lock: hide
+ * 2025-26 and the nine new symbols while forming an idea. Live trades always show what actually happened. */
 (function () {
   "use strict";
   const C = {
     surface: "#161b22", grid: "#21262d", axis: "#8b949e", text: "#c9d1d9", dim: "#8b949e",
-    hues: { tp2: [57, 135, 229], be: [217, 89, 38], sl: [144, 133, 233], all: [57, 135, 229] },   // blue, orange, violet (dark-mode slots 1, 2, 7)
-    hueHex: { tp2: "#3987e5", be: "#d95926", sl: "#9085e9", all: "#3987e5" },
+    hues: { tp2: [57, 135, 229], be: [217, 89, 38], sl: [144, 133, 233], cut: [46, 168, 140], all: [57, 135, 229] },   // blue, orange, violet, teal
+    hueHex: { tp2: "#3987e5", be: "#d95926", sl: "#9085e9", cut: "#2ea88c", all: "#3987e5" },
     stop: "#f85149", bank: "#8b949e",
   };
-  const OUTCOME = { tp2: "TP2 winners", be: "Back to entry", sl: "Stopped out", all: "All trades" };
+  const OUTCOME = { tp2: "TP2 winners", be: "Back to entry", sl: "Stopped out", cut: "Cut at day 2", all: "All trades" };
+  const KIND_OUT = ["sl", "be", "be", "tp2", "cut", "end"];          // combo exit kind -> outcome group ("end" = still open at the window end: All only)
   const DETS = ["TrendCont", "SweepMSS", "DeepFib", "EMArevQ"];
   const state = {
     show: "tp2", cmp: "none", time: "rt", dir: "all", det: "all", start: "all", period: "all", shade: "open",
     heat: true, fan: true, samples: false, source: "backtest", brush: null, avgCarry: false, avgDays: 10, avgBand: "hl",
-    hide: new Set(), symCurve: "pooled", symMetric: "mean", mg: null, mgCmp: "live",
+    hide: new Set(), symCurve: "pooled", symMetric: "mean", mgCmp: "live",
+    dial: null, ymode: "price", lock: false,
   };
   const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} } };
   try { const h = JSON.parse(store.get("rp.hide") || "[]"); if (Array.isArray(h)) state.hide = new Set(h); } catch (_) {}
   const saveHide = () => store.set("rp.hide", JSON.stringify([...state.hide]));
+  state.ymode = store.get("rp.ymode") === "pos" ? "pos" : "price"; state.lock = store.get("rp.lock") === "1"; state.mgCmp = store.get("rp.mgcmp") || "live";
   let DATA = null, root = null;
 
   // ---------------------------------------------------------------- helpers
@@ -33,36 +41,163 @@
   const quant = (arr, q) => { if (!arr.length) return NaN; const a = arr.slice().sort((x, y) => x - y); const i = (a.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i); return a[lo] + (a[hi] - a[lo]) * (i - lo); };
   function rng(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
 
+  // ---------------------------------------------------------------- management combos (trader 2026-10-03)
+  const DIALS = [["stage", "Staged entry", "First share at the signal, the rest at that bar's close"],
+    ["gate", "A: hold weak adds", "The add waits for +1R when the trial averaged below 0 by the add bar (needs staging)"],
+    ["bank", "Bank", "Share banked at the level (TP1 if nearer, capped at TP2), then the stop goes to entry. det = the detector's live share (TrendCont/DeepFib 25%, SweepMSS/EMArevQ 50%)"],
+    ["pyr", "Pyramid", "Add this share of full size at this R (after the bank when the bank is on)"],
+    ["raise", "Shorts stop raise", "Shorts: every stop to this R when +1.5R trades"],
+    ["cut", "B: shorts day-2 cut", "Close a short at the day-2 close if its average R is at or below this"],
+    ["addi", "I: improving-longs add", "Longs: add this share at the day-2 close when day 2 averages better than day 1"]];
+  const DKEY = { stage: "stage", bank: "bank", pyr: "pyr", raise: "raise", cut: "cutB", addi: "addI" };
+  const dl = k => DATA.dials[DKEY[k]];
+  const di = (k, name) => Math.max(0, dl(k).findIndex(x => String(x[0]) === name));
+  const PRESET = {
+    raw: () => ({ stage: 0, gate: 0, bank: 0, pyr: 0, raise: 0, cut: 0, addi: 0 }),
+    live: () => ({ stage: di("stage", "25@6"), gate: 0, bank: di("bank", "det@1.0"), pyr: di("pyr", "0.5@1.5"), raise: di("raise", "0.25"), cut: 0, addi: 0 }),
+    all: () => ({ stage: di("stage", "25@6"), gate: 1, bank: di("bank", "det@1.0"), pyr: di("pyr", "0.5@1.5"), raise: di("raise", "0.25"), cut: di("cut", "0.5"), addi: di("addi", "0.5") }) };
+  const PNAME = { raw: "Raw signal", live: "Live setup", all: "Live + A+B+I" };
+  function comboIdx(d) {
+    const D = DATA.dials, nP = D.pyr.length, nR = D.raise.length, nC = D.cutB.length, nI = D.addI.length;
+    const inner = D.bank.length * nP * nR * nC * nI; let block = 0;
+    for (let si = 0; si < d.stage; si++) block += D.stage[si][1] >= 1 ? 1 : 2;
+    block += D.stage[d.stage][1] >= 1 ? 0 : (d.gate ? 1 : 0);
+    return block * inner + ((((d.bank * nP + d.pyr) * nR + d.raise) * nC + d.cut) * nI + d.addi);
+  }
+  const presetOf = d => Object.keys(PRESET).find(k => comboIdx(PRESET[k]()) === comboIdx(d));
+  const selName = () => { const p = presetOf(state.dial); return p ? PNAME[p] : "Your combo"; };
+  const CACHE = new Map(); let X = null, NH = 0;                       // X = the selected combo's exits; NH = historical trades
+  function fetchCombo(idx) {
+    if (CACHE.has(idx)) return Promise.resolve(CACHE.get(idx));
+    return fetch(`/combo/${DATA.combo_build}/${idx}`).then(r => { if (!r.ok) throw new Error("combo " + idx + ": HTTP " + r.status); return r.arrayBuffer(); }).then(buf => {
+      const dv = new DataView(buf), n = buf.byteLength / DATA.rec_bytes, R = new Float32Array(n), xb = new Float32Array(n), kind = new Uint8Array(n), ev = new Uint8Array(n * 4);
+      for (let i = 0, o = 0; i < n; i++, o += 9) { R[i] = dv.getInt16(o, true) / 1000; xb[i] = dv.getUint16(o + 2, true) / 10; kind[i] = dv.getUint8(o + 4);
+        for (let q = 0; q < 4; q++) ev[i * 4 + q] = dv.getUint8(o + 5 + q); }
+      const c = { idx, R, xb, kind, ev }; CACHE.set(idx, c);
+      if (CACHE.size > 40) CACHE.delete(CACHE.keys().next().value);
+      return c; });
+  }
+  function useDial(d) {
+    if (DATA.dials.stage[d.stage][1] >= 1) d.gate = 0;
+    state.dial = d; store.set("rp.dial", JSON.stringify(d)); state.brush = null;
+    const ind = document.getElementById("rp-loading"); if (ind) ind.style.visibility = "visible";
+    return fetchCombo(comboIdx(d)).then(c => { X = c; render(); }).catch(e => { root.insertAdjacentHTML("afterbegin", `<div class="card bad">Could not load the combo: ${e.message}</div>`); });
+  }
+  const isHist = t => t.__i != null;
+  const exitXb = t => isHist(t) ? X.xb[t.__i] : t.xb;
+  const outOf = t => isHist(t) ? KIND_OUT[X.kind[t.__i]] : t.o;
+  // the path of t under the selected combo: time "rt" (one point per H4 bar close, last = the exit) or "pg" (41 points entry -> exit)
+  function exitPrice(t, i) {
+    const k = X.kind[i];
+    if (k === 0) return -1; if (k === 1) return 0; if (k === 2) return +dl("raise")[state.dial.raise][1]; if (k === 3) return t.tp;
+    const b = Math.max(1, Math.min(t.rt.length, Math.ceil(X.xb[i]))); return t.rt.length ? t.rt[b - 1] / 100 : 0;
+  }
+  function posValues(t, i, nb) {      // the position's value (full-position R) at the close of bars 1..nb, from the combo's events
+    const d = state.dial, st = DATA.dials.stage[d.stage], F0 = st[1], N = st[2], bk = dl("bank")[d.bank], py = dl("pyr")[d.pyr], ai = dl("addi")[d.addi];
+    const pr = b => t.rt[Math.min(t.rt.length, b) - 1] / 100;
+    let bankLvl = bk[2] == null ? null : (t.t1 != null ? Math.min(bk[2], t.t1) : bk[2]); if (bankLvl != null && t.tp != null && bankLvl >= t.tp - 1e-9) bankLvl = t.tp;
+    const bf = bk[1] == null ? 0 : (bk[1] === "det" ? ((t.d === "TrendCont" || t.d === "DeepFib") ? 0.25 : 0.5) : +bk[1]);
+    const ev = q => { const v = X.ev[i * 4 + q]; return v === 255 ? null : v; };
+    // events in time order; same-bar ties in the engine's per-minute order: bank, pyramid, (held) add, I add
+    const evs = [[ev(1), 0, "bank"], [ev(2), 1, "pyr"], [ev(0), 2, "add"], [ev(3), 3, "imp"]].filter(e => e[0] != null).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const legs = [[F0, 0]]; let locked = 0, k = 0; const out = [];
+    for (let b = 1; b <= nb; b++) {
+      while (k < evs.length && evs[k][0] <= b) {
+        const [eb, , what] = evs[k++];
+        if (what === "bank" && bankLvl != null) { let s = 0; for (const L of legs) s += L[0] * (bankLvl - L[1]); locked += bf * s; for (const L of legs) L[0] *= 1 - bf; }
+        else if (what === "pyr") legs.push([+py[1], +py[2]]);
+        else if (what === "add") legs.push([1 - F0, eb > N ? 1.0 : (t.rt.length >= N ? pr(N) : 0)]);   // held add releases at +1R
+        else if (what === "imp" && t.rt.length >= 12) legs.push([+ai[1], pr(12)]);
+      }
+      const p = pr(b); let v = locked; for (const L of legs) v += L[0] * (p - L[1]); out.push(v);
+    }
+    return out;
+  }
+  function comboPath(t, time) {
+    const key = X.idx + state.ymode + time;
+    if (t.__pk === key) return t.__pv;
+    const i = t.__i, xb = X.xb[i], cap = DATA.cap_bars, nb = Math.min(Math.floor(xb), t.rt.length, cap);
+    const pos = state.ymode === "pos", vals = pos ? posValues(t, i, nb) : t.rt.slice(0, nb).map(v => v / 100);
+    const last = pos ? X.R[i] : exitPrice(t, i), done = xb <= cap && Math.floor(xb) <= t.rt.length;
+    let out;
+    if (time === "rt") out = done ? vals.concat([last]) : vals;
+    else {   // progress: 41 points over (0, 0), (1, v1) ... (nb, v_nb), (xb, last)
+      const T = [0], V = [0]; vals.forEach((v, k) => { T.push(k + 1); V.push(v); }); if (done && xb > T[T.length - 1]) { T.push(xb); V.push(last); } else if (done) V[V.length - 1] = last;
+      const end = T[T.length - 1]; out = [];
+      for (let q = 0; q < 41; q++) { const tt = end * q / 40; let k = 1; while (k < T.length - 1 && T[k] < tt) k++;
+        const t0 = T[k - 1], t1 = T[k] ?? t0; out.push(t1 > t0 ? V[k - 1] + (V[k] - V[k - 1]) * (tt - t0) / (t1 - t0) : V[k]); }
+    }
+    t.__pk = key; t.__pv = out; return out;
+  }
+
+  // the dials panel: combined dials split into simple pairs (share x level), mapped back to the grid's indices
+  const STG = { share: [0.25, 0.5], bar: [6, 3] }, BNK = { share: ["det", 0.25, 0.5, 0.75], lvl: [0.75, 1.0, 1.25] }, PYRD = { size: [0.25, 0.5], lvl: [1.25, 1.5, 2.0] };
+  const dec = d => ({ st: d.stage ? { s: Math.floor((d.stage - 1) / 2), b: (d.stage - 1) % 2 } : null, bk: d.bank ? { s: Math.floor((d.bank - 1) / 3), l: (d.bank - 1) % 3 } : null,
+                      py: d.pyr ? { s: Math.floor((d.pyr - 1) / 3), l: (d.pyr - 1) % 3 } : null });
+  function dialCard() {
+    const card = el("div", "card rp-dials"), d = state.dial, D = dec(d), pre = presetOf(d);
+    card.appendChild(el("div", "row", `<b>Management after the signal</b><span class="k">every chart below follows these dials · ${DATA.n_combos.toLocaleString()} combinations precomputed</span>` +
+      `<span id="rp-loading" class="k" style="visibility:hidden;margin-left:auto">loading…</span>`));
+    const set = nd => useDial({ ...state.dial, ...nd });
+    const row = (label, opts, help, dis) => { const w = el("div", "rp-ctl"); w.appendChild(el("div", "rp-lbl", label + (help ? ` <span class="rp-q" title="${help}">?</span>` : "")));
+      const g = el("div", "rp-seg"); opts.forEach(([t, on, fn, off]) => { const b = el("button", on ? "on" : "", t); b.type = "button"; if (dis || off) { b.disabled = true; } b.onclick = fn; g.appendChild(b); });
+      w.appendChild(g); return w; };
+    const top = el("div", "rp-seg"); top.style.margin = "6px 0";
+    Object.keys(PRESET).forEach(k => { const b = el("button", pre === k ? "on" : "", PNAME[k] + (k === "raw" ? " (nothing added)" : k === "all" ? " (everything)" : "")); b.type = "button"; b.onclick = () => useDial(PRESET[k]()); top.appendChild(b); });
+    const lk = el("button", "rp-tog" + (state.lock ? " on" : ""), (state.lock ? "🔒 " : "") + "Research lock"); lk.type = "button";
+    lk.title = "Hide 2025-26 and the nine new symbols while you form an idea; unlock to test it on data you did not look at.";
+    lk.onclick = () => { state.lock = !state.lock; store.set("rp.lock", state.lock ? "1" : "0"); state.brush = null; render(); };
+    top.appendChild(lk); card.appendChild(top);
+    if (state.lock) card.appendChild(el("div", "k", "🔒 Locked: 2025–26 and the nine new symbols are hidden on every chart (the holdout). Unlock to check an idea on them."));
+    const g = el("div", "rp-grid");
+    g.appendChild(row("Staged entry", [["Off", !D.st, () => set({ stage: 0, gate: 0 })]].concat(STG.share.map((v, i) => [`${v * 100}% first`, D.st && D.st.s === i, () => set({ stage: 1 + i * 2 + (D.st ? D.st.b : 0) })])),
+      DIALS[0][2]));
+    g.appendChild(row("Add at", STG.bar.map((v, i) => [`bar ${v} close`, D.st && D.st.b === i, () => set({ stage: 1 + (D.st ? D.st.s : 0) * 2 + i })]), "", !D.st));
+    g.appendChild(row("A: hold weak adds", [["Off", !d.gate, () => set({ gate: 0 })], ["On", !!d.gate, () => set({ gate: 1 })]], DIALS[1][2], !D.st));
+    g.appendChild(row("Shorts stop raise", dl("raise").map((r, i) => [i ? `to +${r[1]}R` : "Off", d.raise === i, () => set({ raise: i })]), DIALS[4][2]));
+    g.appendChild(row("Bank share", [["Off", !D.bk, () => set({ bank: 0 })]].concat(BNK.share.map((v, i) => [v === "det" ? "Detector (live)" : `${v * 100}%`, D.bk && D.bk.s === i, () => set({ bank: 1 + i * 3 + (D.bk ? D.bk.l : 1) })])),
+      DIALS[2][2]));
+    g.appendChild(row("Bank at", BNK.lvl.map((v, i) => [`+${v}R`, D.bk && D.bk.l === i, () => set({ bank: 1 + (D.bk ? D.bk.s : 0) * 3 + i })]), "", !D.bk));
+    g.appendChild(row("Pyramid size", [["Off", !D.py, () => set({ pyr: 0 })]].concat(PYRD.size.map((v, i) => [`+${v * 100}%`, D.py && D.py.s === i, () => set({ pyr: 1 + i * 3 + (D.py ? D.py.l : 1) })])),
+      DIALS[3][2]));
+    g.appendChild(row("Pyramid at", PYRD.lvl.map((v, i) => [`+${v}R`, D.py && D.py.l === i, () => set({ pyr: 1 + (D.py ? D.py.s : 0) * 3 + i })]), "", !D.py));
+    g.appendChild(row("B: shorts day-2 cut", dl("cut").map((c, i) => [i ? `avg ≤ ${c[1]}R` : "Off", d.cut === i, () => set({ cut: i })]), DIALS[5][2]));
+    g.appendChild(row("I: improving-longs add", dl("addi").map((c, i) => [i ? `+${c[1] * 100}%` : "Off", d.addi === i, () => set({ addi: i })]), DIALS[6][2]));
+    card.appendChild(g);
+    return card;
+  }
+
   function select(outcome) {
     return DATA.trades.filter(t =>
       (state.source === "all" || t.src === state.source) &&
-      !state.hide.has(t.s) &&
-      (outcome === "all" || t.o === outcome) &&
+      !t.nodata && !state.hide.has(t.s) && !(state.lock && (t.y >= 2025 || t.g === 1)) &&
+      (outcome === "all" || outOf(t) === outcome) &&
       (state.dir === "all" || (state.dir === "long") === (t.l === 1)) &&
       (state.det === "all" || t.d === state.det) &&
       (state.start === "all" || (state.start === "fast" ? t.f6 >= 1.5 : t.f6 < 1.0)) &&
       (state.period === "all" || (state.period === "dev" ? t.y < 2025 : t.y >= 2025)));
   }
-  const pathOf = t => state.time === "rt" ? t.rt : t.pg;
+  const pathOf = (t, time = state.time) => isHist(t) ? comboPath(t, time) : (time === "rt" ? t.rt.map(v => v / 100) : t.pg.map(v => v / 100));
   // x column of path index i: real time = bar i+1 (column 0 is the entry, R 0 for every trade); progress = i of 40
   function geometry(groups) {
     let ncol;
     if (state.time === "pg") ncol = DATA.pg_points;
     else {
-      const ex = [].concat(...groups.map(g => g.map(t => t.rt.length)));
+      const ex = [].concat(...groups.map(g => g.map(t => pathOf(t).length)));
       ncol = Math.max(13, Math.min(DATA.cap_bars, Math.ceil(quant(ex, 0.85) || 30))) + 1;   // to where 85% have exited
     }
-    let ymax = 2;
-    groups.forEach(g => g.forEach(t => { const p = pathOf(t); for (let i = 0; i < p.length; i++) if (p[i] / 100 > ymax) ymax = p[i] / 100; }));
+    let ymax = 2, ymin = -1;
+    groups.forEach(g => g.forEach(t => { const p = pathOf(t); for (let i = 0; i < p.length; i++) { if (p[i] > ymax) ymax = p[i]; if (p[i] < ymin) ymin = p[i]; } }));
     ymax = Math.min(7, Math.ceil(Math.min(ymax, 6.5) * 2) / 2 + 0.25);
-    return { ncol, ymin: -1.25, ymax, dy: 0.25 };
+    ymin = Math.max(-2.5, Math.floor(ymin * 4) / 4 - 0.25);
+    return { ncol, ymin, ymax, dy: 0.25 };
   }
   // value of trade t at column c (null when it has exited)
   function valAt(t, c) {
     const p = pathOf(t);
-    if (state.time === "pg") return p[c] / 100;
+    if (state.time === "pg") return p[c];
     if (c === 0) return 0;
-    return c - 1 < p.length ? p[c - 1] / 100 : null;
+    return c - 1 < p.length ? p[c - 1] : null;
   }
   function stats(group, G) {
     const nb = Math.round((G.ymax - G.ymin) / G.dy);
@@ -103,6 +238,7 @@
     root.innerHTML = "";
     const groups = [{ key: state.show, trades: select(state.show) }];
     if (state.cmp !== "none") groups.push({ key: state.cmp, trades: select(state.cmp) });
+    root.appendChild(dialCard());
     // controls
     const ctl = el("div", "card rp-ctls");
     const nLive = DATA.trades.filter(t => t.src === "live").length;
@@ -115,6 +251,10 @@
       "Draws a second panel with the same filters, and each group's typical path on both panels"));
     ctl.appendChild(seg("Time axis", "time", [["rt", "Days since entry"], ["pg", "Progress to exit"]],
       "Days: real speed. Progress: every trade stretched to the same length (0% = entry, 100% = the exit), so you compare shapes"));
+    const ym = seg("Y axis", "ymode", [["price", "Price"], ["pos", "Position value"]],
+      "Price: where price is, in the trade's own R from the signal's entry. Position value: what the whole position is worth in full-position R - banked parts, the staged add, the pyramid and the I add included (rebuilt bar by bar from the combo's events; the last point is the exact result).");
+    ym.querySelectorAll("button").forEach(b => { const f = b.onclick; b.onclick = () => { f(); store.set("rp.ymode", state.ymode); }; });
+    ctl.appendChild(ym);
     const more = el("details", "rp-more"); more.open = window.innerWidth > 700 || root.dataset.more === "1";
     more.ontoggle = () => { root.dataset.more = more.open ? "1" : "0"; };
     more.appendChild(el("summary", "k", "Filters & layers"));
@@ -138,7 +278,7 @@
     // tiles
     const tiles = el("div", "rp-tiles");
     S.forEach(g => {
-      const ex = g.trades.map(t => t.xb / 6), below = g.trades.filter(t => pathOf(t).some(v => v < 0)).length;
+      const ex = g.trades.map(t => exitXb(t) / 6), below = g.trades.filter(t => pathOf(t).some(v => v < 0)).length;
       const t = el("div", "card rp-tile");
       t.innerHTML = `<div class="rp-sw" style="background:${C.hueHex[g.key]}"></div><div><div class="k">${OUTCOME[g.key]}</div>` +
         `<div class="big v">${g.trades.length.toLocaleString()}</div><div class="k">trades · median exit <b>${quant(ex, 0.5).toFixed(1)} days</b> (mean ${(ex.reduce((a, b) => a + b, 0) / ex.length).toFixed(1)}) · ${pct(below / g.trades.length)} went below entry at some point</div></div>`;
@@ -164,8 +304,8 @@
     root.appendChild(symCard());
     // table view
     root.appendChild(tableView(S, G));
-    const nh = DATA.trades.filter(t => t.src !== "live").length, nl = DATA.trades.length - nh;
-    root.appendChild(el("div", "k rp-foot", `Historical: ${nh.toLocaleString()} trades (all four detectors, ${symList().filter(x => x.hist).length} symbols, 2012–2026; signals from today's EA build) replayed on M1 with the live stop rules (bank at +1R → stop to entry, shorts' stop to +0.25R at +1.5R, runner to TP2), built ${DATA.built}. ` +
+    const nh = NH, nl = DATA.trades.length - nh;
+    root.appendChild(el("div", "k rp-foot", `Historical: ${nh.toLocaleString()} trades (all four detectors, ${symList().filter(x => x.hist).length} symbols, 2012–2026; signals from today's EA build), every management combination replayed on M1 (ask-corrected, live spreads) - shown: ${selName()} (combination ${state.dial ? comboIdx(state.dial) : "-"} of build ${DATA.combo_build}). ` +
       `Live: ${nl} closed live trade${nl === 1 ? "" : "s"} from the journal and the MT5 feed${DATA.live_built ? ", updated " + DATA.live_built : ""} (refreshed hourly). The line is the price in the trade's own R from the signal's entry.`));
   }
   function maxShare(st, G) {
@@ -321,12 +461,13 @@
     const g3 = el("div", "rp-seg");
     [["off", "Off"], ["hl", "Typical high & low"], ["sd", "±1 standard deviation"]].forEach(([v, t]) => { const b = el("button", state.avgBand === v ? "on" : "", t); b.type = "button"; b.onclick = () => { state.avgBand = v; render(); }; g3.appendChild(b); });
     bd.appendChild(g3); ctl.appendChild(bd); card.appendChild(ctl);
-    const groups = ["tp2", "be", "sl"].map(k => ({ key: k, trades: select(k) })).filter(g => g.trades.length);
+    const groups = ["tp2", "be", "sl", "cut"].map(k => ({ key: k, trades: select(k) })).filter(g => g.trades.length);
     const steps = Math.min(state.avgDays * 2, Math.floor(DATA.cap_bars / 3));
     const series = groups.map(g => ({ key: g.key, pts: [...Array(steps + 1).keys()].map(i => {
       const bar = i * 3, vals = [];
       for (const t of g.trades) {
-        const v = bar === 0 ? 0 : (bar - 1 < t.rt.length ? t.rt[bar - 1] / 100 : (state.avgCarry ? t.rt[t.rt.length - 1] / 100 : null));
+        const pt = pathOf(t, "rt");
+        const v = bar === 0 ? 0 : (bar - 1 < pt.length ? pt[bar - 1] : (state.avgCarry && pt.length ? pt[pt.length - 1] : null));
         if (v != null) vals.push(v);
       }
       const n = vals.length; if (n < 5) return { day: i / 2, mean: null, n, of: g.trades.length };
@@ -446,46 +587,17 @@
   }
   const maxDD = v => { let c = 0, pk = 0, dd = 0; for (const x of v) { c += x; pk = Math.max(pk, c); dd = Math.max(dd, pk - c); } return dd; };
   function symRows() {   // historical trades passing every filter except Show / Compare (stats need every outcome)
-    return DATA.trades.filter(t => t.src !== "live" && t.rb != null && !state.hide.has(t.s) &&
+    return DATA.trades.filter(t => isHist(t) && !t.nodata && !state.hide.has(t.s) && !(state.lock && (t.y >= 2025 || t.g === 1)) &&
       (state.dir === "all" || (state.dir === "long") === (t.l === 1)) && (state.det === "all" || t.d === state.det) &&
       (state.start === "all" || (state.start === "fast" ? t.f6 >= 1.5 : t.f6 < 1.0)) &&
       (state.period === "all" || (state.period === "dev" ? t.y < 2025 : t.y >= 2025))).sort((a, b) => a.dt < b.dt ? -1 : a.dt > b.dt ? 1 : 0);
   }
-  // ---------------------------------------------------------------- management selector (trader 2026-10-03)
-  // t.m = 96 full-position R (x1000) per trade, one per combination of the post-signal layers (pipeline/mgmt_variants.py)
-  const LAYERS = [["S", "Staged entry", "25% at the signal, the other 75% at the bar-6 close"],
-    ["A", "A: hold weak adds", "a trial averaging below 0 at bar 6 waits for +1R before the 75% goes in (needs staged entry)"],
-    ["K", "Bank at +1R", "bank the detector's share at +1R (or TP1) and move the stop to entry"],
-    ["P", "+1.5R pyramid", "add 50% at +1.5R"], ["R", "Shorts stop raise", "shorts: every stop to +0.25R at +1.5R"],
-    ["B", "B: shorts day-2 cut", "close a short at the day-2 close if its average is not above +0.5R"],
-    ["I", "I: improving-longs add", "longs: +50% at the day-2 close when day 2 averages better than day 1"]];
-  const PRESETS = { raw: [], live: ["S", "K", "P", "R"], all: ["S", "A", "K", "P", "R", "B", "I"] };
-  const PNAME = { raw: "Raw signal", live: "Live setup", all: "Live + A+B+I" };
-  try { const m = JSON.parse(store.get("rp.mg") || "null"); state.mg = new Set(Array.isArray(m) ? m : PRESETS.all); } catch (_) { state.mg = new Set(PRESETS.all); }
-  state.mgCmp = store.get("rp.mgcmp") || "live";
-  const code = set => { const h = k => set.has(k) ? 1 : 0; const sa = set.has("S") ? (set.has("A") ? 2 : 1) : 0;
-    return sa * 32 + h("K") + 2 * h("P") + 4 * h("R") + 8 * h("B") + 16 * h("I"); };
-  const presetOf = set => Object.keys(PRESETS).find(k => PRESETS[k].length === set.size && PRESETS[k].every(x => set.has(x)));
-  const selName = () => { const p = presetOf(state.mg); return p ? PNAME[p] : "Your selection"; };
+  // ---------------------------------------------------------------- by symbol (follows the dials at the top)
   const SC = { sel: "#c98bff", cmp: "#3987e5" };
-  function symRows2() { return symRows().filter(t => Array.isArray(t.m)); }
+  function symRows2() { return symRows(); }
   function symCard() {
     const card = el("div", "card rp-sym");
     card.appendChild(el("div", "row", `<b>By symbol</b><span class="k">historical · the Symbols, Direction, Detector, Start and Period filters apply · every outcome counted</span>`));
-    // management selector
-    const mg = el("div", "rp-ctl");
-    mg.appendChild(el("div", "rp-lbl", `Management after the signal <span class="rp-q" title="Pick which layers run after a signal fires. None = the raw signal: full size at entry, the signal's own stop, out at its final target (TP2) or the stop - nothing else. All = the live setup plus A, B and I.">?</span>`));
-    const pr = el("div", "rp-seg"); pr.style.marginBottom = "4px";
-    Object.keys(PRESETS).forEach(k => { const b = el("button", presetOf(state.mg) === k ? "on" : "", PNAME[k] + (k === "raw" ? " (none)" : k === "all" ? " (all)" : "")); b.type = "button";
-      b.onclick = () => { state.mg = new Set(PRESETS[k]); store.set("rp.mg", JSON.stringify([...state.mg])); render(); }; pr.appendChild(b); });
-    mg.appendChild(pr);
-    const lg = el("div", "rp-seg");
-    LAYERS.forEach(([k, t, help]) => { const on = state.mg.has(k), dis = k === "A" && !state.mg.has("S");
-      const b = el("button", on && !dis ? "on" : "", (on && !dis ? "✓ " : "") + t); b.type = "button"; b.title = help + (dis ? " - turn on staged entry first" : "");
-      if (dis) b.disabled = true;
-      b.onclick = () => { on ? state.mg.delete(k) : state.mg.add(k); if (k === "S" && on) state.mg.delete("A"); store.set("rp.mg", JSON.stringify([...state.mg])); render(); };
-      lg.appendChild(b); });
-    mg.appendChild(lg); card.appendChild(mg);
     const ctl = el("div", "rp-grid");
     const mk = (label, key, opts, help, persist) => { const w = el("div", "rp-ctl"); w.appendChild(el("div", "rp-lbl", label + (help ? ` <span class="rp-q" title="${help}">?</span>` : ""))); const g = el("div", "rp-seg");
       opts.forEach(([v, t]) => { const b = el("button", state[key] === v ? "on" : "", t); b.type = "button"; b.onclick = () => { state[key] = v; if (persist) store.set(persist, v); render(); }; g.appendChild(b); }); w.appendChild(g); return w; };
@@ -496,19 +608,25 @@
     card.appendChild(ctl);
     const rows = symRows2();
     if (!rows.length) { card.appendChild(el("div", "k", "No historical trades for the symbols shown.")); return card; }
-    const cS = code(state.mg), cC = state.mgCmp === "none" ? null : code(new Set(PRESETS[state.mgCmp]));
     const cmpName = state.mgCmp === "none" ? null : PNAME[state.mgCmp];
+    let XC = null;
+    if (cmpName) {
+      const ci = comboIdx(PRESET[state.mgCmp]());
+      XC = CACHE.get(ci) || null;
+      if (!XC) { fetchCombo(ci).then(() => render()); card.appendChild(el("div", "k", "Loading the comparison…")); return card; }
+    }
+    const fS = t => X.R[t.__i], fC = XC ? (t => XC.R[t.__i]) : null;
     const L = symList(), by = new Map();
     rows.forEach(t => { if (!by.has(t.s)) by.set(t.s, []); by.get(t.s).push(t); });
     const sum = v => v.reduce((x, y) => x + y, 0);
     const st = [...by.entries()].map(([s, ts]) => {
-      const a = ts.map(t => t.m[cS] / 1000), b = cC == null ? null : ts.map(t => t.m[cC] / 1000), info = L.find(x => x.s === s) || {};
+      const a = ts.map(fS), b = fC ? ts.map(fC) : null, info = L.find(x => x.s === s) || {};
       return { s, n: ts.length, orig: info.orig, part: info.part, grp: info.grp, y0: ts[0].dt.slice(0, 4), y1: ts[ts.length - 1].dt.slice(0, 4),
                am: sum(a) / a.length, at: sum(a), ad: maxDD(a), win: a.filter(x => x > 0).length / a.length,
                bm: b ? sum(b) / b.length : null, bt: b ? sum(b) : null, bd: b ? maxDD(b) : null };
     });
     // pooled summary line
-    const pa = rows.map(t => t.m[cS] / 1000), pb = cC == null ? null : rows.map(t => t.m[cC] / 1000);
+    const pa = rows.map(fS), pb = fC ? rows.map(fC) : null;
     const f3 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3), f1 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1);
     card.appendChild(el("div", "rp-sum", `<span class="rp-sw sm" style="background:${SC.sel}"></span><b>${selName()}</b>: ${f3(sum(pa) / pa.length)}R a trade · total ${f1(sum(pa))}R · worst DD ${maxDD(pa).toFixed(1)}R` +
       (pb ? `<br><span class="rp-sw sm" style="background:${SC.cmp}"></span>${cmpName}: ${f3(sum(pb) / pb.length)}R a trade · total ${f1(sum(pb))}R · worst DD ${maxDD(pb).toFixed(1)}R` : "") +
@@ -527,7 +645,7 @@
     const cbox = el("div", "rp-cv"); const ccv = el("canvas"); ccv.style.height = "clamp(260px,40vw,400px)"; ccv.style.cursor = "crosshair";
     const ctip = el("div", "rp-tip"); cbox.appendChild(ccv); cbox.appendChild(ctip); card.appendChild(cbox);
     card.appendChild(el("div", "k", "Cumulative R by signal date (full position, costs in)." + (cmpName ? " The gap between the lines is what your selection adds or costs against " + cmpName.toLowerCase() + "." : "")));
-    requestAnimationFrame(() => drawCurves(ccv, ctip, rows, [...by.keys()], cS, cC, cmpName));
+    requestAnimationFrame(() => drawCurves(ccv, ctip, rows, [...by.keys()], fS, fC, cmpName));
     // table
     const d = el("details", "rp-table"); d.appendChild(el("summary", "k", "Table: every symbol shown"));
     let h = `<table><tr><th>symbol</th><th>group</th><th>years</th><th>trades</th><th>${selName()} R/trade</th><th>win%</th><th>total</th><th>DD</th>` +
@@ -568,15 +686,15 @@
       tip.style.display = "block"; tip.style.left = Math.min(W - tip.offsetWidth - 4, Math.max(4, e.clientX - rr.left + 12)) + "px"; tip.style.top = Math.max(4, e.clientY - rr.top - tip.offsetHeight - 8) + "px"; };
     cv.onpointerleave = () => { tip.style.display = "none"; };
   }
-  function drawCurves(cv, tip, rows, syms, cS, cC, cmpName) {
+  function drawCurves(cv, tip, rows, syms, fS, fC, cmpName) {
     const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr; const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
     const pad = { l: 52, r: 14, t: 12, b: 26 }, pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
     const tms = s => Date.parse(s + "T00:00:00Z");
     const t0 = tms(rows[0].dt), t1 = Math.max(t0 + 864e5, tms(rows[rows.length - 1].dt));
     const series = [];
-    const cum = (ts, c) => { let v = 0; return ts.map(t => ({ x: tms(t.dt), y: (v += t.m[c] / 1000) })); };
-    const sets = [[cS, selName(), SC.sel, []]].concat(cC == null ? [] : [[cC, cmpName, SC.cmp, [5, 4]]]);
+    const cum = (ts, f) => { let v = 0; return ts.map(t => ({ x: tms(t.dt), y: (v += f(t)) })); };
+    const sets = [[fS, selName(), SC.sel, []]].concat(fC == null ? [] : [[fC, cmpName, SC.cmp, [5, 4]]]);
     if (state.symCurve === "pooled") sets.forEach(([c, nm, col]) => series.push({ name: nm, col, pts: cum(rows, c), dash: [] }));
     else syms.forEach((s, i) => { const col = `hsl(${Math.round(i * 360 / Math.max(1, syms.length))},70%,62%)`; const ts = rows.filter(t => t.s === s);
       sets.forEach(([c, nm, _, dash]) => series.push({ name: s + (sets.length > 1 ? " · " + nm : ""), col, pts: cum(ts, c), dash })); });
@@ -623,7 +741,13 @@
     mount(id, url) {
       root = document.getElementById(id);
       root.innerHTML = '<div class="card k">Loading the trade paths…</div>';
-      fetch(url).then(r => r.json()).then(d => { DATA = d; render(); window.addEventListener("resize", () => { clearTimeout(window.__rpT); window.__rpT = setTimeout(render, 150); }); })
+      fetch(url).then(r => r.json()).then(d => {
+        DATA = d; NH = 0;
+        DATA.trades.forEach((t, i) => { if (t.src !== "live") { t.__i = i; NH = i + 1; } });
+        let dd = null; try { dd = JSON.parse(store.get("rp.dial") || "null"); } catch (_) {}
+        const ok = dd && ["stage", "gate", "bank", "pyr", "raise", "cut", "addi"].every(k => Number.isInteger(dd[k]) && dd[k] >= 0) && dd.stage < DATA.dials.stage.length && dd.bank < DATA.dials.bank.length &&
+                   dd.pyr < DATA.dials.pyr.length && dd.raise < DATA.dials.raise.length && dd.cut < DATA.dials.cutB.length && dd.addi < DATA.dials.addI.length;
+        return useDial(ok ? dd : PRESET.live()).then(() => window.addEventListener("resize", () => { clearTimeout(window.__rpT); window.__rpT = setTimeout(render, 150); })); })
         .catch(e => { root.innerHTML = '<div class="card bad">Could not load the path data: ' + e + "</div>"; });
     },
   };

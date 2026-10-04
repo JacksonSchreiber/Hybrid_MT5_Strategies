@@ -27,3 +27,7 @@ playbook/.snapshots/
 logs/assistant/
 playbook/incoming/
 live_config.local.json
+
+# combo research data (pipeline/combo_pack.py) - 1.8 GB, uploaded to the box by provisioning/upload_combos.sh, never committed
+live/static/combos.bin
+live/static/combos.json
