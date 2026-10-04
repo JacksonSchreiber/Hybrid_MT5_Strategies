@@ -23,6 +23,9 @@ from live import symbol_groups as SG                         # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 OUT = os.path.join(ROOT, "data", "backtest")
+# coach 2026-10-04: bloc sessions of 100 (two Test sessions), USD majors sessions of 35 (Practice and Test; three Test sessions,
+# ~105 signals; 2 x 100 + 3 x 35 clears the 300 Test-signal bar); the six-month rule unchanged
+SESSION_N = {"com": 100, "maj": 35}; TEST_SESSIONS = {"com": 2, "maj": 3}
 SPLIT = os.path.join(OUT, "split_v1.json"); SALT = os.path.join(OUT, "salt.txt"); LEDGER = os.path.join(OUT, "test_ledger.json")
 REPORT = os.path.join(OUT, "split_v1_report.txt")
 VERSION, SEED, TEST_FRAC, GAP_DAYS = 1, 20261004, 0.30, 182
@@ -109,10 +112,11 @@ def max_session(split: dict, g: str, part: str, lock: dict, exclude: set = froze
     return out
 
 
-def sample_session(split: dict, g: str, part: str, n: int, seed, lock: dict, record: bool = False) -> dict:
+def sample_session(split: dict, g: str, part: str, n: int, seed, lock: dict, record: bool = False, exclude: set = frozenset()) -> dict:
     """{ids: [...] (shuffled), shortfall: {stratum: missing}, n_target, menu-free}. Test draws exclude every Test id ever drawn;
     record=True appends the draw to the ledger (only a real Test session does this)."""
     used = set(json.load(open(LEDGER))["ids"]) if (part == "test" and os.path.exists(LEDGER)) else set()
+    used = used | set(exclude)                                # dry-run planning of consecutive sessions without touching the ledger
     pool = {h: t for h, t in split["trades"].items() if t["group"] == g and t["part"] == part and not locked(t, lock) and h not in used}
     st: dict = {}
     for h, t in pool.items(): st.setdefault((t["year"], "L" if t["up"] else "S", t["det"]), []).append(h)
@@ -154,7 +158,7 @@ def report(split: dict) -> str:
             m = max_session(split, g, part, lock)
             L.append(f"  {part:8} {nl} served after the lock; max signals in ONE session under the six-month rule: {sum(m.values())} "
                      f"({', '.join(f'{s} {v}' for s, v in m.items())})")
-        tgt = {"com": 100, "maj": 50}[g]
+        tgt = SESSION_N[g]
         for part in ("practice", "test"):
             r = sample_session(split, g, part, tgt, "feasibility", lock)
             L.append(f"  trial draw of {tgt} from {part}: got {len(r['ids'])}" + (f", short in {len(r['shortfall'])} strata ({sum(r['shortfall'].values())} signals)" if r["shortfall"] else ""))
@@ -171,7 +175,11 @@ def report(split: dict) -> str:
                     got.append(h); last.setdefault(s, []).append(d)
             if len(got) < tgt: break
             used |= set(got); k += 1
-        L.append(f"  disjoint Test sessions of {tgt} that fit (six-month rule, no reuse): {k}")
+        L.append(f"  disjoint Test sessions of {tgt} that fit (six-month rule, no reuse, ignoring strata): {k}")
+        used = set(); got = []
+        for q in range(TEST_SESSIONS[g]):                      # the planned Test sessions, stratified, back to back (dry run)
+            r = sample_session(split, g, "test", tgt, f"plan{q}", lock, exclude=used); used |= set(r["ids"]); got.append(len(r["ids"]))
+        L.append(f"  planned {TEST_SESSIONS[g]} stratified Test sessions of {tgt} drawn back to back (dry run): got {got} = {sum(got)} signals")
     return "\n".join(L)
 
 
