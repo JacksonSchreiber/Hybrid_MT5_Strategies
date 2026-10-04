@@ -20,7 +20,17 @@
 - **Deploy:** `deploy --ea` 07:37Z (markets closed). 47/47 EA instances alive on the new build, the bloc rules on exactly the six charts, 9 parked signals and 21 positions intact, no id collisions.
 - **Telegram:** new alerts "BLOC 24h CUT" and "BLOC LOCK".
 - **Fix found on the way:** the item-25 shorts stop raise didn't hold the EA's external-edit detector during its own modify, so it could log the move as an EXTERNAL_SL. It now holds it.
-- **EA vs study reproduction (AUDUSD 2018-26, real ticks):** RESULT_PENDING
+- **EA vs study reproduction (AUDUSD 2018-26, real ticks, live stack): PASS.**
+  - **Cuts:** the EA and the study agree on 134 of 137 trades (98%).
+  - **Gain from the bloc rules** (matched signals): EA +0.068R vs study +0.050R, a difference of +0.018R, inside the +/-0.02R bar.
+  - **Locks:** 56 in the EA run.
+  - Report: `data/study/bloc_repro/AUDUSD.dk_check.txt`.
+- **Side effect to know about: the 24h cut frees the symbol earlier, so MORE bloc signals reach you.**
+  - In the auto-approve tester run on AUDUSD, rules off: 339 signals, -0.050R/trade, worst DD 36R.
+  - Rules on: 570 signals, +0.001R/trade, DD 9.6R.
+  - The 337 shared signals made +0.030R; the 233 EXTRA ones lost -0.042R.
+  - Live, those extras come to you as normal cards (no auto-approve), so the A-grade bar on bloc cards is what filters them.
+  - Costs are at model spread (a lower bound).
 
 ## 2. Group labels on every trade screen
 - **Where:** every symbol shows a colour-coded group pill (single source: `live/symbol_groups.py`):
@@ -41,7 +51,7 @@
 - **Combo build:** 20261004_0346, 8,606 trades x 29,484 combos; verify ALL PASS.
 - **Upload:** combos.bin 2.28 GB, SHA-verified.
 - **Research lock:** the three sit in the research-lock group (hidden while the lock is on).
-- **Status:** UPLOAD_PENDING
+- **Status: LIVE.** The upload was SHA-verified, `deploy --code` shipped the matching rpaths.json at 07:57Z, and the combo slices serve the right size.
 
 ## 5. Downloads started (download + M1 export only, no MT5 processing)
 - **Symbols:** 26 live-universe symbols with no data, in group order:
