@@ -44,7 +44,7 @@ if "--levels" in sys.argv or "--hours" in sys.argv or RAW_ONLY:
 # (name, setup 0 raw / 1 live bloc / 2 live standard (check only), time raise 0 off / 1 close / 2 skip)
 V = [("raw", 0, 0), ("raw + time raise (close)", 0, 1), ("raw + time raise (skip)", 0, 2),
      ("live (bloc T+L1.0)", 1, 0), ("live + time raise (close)", 1, 1), ("live + time raise (skip)", 1, 2), ("_live standard", 2, 0)]
-LBL = [("entry" if v == 0 else f"+{v:g}R") for v in LVLS]
+LBL = [("entry" if v == 0 else f"{v:+g}R") for v in LVLS]
 KIND = {0: "stop (not a time-raised stop)", 1: "TP2", 2: "24h cut", 3: "window end"}
 KIND.update({10 + q: f"closed at {h:g}h (below {LBL[q]})" for q, h in enumerate(HOURS)})
 if AVGH is not None: KIND[20] = f"closed at the {AVGH:g}h average check (< 0R)"

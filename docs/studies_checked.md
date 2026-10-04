@@ -106,6 +106,9 @@ nothing is re-run by accident and the coach can see what was tried.
     - 8h: -0.006 / **+0.004** (DD 31) / -0.006.
     - Read: every early-exit variant lands at about -0.02..+0.004; these are differences within noise after about 15 variants on the
       same data, all still below the live bloc setup (+0.018, DD 15), and at model cost.
+  - **+ stop to -0.5R at 1..7h on top of "8h entry + 1h average check":** -0.002 / -0.002 / +0.000 / -0.001 / -0.003 / -0.002 /
+    +0.001R/trade, DD 31-38, against +0.004 / DD 31 without it. Fewer full -1R stops, but dips to -0.5R that would have recovered (fewer
+    TP2s) cost the same. Shorts slightly better, longs worse (as in the bloc drafts). `--hours T,8,24 --levels -0.5,0,0.5 --avgcheck 1`
   - Fixed 2026-10-04: checks inside the entry bar now start at the first M1 minute. Sunday-open bars have no data for 60-120 min, so
     about 2% of trades were skipping every step. The 4h/8h/12h runs were unaffected. `--avgcheck H`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
