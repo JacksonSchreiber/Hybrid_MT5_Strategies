@@ -11,7 +11,7 @@ mkdir -p "$LOGD"
 BATCHES=("AUDJPY CADJPY NZDJPY CHFJPY"            # Yen (have USDJPY, EURJPY, GBPJPY)
          "EURCHF GBPCHF AUDCHF NZDCHF CADCHF"     # Swiss franc (have USDCHF)
          "EURAUD EURCAD EURNZD GBPAUD"            # Euro / Sterling crosses (have EURGBP)
-         "GBPCAD GBPNZD USDZAR USDSGD"            # rest of the crosses + EM carry (have USDMXN)
+         "GBPCAD GBPNZD USDSGD"                   # rest of the crosses + EM carry (have USDMXN); USDZAR dropped 2026-10-04 - Dukascopy answered HTTP 429 on half its days, 3 x 2h attempts stored nothing
          "EURSEK EURNOK USDSEK USDNOK"            # Nordic
          "USDHUF USDPLN EURHUF EURPLN USDCZK")    # Central Europe
 prog(){ printf '[%s] %s\n' "$(date '+%F %T')" "$*" >> "$P"; }
