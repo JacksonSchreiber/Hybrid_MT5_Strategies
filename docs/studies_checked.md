@@ -151,3 +151,12 @@ nothing is re-run by accident and the coach can see what was tried.
     vs ATR alone gives +0.16); without stop/TP features the context still gives +0.03. The 12-bar path +0.08.
   - Read: neighbours tell you how far a trade typically travels (in R), not whether it wins or which management to use.
     `neighbor_path_test.py`, `data/study/neighbor_path_report.txt`
+- **Shape matching (analogs) on the last month of bars** (trader 2026-10-04).
+  - **Setup:** 8,556 trades; the last 120 H4 bars or 22 completed days before the signal (closes, + highs/lows, or z-normalised pure
+    shape); the 50 / 10 / 1 closest by Euclidean distance; same group or any symbol; neighbours from other years.
+  - **Result: no version beats the plain group average for any target.**
+    - raw R skill -0.016 to -0.021; TP2 -0.015 to -0.020;
+    - even the first-day move size and the 12-bar path are below the average (-0.01 / -0.03);
+    - the 10 / 1 closest are far worse (-0.10 / -1.0: single outcomes are noise).
+  - Preset picked by the matches: -0.001 to -0.028 vs the group's best preset (no gain). A faint top-vs-bottom fifth spread on
+    live-setup R (+0.12..+0.16, t 2.4-3.2) recurs, but it does not survive as a prediction (skill < 0). `shape_match_test.py`
