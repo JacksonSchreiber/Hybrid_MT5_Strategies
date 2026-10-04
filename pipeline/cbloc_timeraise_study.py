@@ -16,6 +16,8 @@ SCALED (model cost = the M1 bar minimum spread, a LOWER bound - real FX costs ar
                                                   -> data/study/cbloc_timeraise_raw_0_0.5_0.8_report.txt
     python3 pipeline/cbloc_timeraise_study.py --hours 4,24 --levels 0,0.5 --raw   steps at hours after the entry (any hour: 6 = 2h
                                                   into the 2nd H4 bar), up to three steps
+    ... --avgcheck 0.5        + an AVERAGE CHECK at that hour: if the average bid close since the entry (in R) is below 0 there,
+                              the trade is closed at that minute's close (applies with the time raise only)
 """
 from __future__ import annotations
 import os, statistics as st, sys, time
@@ -35,23 +37,28 @@ if "--levels" in sys.argv: LVLS = np.array([float(v) for v in sys.argv[sys.argv.
 if "--hours" in sys.argv: HOURS = [float(v) for v in sys.argv[sys.argv.index("--hours") + 1].split(",")]
 assert len(HOURS) == len(LVLS) <= 3
 RAW_ONLY = "--raw" in sys.argv
+AVGH = float(sys.argv[sys.argv.index("--avgcheck") + 1]) if "--avgcheck" in sys.argv else None
 if "--levels" in sys.argv or "--hours" in sys.argv or RAW_ONLY:
-    REPORT = REPORT.replace("_report.txt", ("_raw" if RAW_ONLY else "") + "_" + "_".join(f"{h:g}h{v:g}" for h, v in zip(HOURS, LVLS)) + "_report.txt")
+    REPORT = REPORT.replace("_report.txt", ("_raw" if RAW_ONLY else "") + "_" + "_".join(f"{h:g}h{v:g}" for h, v in zip(HOURS, LVLS))
+                            + (f"_avg{AVGH:g}h" if AVGH is not None else "") + "_report.txt")
 # (name, setup 0 raw / 1 live bloc / 2 live standard (check only), time raise 0 off / 1 close / 2 skip)
 V = [("raw", 0, 0), ("raw + time raise (close)", 0, 1), ("raw + time raise (skip)", 0, 2),
      ("live (bloc T+L1.0)", 1, 0), ("live + time raise (close)", 1, 1), ("live + time raise (skip)", 1, 2), ("_live standard", 2, 0)]
 LBL = [("entry" if v == 0 else f"+{v:g}R") for v in LVLS]
 KIND = {0: "stop (not a time-raised stop)", 1: "TP2", 2: "24h cut", 3: "window end"}
 KIND.update({10 + q: f"closed at {h:g}h (below {LBL[q]})" for q, h in enumerate(HOURS)})
+if AVGH is not None: KIND[20] = f"closed at the {AVGH:g}h average check (< 0R)"
 
 
 @njit(cache=True)
 def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, bank_R, bankf, F0, k_add, up, pyr_on, pyr_R, pyr_f,
-         tstop, rmode, rto, sr, trig, rk, rl, tr):
+         tstop, rmode, rto, sr, trig, rk, rl, tr, ak):
     ls = np.zeros(4); le = np.zeros(4); nl = 1; ls[0] = F0; le[0] = e0
     locked = 0.0; stop = -1.0; banked = False; trigp = True; reached = False; q = 0; rstop = -1
     add_pend = F0 < 1.0 and k_add >= 0 and k_add < n
+    cs = 0.0
     for j in range(n):
+        cs += bc[j]
         if xl[j] <= stop:
             r = stop if stop < xo[j] else xo[j]
             v = locked
@@ -79,6 +86,10 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, has_tp2, tp2_R, bank_on, ban
             v = locked
             for a in range(nl): v += ls[a] * (xc[j] - le[a])
             return v, 2, rstop, j
+        if ak >= 0 and j == ak and cs / (j + 1) < 0.0:
+            v = locked
+            for a in range(nl): v += ls[a] * (xc[j] - le[a])
+            return v, 20, rstop, j
         if tr > 0 and q < 3 and j == rk[q]:
             lvl = be + rl[q]
             if lvl > stop:
@@ -103,18 +114,22 @@ def do(sym):
         p = CB.prep(S, x)
         if p is None: continue
         F = p["F"]; h4, i0, k0 = x["bars"], p["i0"], p["k0"]
-        def kt(H):     # the last minute before H trading hours after the entry (H4 bar b = H // 4, then H % 4 hours into it)
-            b, r = int(H // 4), (H % 4) * 60
-            return (int(np.searchsorted(S.t, A.tmin(h4[i0 + b][0]) + r)) - 1 - k0) if i0 + b < len(h4) else -1
-        assert kt(12) == p["kbar"][3] and kt(24) == p["kbar"][6]
+        def kt(H):     # the last minute before H trading hours after the entry (H4 bar b = H // 4, then H % 4 hours into it). Inside the
+            # entry bar the clock starts at the first M1 minute: Sunday-open bars have no M1 data for their first 60-120 min (~2% of
+            # trades), and without this the sub-4h checks found no minute and every later step was skipped (fixed 2026-10-04)
+            b, r = int(H // 4), int(round((H % 4) * 60))
+            if i0 + b >= len(h4): return 1 << 40
+            return max(0, int(np.searchsorted(S.t, max(A.tmin(h4[i0 + b][0]), int(S.t[k0])) + r)) - 1 - k0)
+        assert (kt(12) == p["kbar"][3] or p["kbar"][3] < 0) and (kt(24) == p["kbar"][6] or p["kbar"][6] < 0)
         rk = np.full(3, -1, dtype=np.int64); rk[:len(HOURS)] = [kt(H) for H in HOURS]
         lv = np.zeros(3); lv[:len(LVLS)] = LVLS
+        akj = kt(AVGH) if AVGH is not None else -1
         ka = p["kbar"][6]; tp2 = p["tp2"]; R = {}
         for name, su, tr in V:
             live = su > 0
             R[name] = kern(F["xo"], F["xh"], F["xl"], F["xc"], F["bo"], F["bh"], F["bc"], F["eo"], p["n"], p["e0"], p["be"], tp2 is not None,
                            tp2 if tp2 is not None else 0.0, live, p["bank_R"](1.0), p["bankf_det"], A.F0 if live else 1.0, ka if live else -1,
-                           p["up"], live, A.PYR_R, A.PYR_F, su == 1, 2 if su == 1 else 1, CB.BLOC_LOCK, CT.K.SR, CT.TRIG, rk, lv, tr)
+                           p["up"], live, A.PYR_R, A.PYR_F, su == 1, 2 if su == 1 else 1, CB.BLOC_LOCK, CT.K.SR, CT.TRIG, rk, lv, tr, akj if tr > 0 else -1)
         # exactness: time raise off == run_h (live bloc / live standard) and the raw replay
         k_add = ka if ka >= 0 else None
         for name, ts, rt in (("live (bloc T+L1.0)", 1, CB.BLOC_LOCK), ("_live standard", None, None)):
@@ -142,7 +157,7 @@ def main():
          f"{time.time() - T0:.0f}s; time raise off vs run_h (live bloc, live standard) and the raw replay: max |diff| {dmax:.1e} "
          f"({'EXACT' if dmax < 1e-12 else 'MISMATCH'})\n"]
     col = lambda nm, f=lambda z: True: [z[4][nm][0] for z in res if f(z)]
-    L[-1] = L[-1].rstrip("\n") + f"; time raise {' / '.join(f'{l} at {h:g}h' for l, h in zip(LBL, HOURS))}\n"
+    L[-1] = L[-1].rstrip("\n") + f"; time raise {' / '.join(f'{l} at {h:g}h' for l, h in zip(LBL, HOURS))}{f' + average check at {AVGH:g}h (< 0R -> close)' if AVGH is not None else ''}\n"
     for base, names in (("raw", V[1:3]), ("live (bloc T+L1.0)", V[4:6]))[:1 if RAW_ONLY else 2]:
         b = col(base)
         L.append(f"  {base:28} {st.mean(b):+.4f}R  total {sum(b):+7.1f}  DD {maxdd(b):6.1f}  tot/DD {sum(b) / maxdd(b):+6.2f}" + " " * 25 +

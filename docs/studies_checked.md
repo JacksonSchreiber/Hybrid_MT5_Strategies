@@ -99,4 +99,13 @@ nothing is re-run by accident and the coach can see what was tried.
     levels (-0.017, DD 82), and still below the live bloc setup (+0.018). `--levels 0,0.5,0.8 --raw`
   - **Raw, entry at 4/6/8/12h then +0.5R at 24h (no 3-day step):** -0.021 / -0.029 / -0.025 / -0.017R/trade, DD 65 / 70 / 67 / 92.
     An earlier entry stop cuts the drawdown but not the average; the hours are within noise of each other. `--hours H,24 --levels 0,0.5 --raw`
+  - **Raw, entry at 0.5/1/2h then +0.5R at 24h:** -0.009 / -0.006 / -0.014R/trade, DD 20 / 24 / 42. About half the trades are
+    closed at 30 min.
+  - **Raw, 4h or 8h entry stop + an average check at 0.5/1/2h (close if the average since entry < 0R):**
+    - 4h: -0.017 / -0.007 / -0.023;
+    - 8h: -0.006 / **+0.004** (DD 31) / -0.006.
+    - Read: every early-exit variant lands at about -0.02..+0.004; these are differences within noise after about 15 variants on the
+      same data, all still below the live bloc setup (+0.018, DD 15), and at model cost.
+  - Fixed 2026-10-04: checks inside the entry bar now start at the first M1 minute. Sunday-open bars have no data for 60-120 min, so
+    about 2% of trades were skipping every step. The 4h/8h/12h runs were unaffected. `--avgcheck H`
   - `cbloc_timeraise_study.py`, `data/study/cbloc_timeraise_report.txt`
