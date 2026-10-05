@@ -10,6 +10,7 @@
   function iso(s) { return s ? Math.floor(new Date(s).getTime() / 1000) : null; }
   var EMA = { 20: '#ffd700', 50: '#00bfff', 200: '#ee82ee' };
   var FIB_LV = [0.0, 0.5, 0.618, 0.705, 0.786, 0.886, 1.0], FIB_LT = ['0.0', '50.0', '61.8', '70.5 OTE', '78.6', '88.6 SL', '100.0'];
+  var FIB_LT_BLIND = ['0.0', '50.0', '61.8', '70.5 OTE', '78.6', '88.6', '100.0'];   // review 2 #13c: on a blind card "88.6 SL" read as a second stop
   function imbState(r, iformed, lo, hi, dir) { var inv = false; for (var j = iformed + 1; j < r.length; j++) { var b = r[j], enters = b[2] >= lo && b[3] <= hi;
       if (!inv) { var through = dir > 0 ? b[4] < lo : b[4] > hi; if (through) { inv = true; continue; } if (enters) return 2; } else if (enters) return 2; } return inv ? 1 : 0; }
   function imbalances(bars) { var r = bars.length > 1 ? bars.slice(0, -1) : bars, cnt = r.length, z = [], out = []; if (cnt < 25) return out;
@@ -105,7 +106,10 @@
         function band(t0, t1, hi, lo, fill, line) {   // filled band between lo..hi over [t0,t1] (Lightweight Charts has no rectangles)
           var z = chart.addBaselineSeries({ baseValue: { type: 'price', price: lo }, topFillColor1: fill, topFillColor2: fill, topLineColor: line, bottomLineColor: line, bottomFillColor1: 'rgba(0,0,0,0)', bottomFillColor2: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
           var pts = bars.filter(function (b) { return b[0] >= t0 && b[0] <= t1; }).map(function (b) { return { time: b[0], value: hi }; });
-          if (pts.length === 1) pts.push({ time: pts[0].time + (tf === 'h4' ? 14400 : 86400), value: hi });
+          if (pts.length === 1) {       // a one-bar zone: live pads it forward; a blind card ends at the signal bar, so pad BACK (review 2 #13b)
+            if (d.blind) { var k0 = bars.findIndex(function (b) { return b[0] === pts[0].time; }); if (k0 > 0) pts.unshift({ time: bars[k0 - 1][0], value: hi }); }
+            else pts.push({ time: pts[0].time + (tf === 'h4' ? 14400 : 86400), value: hi });
+          }
           if (pts.length) z.setData(pts);
         }
         if (tf === 'h4' && bars.length) guard('zones', function () {
@@ -114,7 +118,7 @@
           if (ov.zone2 && has(ov.zone2.hi) && has(ov.zone2.lo) && ov.zone2.hi !== ov.zone2.lo) band(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
           imbalances(bars).forEach(function (z) { band(z.t0, z.t1, z.hi, z.lo, z.state === 0 ? 'rgba(147,112,219,0.18)' : 'rgba(147,112,219,0.08)', 'rgba(147,112,219,0.5)'); });
           if (d.strategy === 'DeepFib' && ov.leg && has(ov.leg.p0) && has(ov.leg.p1)) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
-            cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: true, axisLabelColor: gp ? '#7a6400' : '#3a3f47', axisLabelTextColor: '#e6edf3', title: FIB_LT[i] }); });
+            cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: true, axisLabelColor: gp ? '#7a6400' : '#3a3f47', axisLabelTextColor: '#e6edf3', title: (d.blind ? FIB_LT_BLIND : FIB_LT)[i] }); });
         });
         if (tf === 'h4' && ov.leg && has(ov.leg.p0) && has(ov.leg.p1) && tv(ov.leg.t0) && tv(ov.leg.t1)) {
           var lg = chart.addLineSeries({ color: '#ee82ee', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });

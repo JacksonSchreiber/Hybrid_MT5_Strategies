@@ -145,15 +145,18 @@ The advisor emits a fenced block:
   - `GET /api/bt/advisor?sid=&i=` is polled while the advisor works or answers.
   - If the advisor isn't ready, the page says so; the trader can wait or proceed, and the decision records `adv_available` = false.
 - **The advisor batch** (`live/backtest_advisor.py`, run from `advisor_runner.tick` - no new service):
-  - On Test start, one queue file per card goes in `<root>/web/backtest/advq/`. It holds the BLIND card only: no symbol, date,
-    outcome, results, combo data or commit.
+  - On Test start, queue files for the first 10 cards go in `<root>/web/backtest/advq/`, topped up to 10 ahead of the trader as
+    cards are decided (review 2). Each holds the BLIND card only: no symbol, date, outcome, results, combo data or commit.
   - Initial consults run in session order, follow-ups first, `max_parallel` at a time (default 2). A failure gets one retry after
     60 s, then the card is marked failed. A crash is recovered from the leftover `.running` files.
-  - Work dir: `<advisor live_dir>/../backtest/`, holding the role file CLAUDE.md, `.claude/settings.json` and
-    `bundles/<sid>/<i>/{card.md, h4.png, d1.png, h4_bars.csv}`. The charts are rendered with `live/charts.py` from the blind bars in
-    R, with the card's precomputed EMAs and no dates.
-  - Tools are Read/Glob/Grep ONLY. WebSearch, WebFetch, Bash, Write and Edit are explicitly disallowed: a search on a blind card
-    could reveal the date, the symbol or the outcome.
+  - Work dir: `<advisor live_dir>/../backtest/`, holding the role file CLAUDE.md, a deny-only `.claude/settings.json` and one
+    folder per card, `bundles/<random token>/{CLAUDE.md, card.md, h4.png, d1.png, h4_bars.csv}`. The consult RUNS INSIDE that
+    folder, and the prompt carries no session id, card number or path. The charts are rendered with `live/charts.py` from the
+    blind bars in R, with the card's precomputed EMAs, the detector overlay and no dates; card.md lists the overlay in price-R and
+    bars ago.
+  - Tools: Read only, confined to the card's folder (`--restricted --tools Read --allowedTools "Read(./**)"`, every other tool
+    in `--disallowedTools`, `--strict-mcp-config`, `--setting-sources project`). No web: a search on a blind card could reveal the
+    date, the symbol or the outcome.
   - The answer: VERDICT / CONFIDENCE / WHY plus a levers block. v1 is stored as blind_v1 (rejected stacks are logged with the
     reason; the verdict still counts). Follow-ups resume the same consult session; a new levers block becomes v2, v3 ... and counts
     toward the combined result only.
@@ -161,8 +164,8 @@ The advisor emits a fenced block:
   - Config: `backtest.advisor = {model, effort, timeout_s, max_parallel, max_turns}`. The defaults are the advisor's first model,
     medium effort, 600 s, 2 parallel and 30 turns.
 - **The grade** (the session summary and the end page):
-  - Three actors: the trader alone (his first commit), the advisor alone (its blind v1 verdict + v1 stack; cards without a v1
-    verdict are left out) and both together (the final).
+  - Three actors: the trader alone (the first commit), the advisor alone (its blind v1 verdict + v1 stack; a rejected v1 stack
+    is graded as Minimal and the card stays in; cards without a v1 verdict are left out) and both together (the final).
   - Each is reported against Minimal (every signal taken with Minimal) and against raw, at model cost and +1 pip.
   - Selection = the take rate on signals that reached +1R minus the take rate on signals that went to the -1R stop without reaching
     +1R, with a two-proportion z.
@@ -181,4 +184,65 @@ The advisor emits a fenced block:
   overlay port), results_v1, info_v1, split_v1, salt.txt and frames_v1.
 - **Config:** `backtest.advisor_slot.test = "after_commit"` (the default), optionally a `backtest.advisor` block.
 - **Box:** the claude CLI must accept `--resume` (follow-ups). The advisor runner creates the work dir on its first poll.
+- **Box (review 2):** the consult flags are `--restricted --tools Read --allowedTools "Read(./**)" --disallowedTools ...
+  --strict-mcp-config --setting-sources project`. Locally (CLI 2.1.289, against a fake API) Read inside the bundle worked. An
+  absolute path outside it, `../`, a traversal path, Glob, WebFetch and Bash were all refused; only Read was offered to the model.
+  **After deploy,** run one real consult on the box (CLI 2.1.281) and check that a read of `../../` is refused.
 - **The ledger starts empty on the box.** The local test ledger lives only under the scratchpad root.
+
+## Review 2 fixes (2026-10-05; build only, nothing deployed)
+- **Locks:** the store loads before the session lock is taken (`card`, `report_csv`); the lock is re-entrant. The webapp and the
+  advisor runner are separate processes, so per-card state uses lock files (`<status>.lock`, stale after 30 s).
+- **Advisor order:** `/bt/ask` is refused until the card's advisor view is done. `blind_v1` can only come from the blind batch.
+  Follow-ups: at most 3 waiting, 5 per card, 50 per session. One consult per card at a time; the thread merges under the card lock
+  and is numbered.
+- **Cost:** about 10 initial consults ahead of the trader instead of the whole session at once. The Test start screen shows a cost
+  note.
+- **Commit rules:** a Take first call needs a valid plan. A Skip with an over-cap plan still commits: the plan is stored as null
+  with `plan_invalid`.
+- **Final buttons:** locked while the advisor works, until "Proceed without it".
+- **Presets:** "Advisor v1 (its blind first plan)" stays loadable after a follow-up replaces the recommendation.
+- **Speed:** plan evaluations are cached (key: store, card, plan). Decide stays around 0.01-0.04 s at any session length.
+- **Overlays:** computed from bars truncated at the signal bar (`Bars.upto`). `check_card` asserts this; a deliberately leaky
+  build fails. The rebuilt cards are identical to cards_v3.
+- **Charts:** blind charts keep zero and negative R levels (the range, levels, zones and fibs). Fib labels have no " SL". A
+  one-point zone is drawn back to the previous bar.
+- **Practice/Test reveal guard:**
+  - a Test draw skips Test signals in the 14 days after a SERVED Practice card of the same symbol;
+  - while a Test session is open, Practice skips cards from 14 days before to 60 days after its undecided Test signals (same
+    symbol).
+- **Dev:** `n` must be a whole number of at least 1.
+
+### Coach note - Practice reveals vs the Test partition (numbers 2026-10-05)
+The split is random per trade, so Practice and Test signals interleave in time. **Measured after the guard,** with 3 served Practice
+sessions and then the planned Test sessions:
+- **Same symbol, reveal direction:** 0 drawn Test signals (was up to 68%).
+- **Any group symbol in the 14 days before a Test signal:** bloc 59%, majors 17%. The crosses share legs.
+- **History direction** (a later served Practice card's 60-day chart shows a Test signal's aftermath, same symbol): bloc 54%,
+  majors 73%. The charts are in R with no dates, so using this needs shape-matching across cards.
+- **Guard (b) check:** with a Test session open, a fresh Practice draw had 0 same-symbol cards near its undecided signals.
+
+**Test pool left under wider guards.** Eligible pool: bloc 988, majors 263.
+
+| Rule | Bloc after 1 / 3 / 6 Practice sessions | Majors after 1 / 3 / 6 |
+|---|---|---|
+| Same symbol, 0..+14 days (shipped) | 944 / 870 / 759 | 243 / 212 / 185 |
+| Same symbol, -60..+14 | 727 / 439 / 202 | 165 / 83 / 48 |
+| Any group symbol, 0..+14 | 698 / 381 / 142 | 220 / 180 / 137 |
+| Any group symbol, -60..+14 | 95 / 6 / 0 | 107 / 45 / 31 |
+
+A random split cannot close the group-wide or history exposure without emptying the Test pool. **The structural answer is a
+time-blocked split.** Practice drops 14 days before and 60 days after each Test block. Session counts are full sessions back to back
+under the 91-day / 15-day rules:
+
+| Design | Bloc | Majors |
+|---|---|---|
+| Current random split | Test 1040. Sessions of 100: 7 / of 70: 9 / of 50: 12 | Test 272. Of 35: 4 / of 25: 7 / of 20: 9 |
+| Test = Sep-Dec every year | Test 1110, buffer 724. Largest session ~69. Of 70: 6 / of 50: 15 | Test 274, buffer 185. Largest 24. Of 20: 7 / of 15: 11 |
+| Test = even years | Test 1746, buffer 326. Of 100: 8 / of 70: 17 / of 50: 25. Practice draws 86 of 100 | Test 455, buffer 79. Largest 31. Of 25: 8 / of 20: 14. Practice draws 24 of 35 |
+
+- **Sep-Dec** keeps Practice whole but caps the bloc at ~70 and the majors at ~20 per session, and tilts Test to one season.
+- **Alternate years** keeps bloc sessions of 100 but thins Practice, which is the majors' binding constraint.
+- **Not re-cut.** The split stays split_v1 until the coach rules.
+
+Scripts: scratchpad fix2/xpart2.py, xpart3.py, xpart4.py.

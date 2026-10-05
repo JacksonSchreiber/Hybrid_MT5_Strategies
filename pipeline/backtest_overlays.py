@@ -15,7 +15,9 @@ mql5/include/Hybrid/detectors/*.mqh (read-only), returning exactly what each Det
              signal; accepted only when the replay emits ON the signal bar with the trade's SL and TP.
 Indicators: EMA seeded with the first close (as the cards), ATR = the SMA of the true range (MT5 iATR). DC_Buffer = max(0.1 x ATR,
 spread) -> 0.1 x ATR (the spread is not known offline; on H4 the ATR term dominates); DC_Fill -> the trade's entry at the emit.
-Every function returns (overlay, prov); prov["max_i"] = the newest bar index read (must be <= the signal bar: checked by the cards).
+Every function returns (overlay, prov). Review 2 #11: the cards call them with Bars.upto(signal bar) and Periods/day_of built from
+completed days + the partial signal day - arrays that physically END at the signal bar, so any read past it raises IndexError (the
+old prov["max_i"] was a self-reported literal). prov["max_i"] is kept for information only.
 """
 from __future__ import annotations
 import datetime as dt
@@ -43,6 +45,14 @@ class Bars:
     def __init__(self, t: list, o, h, l, c):
         self.t = t; self.o = np.asarray(o, float); self.h = np.asarray(h, float); self.l = np.asarray(l, float); self.c = np.asarray(c, float)
         self.e20 = ema(self.c, 20); self.e50 = ema(self.c, 50); self.atr = atr_sma(self.h, self.l, self.c, 14)
+
+    def upto(self, i: int) -> "Bars":
+        """a view holding only bars 0..i (review 2 #11). Every indicator at index k depends only on bars <= k, so slicing equals
+        recomputing on the truncated history; a read at an index > i now raises IndexError instead of seeing the future."""
+        V = Bars.__new__(Bars); n = i + 1
+        V.t = self.t[:n]; V.o = self.o[:n]; V.h = self.h[:n]; V.l = self.l[:n]; V.c = self.c[:n]
+        V.e20 = self.e20[:n]; V.e50 = self.e50[:n]; V.atr = self.atr[:n]
+        return V
 
 
 def _close(a, b, tol): return abs(a - b) <= tol

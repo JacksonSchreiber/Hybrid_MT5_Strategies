@@ -30,10 +30,10 @@ def ema(vals: list[float], n: int) -> list[float]:
     for v in vals[1:]: out.append(out[-1] + k * (v - out[-1]))
     return out
 
-def _price_range(bars, extra: list[float]) -> tuple[float, float]:
+def _price_range(bars, extra: list[float], any_sign: bool = False) -> tuple[float, float]:
     lo = min(b[3] for b in bars); hi = max(b[2] for b in bars)
     for p in extra:
-        if p and p > 0: lo = min(lo, p); hi = max(hi, p)
+        if (p is not None) if any_sign else (p and p > 0): lo = min(lo, p); hi = max(hi, p)      # any_sign: blind R prices (0 / negative)
     pad = (hi - lo) * 0.06 or 1e-6
     return lo - pad, hi + pad
 
@@ -52,12 +52,15 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
     emas = {n: (pre(n) if pre(n) and len(pre(n)) == len(bars) else ema(closes, n))[-n_show:] for n in (20, 50, 200)}
     show = bars[-n_show:]; n = len(show); t_index = {b[0]: i for i, b in enumerate(show)}
     lv = levels or {}
+    # review 2 #12: a BLIND render (hide_dates - the backtest cards) has prices in R from the entry, where 0 (the entry) and negative
+    # values (the SL, a SELL's targets) are real levels; live renders keep the old "a price is > 0" test
+    pos = (lambda p: p is not None and isinstance(p, (int, float))) if hide_dates else (lambda p: bool(p) and p > 0)
     extra = [lv.get(k) for k in ("entry", "sl", "tp1", "tp2", "tp")]
     if overlay:
         for z in ("zone", "zone2"):
             zz = overlay.get(z) or {}
-            if zz.get("hi", 0) > 0: extra += [zz["hi"], zz["lo"]]
-    lo, hi = _price_range(show, [e for e in extra if e])
+            if pos(zz.get("hi")) and pos(zz.get("lo")) and (not hide_dates or zz["hi"] != zz["lo"]): extra += [zz["hi"], zz["lo"]]
+    lo, hi = _price_range(show, [e for e in extra if pos(e)], any_sign=hide_dates)
     x0, x1, y0, y1 = pad_l, W - pad_r, pad_t, H - pad_b
     step = (x1 - x0) / n; bw = max(2, int(step * 0.62))
     def X(i): return x0 + step * (i + 0.5)
@@ -82,7 +85,7 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
         z_from = t_index.get(_epoch(zz.get("from"))); z_to = t_index.get(_epoch(zz.get("to")))
         for z, col in (("zone", ZONE), ("zone2", ZONE2)):
             zz = overlay.get(z) or {}
-            if zz.get("hi", 0) > 0 and zz.get("lo", 0) > 0:
+            if pos(zz.get("hi")) and pos(zz.get("lo")) and (not hide_dates or zz["hi"] != zz["lo"]):
                 xa = X(z_from) if z_from is not None else x0; xb = X(z_to) if z_to is not None else x1
                 d.rectangle([xa - bw, Y(zz["hi"]), xb + bw, Y(zz["lo"])], fill=col, outline=(col[0], col[1], col[2], 160))
     # imbalances (FVG / gap / volume spike) from the bars, as DrawImbalances: purple boxes to the last bar + midline
@@ -115,26 +118,30 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
     # overlay: leg, aux levels, swings
     leg = (overlay or {}).get("leg") or {}
     if overlay:
-        if leg.get("p0", 0) > 0 and leg.get("p1", 0) > 0:
+        if pos(leg.get("p0")) and pos(leg.get("p1")) and leg.get("t0"):
             i0 = t_index.get(_epoch(leg.get("t0"))); i1 = t_index.get(_epoch(leg.get("t1")))
             if i0 is not None and i1 is not None: d.line([(X(i0), Y(leg["p0"])), (X(i1), Y(leg["p1"]))], fill=LEG, width=2)
         lx = X(z_to) + 6 if z_to is not None else x0 + 4
         for a in overlay.get("aux") or []:
-            if a.get("price", 0) > 0:
+            if pos(a.get("price")):
                 _dashed(d, x0, x1, Y(a["price"]), (192, 192, 192), 2, 4); d.text((lx, Y(a["price"]) - 13), a.get("label", ""), fill=(192, 192, 192), font=f_small)
-        if strategy == "DeepFib" and leg.get("p0", 0) > 0 and leg.get("p1", 0) > 0:
+        if strategy == "DeepFib" and pos(leg.get("p0")) and pos(leg.get("p1")) and leg.get("t0"):
             from live import overlays as OV
-            for price, lab, gp in OV.fib_levels(leg):
+            fl = OV.fib_levels(leg) if not hide_dates else \
+                [(leg["p1"] + k * (leg["p0"] - leg["p1"]), t.replace(" SL", ""), 0.618 <= k <= 0.786) for k, t in zip(OV.FIB_LV, OV.FIB_LT)]
+            for price, lab, gp in fl:                         # blind: prices may be <= 0; "88.6 SL" read as a second stop (review 2 #13c)
                 col = (255, 215, 0) if gp else (150, 150, 150)
                 _dashed(d, x0, x1, Y(price), col, 4 if gp else 2, 4); d.text((x1 - 70, Y(price) - 13), lab, fill=col, font=f_small)
         for key, mark in (("swings_hi", "v"), ("swings_lo", "^")):
             for s in overlay.get(key) or []:
                 i = t_index.get(_epoch(s.get("t")))
-                if i is not None: d.text((X(i) - 4, Y(s["p"]) - (14 if mark == "v" else 2)), mark, fill=(255, 200, 120), font=f_small)
+                if i is None: continue
+                sp = s.get("p") if s.get("p") is not None else (show[i][2] if mark == "v" else show[i][3])   # blind swings carry only t
+                d.text((X(i) - 4, Y(sp) - (14 if mark == "v" else 2)), mark, fill=(255, 200, 120), font=f_small)
     # levels
     for key, col, lab in (("entry", UP, "entry"), ("sl", DN, "SL"), ("tp1", BLUE, "TP1"), ("tp2", BLUE, "TP2")):
         p = lv.get(key)
-        if p and p > 0:
+        if pos(p):
             _dashed(d, x0, x1, Y(p), col); d.text((x1 - 34, Y(p) - 14), lab, fill=col, font=f_small)
     if signal_t is not None and signal_t in t_index:
         x = X(t_index[signal_t]); d.line([(x, y0), (x, y1)], fill=(255, 255, 255, 60)); d.text((x + 3, y0 + 2), "signal", fill=TXT, font=f_small)
@@ -147,6 +154,7 @@ def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict |
     return img
 
 def _epoch(iso) -> int | None:
+    if isinstance(iso, (int, float)) and not isinstance(iso, bool): return int(iso)     # blind cards: synthetic epoch numbers
     if not iso: return None
     try: return int(datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
     except ValueError: return None

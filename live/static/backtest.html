@@ -27,6 +27,8 @@
       <p class="k bt-small">Sessions are a stratified random draw from the group's partition (years, directions and detectors in proportion), one symbol at most
         once per three months, any two signals at least 15 days apart, nothing research-locked.
         <span x-show="startMode === 'test'" x-text="'Test signals left: ' + groups.map(function (g) { return g.name + ' ' + (testLeft[g.key] === undefined ? '?' : testLeft[g.key]); }).join(' · ') + ' · menu v1 frozen'"></span></p>
+      <p class="k bt-small" x-show="startMode === 'test'">Cost: every Test card runs one blind advisor consult on the box (a few minutes of the advisor's model each),
+        queued about 10 cards ahead of you; follow-up questions are capped at 5 per card and 50 per session.</p>
     </div>
     <div class="card" x-show="sessions.length">
       <div class="bt-h3">Your sessions</div>
@@ -105,7 +107,8 @@
               <sl-option value="default" x-text="(C.default ? C.default.label : '') + ' (preloaded)'"></sl-option>
               <template x-for="p in menu.presets" :key="p.key"><sl-option :value="p.key" x-text="p.label"></sl-option></template>
               <sl-option value="raw">Raw signal (nothing added)</sl-option>
-              <template x-if="C.advisor"><sl-option value="advisor" x-text="'Advisor recommended · ' + C.advisor.note"></sl-option></template>
+              <template x-if="C.advisor"><sl-option value="advisor" x-text="'Advisor recommended · ' + (C.advisor_v1 ? 'latest, ' : '') + C.advisor.note"></sl-option></template>
+              <template x-if="C.advisor_v1"><sl-option value="advisor_v1">Advisor v1 (its blind first plan)</sl-option></template>
             </sl-select>
             <sl-tooltip content="Undo (Ctrl+Z)"><sl-icon-button name="arrow-counterclockwise" label="Undo" @click="undo()" :disabled="!!rev || hpos <= 0"></sl-icon-button></sl-tooltip>
             <sl-tooltip content="Redo (Ctrl+Shift+Z)"><sl-icon-button name="arrow-clockwise" label="Redo" @click="redo()" :disabled="!!rev || hpos >= hist.length - 1"></sl-icon-button></sl-tooltip>
@@ -208,15 +211,16 @@
               <div class="bt-commit"><sl-icon name="shield-check"></sl-icon> Your first call: <b x-text="C.committed.decision.toUpperCase()"></b> <span class="k">(locked)</span></div>
               <div class="bt-advbox">
                 <template x-if="advWorking()"><div class="bt-advwait"><sl-spinner></sl-spinner> <span>The advisor is still working on this card…</span>
-                  <span class="k" x-show="!proceedNoAdv">You can wait (it appears here) or give your final call without it.</span>
-                  <sl-button size="small" variant="text" x-show="!proceedNoAdv" @click="proceedNoAdv = true">Proceed without it</sl-button></div></template>
+                  <span class="k" x-show="!proceedNoAdv">Wait for it to appear here, or choose to give your final call without it.</span>
+                  <sl-button size="small" variant="text" x-show="!proceedNoAdv" @click="proceedNoAdv = true">Proceed without it</sl-button>
+                  <span class="k" x-show="proceedNoAdv">Final call unlocked - the advisor's view will still appear here if it arrives first.</span></div></template>
                 <template x-if="advState() === 'failed' || advState() === 'none'"><div class="k">The advisor has no view on this card<span x-text="C.adv && C.adv.error ? ' (' + C.adv.error + ')' : ''"></span>.</div></template>
                 <template x-if="advState() === 'done'"><div>
                   <div><sl-icon name="stars"></sl-icon> <b>Advisor:</b> <span class="bt-tag" :class="(C.adv||{}).verdict === 'TAKE' ? 'up' : ((C.adv||{}).verdict === 'SKIP' ? 'dn' : 'dim')" x-text="(C.adv||{}).verdict || 'no verdict'"></span>
                     <span class="k" x-show="(C.adv||{}).confidence !== null && (C.adv||{}).confidence !== undefined" x-text="'confidence ' + (C.adv||{}).confidence"></span></div>
                   <div x-show="(C.adv||{}).why" x-text="(C.adv||{}).why"></div>
                   <div class="k bt-small" x-show="C.advisor" x-text="C.advisor ? ('Its plan is in the preset list as “Advisor recommended” (' + C.advisor.note + ', nearest preset: ' + labelOf(C.advisor.nearest_preset) + ')') : ''"></div>
-                  <div class="k bt-small" x-show="!C.advisor">Its lever plan was not usable (rejected) - the verdict above still counts.</div></div></template>
+                  <div class="k bt-small" x-show="!C.advisor">Its lever plan was not usable (rejected) - its verdict still counts and is graded as if it had used Minimal.</div></div></template>
                 <div class="bt-thread"><template x-for="t in (C.adv && C.adv.thread) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + t.q"></div>
                   <div class="bt-a" x-text="'Advisor: ' + t.a"></div><div class="k bt-small" x-show="t.new_version" x-text="typeof t.new_version === 'number' ? ('new plan v' + t.new_version + ' - in the preset list') : t.new_version"></div></div></template>
                   <template x-for="q in (C.adv && C.adv.pending) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + q"></div><div class="k"><sl-spinner></sl-spinner> the advisor is answering…</div></div></template></div>
@@ -225,8 +229,8 @@
               </div>
               <div class="k bt-small">Step 2 of 2 - your final call (you can load the advisor's plan from the preset list; Undo goes back).</div>
               <div class="bt-decide">
-                <sl-button size="large" @click="decide('skip')" :loading="busy">Final: Skip</sl-button>
-                <sl-button size="large" variant="primary" @click="decide('take')" :disabled="!v.ok" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon>Final: Take</sl-button>
+                <sl-button size="large" @click="decide('skip')" :disabled="finalLocked()" :loading="busy">Final: Skip</sl-button>
+                <sl-button size="large" variant="primary" @click="decide('take')" :disabled="!v.ok || finalLocked()" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon>Final: Take</sl-button>
               </div>
             </div>
           </template>
@@ -282,7 +286,7 @@
           <td x-text="row[1].n ? (pct(row[1].selection.take_rate_reached_1R) + ' / ' + pct(row[1].selection.take_rate_went_to_stop) + (row[1].selection.spread_points !== null ? ' (' + (row[1].selection.spread_points > 0 ? '+' : '') + row[1].selection.spread_points + ' pts' + (row[1].selection.z !== null ? ', z ' + row[1].selection.z : '') + ')' : '')) : '-'"></td>
           <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_minimal) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
         </tr></template></tbody></table>
-        <div class="k bt-small">Model cost. The advisor's grade leaves out cards where it gave no verdict. Bars (coach): selection spread of at least 15 points
+        <div class="k bt-small">Model cost. The advisor's grade leaves out cards where it gave no verdict; a verdict whose plan was rejected is graded with Minimal. Bars (coach): selection spread of at least 15 points
           at z/t >= 2 and total R at or above Minimal; presets/plans +0.05R vs Minimal on taken trades at t >= 2.</div></div>
     </template>
     <div class="bt-row bt-tally">

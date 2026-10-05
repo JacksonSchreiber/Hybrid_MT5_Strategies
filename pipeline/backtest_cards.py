@@ -123,8 +123,20 @@ def build_overlay(ctx: dict, bars: list, isig: int, lo: int, e: float, sl: float
                   nz, tsyn) -> tuple[dict | None, dict]:
     """the detector's live-card overlay (pipeline/backtest_overlays.py) in card units: prices nz(), bar indices -> tsyn()."""
     from pipeline import backtest_overlays as BO
-    ov, prov = BO.overlay_for(det, ctx["ob"], isig, up, {"entry": e, "sl": sl, "tp1": tp1, "tp2": tp2}, tol, ctx["per"],
-                              lambda i: day_of(bars[i][0]))
+    # review 2 #11: everything the detector port reads ENDS at the signal bar - the bars (a truncated view), the D1/W1 periods
+    # (completed days + the partial signal day from H4 bars <= the signal bar) and the 'now' day of the bar after the signal
+    # (its open = the signal bar + 4 h, rolled past the weekend - no bar after the signal is touched)
+    n1 = isig + 1; V = ctx["ob"].upto(isig)
+    sig_day = day_of(bars[isig][0]); kd = ctx["day_idx"][sig_day]; f0 = ctx["first"][kd]
+    part = (sig_day, max(b[2] for b in bars[f0:n1]), min(b[3] for b in bars[f0:n1]))
+    Pt = BO.Periods([(d[0], d[2], d[3]) for d in ctx["days"][:kd]] + [part])
+    def day_t(i):
+        if i < n1: return day_of(bars[i][0])
+        d = dt.datetime.strptime(str(bars[isig][0])[:16], "%Y.%m.%d %H:%M") + dt.timedelta(hours=4)
+        while d.weekday() >= 5: d += dt.timedelta(days=1)
+        return d.strftime("%Y.%m.%d")
+    ov, prov = BO.overlay_for(det, V, isig, up, {"entry": e, "sl": sl, "tp1": tp1, "tp2": tp2}, tol, Pt, day_t)
+    prov = dict(prov, bars_len=len(V.h))
     if not ov: return None, prov
     idx = [ov["zone"]["i_from"], ov["zone"]["i_to"]] + ([ov["leg"]["i0"], ov["leg"]["i1"]] if ov.get("leg") else []) \
           + [j for j, _ in ov.get("swings_hi", [])] + [j for j, _ in ov.get("swings_lo", [])]
@@ -208,7 +220,8 @@ def check_card(card: dict, prov: dict) -> None:
     # v3: the overlay - read only bars up to the signal bar, every element inside the visible window, synthetic times only
     op = prov["overlay"]; ov = card.get("overlay")
     assert ov is not None, "no verified overlay"
-    assert op["max_i"] <= prov["isig"] and op["idx_max"] <= prov["isig"], "overlay uses a bar after the signal"
+    assert op.get("bars_len") == prov["isig"] + 1, "overlay not computed from bars truncated at the signal bar"   # review 2 #11
+    assert op["idx_max"] <= prov["isig"], "overlay uses a bar after the signal"
     t_lo, t_hi = card["h4"]["bars"][0][0], card["h4"]["bars"][-1][0]
     ts = [ov["zone"]["from"], ov["zone"]["to"]] + ([ov["leg"]["t0"], ov["leg"]["t1"]] if ov.get("leg") else []) \
          + [x["t"] for x in ov.get("swings_hi", []) + ov.get("swings_lo", [])]
@@ -254,13 +267,14 @@ def main():
         raise SystemExit(f"CHECK FAILED on {sum(1 for f in fails if f[1] != 'too little history')} cards, e.g. {[f for f in fails if f[1] != 'too little history'][:3]}")
     doc = {"v": CARD_V, "built": time.strftime("%Y-%m-%d %H:%M"), "split_sha": split["sha256"], "n": len(cards), "cards": cards}
     raw = json.dumps(doc, separators=(",", ":")).encode()
-    with gzip.open(OUT, "wb", compresslevel=9) as f: f.write(raw)
+    out = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else OUT
+    with gzip.open(out, "wb", compresslevel=9) as f: f.write(raw)
     L = [f"cards v{CARD_V} built {doc['built']} from split {split['sha256'][:16]}..: {len(cards)} of {ntr} trades carded, "
          f"{len(fails)} skipped (too little history before the signal), check_card PASS on every carded trade",
          f"calendar unavailable on {cal_gap} cards (signal before 2013 or within 14 days of the feed's end)",
          f"overlays (v3): verified and drawn on {dict(nov)}; left out (overlay not verifiable): {len(no_ov)} "
          f"{dict(collections.Counter(w for _, _, w in no_ov))} by detector {dict(collections.Counter(d for _, d, _ in no_ov))}",
-         f"size {len(raw) / 1e6:.1f} MB raw, {os.path.getsize(OUT) / 1e6:.1f} MB gzip; {time.time() - t0:.0f}s"]
+         f"size {len(raw) / 1e6:.1f} MB raw, {os.path.getsize(out) / 1e6:.1f} MB gzip; {time.time() - t0:.0f}s"]
     if "--dev" in sys.argv:
         os.makedirs(DEV, exist_ok=True); k = int(sys.argv[sys.argv.index("--dev") + 1])
         for h in list(cards)[:k]: dev_page(cards[h], os.path.join(DEV, f"{h}.html"))

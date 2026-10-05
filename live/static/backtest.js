@@ -99,6 +99,8 @@
         else if (key === 'raw') { cfg = this.menu.raw; about = 'In at the signal, out at TP2 or the stop - nothing added.'; }
         else if (key === 'advisor') { cfg = this.C.advisor.plan; about = 'Advisor: ' + this.C.advisor.rationale;
           post('/bt/adv_loaded', { sid: this.sess.sid, i: this.C.i }); }
+        else if (key === 'advisor_v1') { cfg = this.C.advisor_v1.plan; about = 'Advisor (its blind first plan): ' + this.C.advisor_v1.rationale;   // review 2 #13d
+          post('/bt/adv_loaded', { sid: this.sess.sid, i: this.C.i }); }
         else { var p = this.menu.presets.filter(function (x) { return x.key === key; })[0]; cfg = p.cfg; about = p.about; }
         this.fromConfig(cfg); this.commit(); this.presetSel = key; this.presetAbout = about;   // ONE undoable step
         this.basePreset = key; this.histBase[this.hpos] = key;          // coach 2026-10-04: the preset the plan was loaded from (kept through later edits) = "loaded_preset"
@@ -209,11 +211,12 @@
       isTest: function () { return this.C && this.C.mode === 'test'; },
       advState: function () { return (this.C && this.C.adv && this.C.adv.state) || 'none'; },
       advWorking: function () { var s = this.advState(); return s === 'queued' || s === 'running'; },
+      finalLocked: function () { return this.isTest() && this.advWorking() && !this.proceedNoAdv; },   // review 2 #13a: "Proceed without it" is the gate
       commitFirst: function (d) {
         var self = this; if (d === 'take' && !self.v.ok) return; self.busy = true;
         post('/bt/commit', { sid: self.sess.sid, i: self.C.i, decision: d, plan: JSON.stringify(self.toConfig()) }).then(function (j) {
           self.busy = false; if (j.ok === false) { self.err = j.error; return; }
-          self.C.committed = j.committed; self.C.advisor = j.advisor; self.C.adv = j.adv; self.maybePoll();
+          self.C.committed = j.committed; self.C.advisor = j.advisor; self.C.advisor_v1 = j.advisor_v1; self.C.adv = j.adv; self.maybePoll();
         }).catch(function (e) { self.busy = false; self.err = String(e); });
       },
       maybePoll: function () {
@@ -227,7 +230,7 @@
         get('/api/bt/advisor?sid=' + self.sess.sid + '&i=' + self.C.i).then(function (j) {
           if (j.ok === false) { self.stopPoll(); return; }
           if (j.i !== self.C.i) return;
-          self.C.advisor = j.advisor; self.C.adv = j.adv; self.maybePoll();
+          self.C.advisor = j.advisor; self.C.advisor_v1 = j.advisor_v1; self.C.adv = j.adv; self.maybePoll();
         }).catch(function () {});
       },
       askAdvisor: function () {
