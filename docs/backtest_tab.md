@@ -149,7 +149,8 @@ The advisor emits a fenced block:
     cards are decided (review 2). Each holds the BLIND card only: no symbol, date, outcome, results, combo data or commit.
   - Initial consults run in session order, follow-ups first, `max_parallel` at a time (default 2). A failure gets one retry after
     60 s, then the card is marked failed. A crash is recovered from the leftover `.running` files.
-  - Work dir: `<advisor live_dir>/../backtest/`, holding the role file CLAUDE.md, a deny-only `.claude/settings.json` and one
+  - Work dir: `<advisor live_dir>/../backtest/`, holding the role file CLAUDE.md, a deny-only `.claude/settings.json` (not load-bearing: `--restricted` ignores settings
+    and the consult runs in a subfolder) and one
     folder per card, `bundles/<random token>/{CLAUDE.md, card.md, h4.png, d1.png, h4_bars.csv}`. The consult RUNS INSIDE that
     folder, and the prompt carries no session id, card number or path. The charts are rendered with `live/charts.py` from the
     blind bars in R, with the card's precomputed EMAs, the detector overlay and no dates; card.md lists the overlay in price-R and
@@ -217,12 +218,13 @@ The advisor emits a fenced block:
 The split is random per trade, so Practice and Test signals interleave in time. **Measured after the guard,** with 3 served Practice
 sessions and then the planned Test sessions:
 - **Same symbol, reveal direction:** 0 drawn Test signals (was up to 68%).
-- **Any group symbol in the 14 days before a Test signal:** bloc 59%, majors 17%. The crosses share legs.
+- **Any group symbol in the 14 days before a Test signal:** bloc 59-62%, majors 17-22% (two runs). The crosses share legs.
 - **History direction** (a later served Practice card's 60-day chart shows a Test signal's aftermath, same symbol): bloc 54%,
   majors 73%. The charts are in R with no dates, so using this needs shape-matching across cards.
 - **Guard (b) check:** with a Test session open, a fresh Practice draw had 0 same-symbol cards near its undecided signals.
 
-**Test pool left under wider guards.** Eligible pool: bloc 988, majors 263.
+**Test pool left under wider guards.** Eligible pool: bloc 988, majors 263. The Practice sessions are a random draw,
+so a rerun moves these counts by a few percent.
 
 | Rule | Bloc after 1 / 3 / 6 Practice sessions | Majors after 1 / 3 / 6 |
 |---|---|---|
@@ -245,4 +247,5 @@ under the 91-day / 15-day rules:
 - **Alternate years** keeps bloc sessions of 100 but thins Practice, which is the majors' binding constraint.
 - **Not re-cut.** The split stays split_v1 until the coach rules.
 
-Scripts: scratchpad fix2/xpart2.py, xpart3.py, xpart4.py.
+Scripts: `pipeline/backtest_split_guard_check.py` (the exposure left), `pipeline/backtest_split_guard_cost.py` (the pool table),
+`pipeline/backtest_split_blocks.py` (the block designs).
