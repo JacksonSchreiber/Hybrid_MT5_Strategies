@@ -795,7 +795,7 @@ PR_CSS = """<style>
 .pr-top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
 @media (max-width:600px){.pr-top .big{font-size:18px}}
 .pr-top .pr-clear{margin-left:auto} .pr-clear .btn{padding:2px 8px;font-size:12px;opacity:.8} .pr-clear .btn:hover{opacity:1}
-</style>"""
+</style><script>(function(){if(window.__prClear)return;window.__prClear=1;document.addEventListener("submit",function(e){var f=e.target;if(!f.classList||!f.classList.contains("pr-clear"))return;e.preventDefault();var d=new URLSearchParams(new FormData(f));d.append("ajax","1");var b=f.querySelector("button");if(b)b.disabled=true;fetch("/review_clear",{method:"POST",body:d}).then(function(r){return r.json();}).then(function(j){if(!j.ok)throw new Error(j.error||"failed");var k=f.querySelector("[name=key]").value,it=f.closest(".pr-item");if(it)it.remove();document.querySelectorAll("[data-pr-key]").forEach(function(x){if(x.getAttribute("data-pr-key")===k)x.remove();});}).catch(function(err){if(b)b.disabled=false;alert("Could not clear: "+err.message);});});})();</script>"""
 
 def _pr_time(ts: str) -> str:
     try:
@@ -863,7 +863,7 @@ def positions_review_pills() -> dict:
         t = _dt.strptime(rv["ts"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
         if (C.now_utc() - t).total_seconds() > 12 * 3600: return {}
         cl = PR.cleared(CFG, rv["ts"])
-        return {r["key"]: f' <span class="k">advisor:</span> {_pr_badge(r)}' for r in rv.get("recs") or [] if r.get("action") != "hold" and not r.get("missing") and r["key"] not in cl}
+        return {r["key"]: f' <span data-pr-key="{E(r["key"])}"><span class="k">advisor:</span> {_pr_badge(r)}</span>' for r in rv.get("recs") or [] if r.get("action") != "hold" and not r.get("missing") and r["key"] not in cl}
     except Exception: return {}
 
 def review_page(q: dict) -> str:
@@ -1697,11 +1697,14 @@ class H(BaseHTTPRequestHandler):
                 ts = form.get("r", ""); key = form.get("key") or None
                 back = form.get("back") or "/"
                 if not (back == "/" or back.startswith("/review")): back = "/"
+                ajax = form.get("ajax") == "1"
                 if ts not in PR.list_reviews(CFG) or (key is not None and not re.fullmatch(r"[A-Za-z0-9._#-]{1,64}", key)):
+                    if ajax: return self._send(json.dumps({"ok": False, "error": "unknown review or position"}), "application/json", 400)
                     return self._redirect(back, "unknown review or position", False)
                 restore = form.get("restore") == "1"
                 PR.set_cleared(CFG, ts, None if restore else key, on=not restore)
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|review_{'restore' if restore else 'clear'}|{ts}|{key or 'all'}|by=web")
+                if ajax: return self._send(json.dumps({"ok": True}), "application/json")
                 return self._redirect(back, "restored the cleared recommendations" if restore else f"cleared {key}", True)
             if u.path == "/positions_review":                                 # trader 2026-10-04: on-demand open-positions review
                 from live import positions_review as PR
