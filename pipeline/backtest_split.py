@@ -28,7 +28,8 @@ OUT = os.path.join(ROOT, "data", "backtest")
 SESSION_N = {"com": 100, "maj": 35}; TEST_SESSIONS = {"com": 2, "maj": 3}
 SPLIT = os.path.join(OUT, "split_v1.json"); SALT = os.path.join(OUT, "salt.txt"); LEDGER = os.path.join(OUT, "test_ledger.json")
 REPORT = os.path.join(OUT, "split_v1_report.txt")
-VERSION, SEED, TEST_FRAC, GAP_DAYS = 1, 20261004, 0.30, 182
+VERSION, SEED, TEST_FRAC, GAP_DAYS = 1, 20261004, 0.30, 91   # coach 2026-10-04: per-symbol spacing 3 months (was 182 days)
+GROUP_GAP_DAYS = 15          # review 2026-10-04: no two signals of ANY symbol in a session within the reveal horizon (crosses share legs)
 GROUPS = ("com", "maj")                                      # commodity bloc, USD majors (coach item 6)
 
 
@@ -99,86 +100,115 @@ def _date(t: dict) -> dt.date:
     return dt.date(int(t["key"][1][:4]), int(t["key"][1][5:7]), int(t["key"][1][8:10]))
 
 
-def max_session(split: dict, g: str, part: str, lock: dict, exclude: set = frozenset()) -> dict:
-    """the most signals one session could hold under the six-month rule (greedy earliest-first = the optimum per symbol)."""
-    out = {}
-    for s in group_syms(g):
-        ds = sorted(_date(t) for h, t in split["trades"].items()
-                    if t["group"] == g and t["part"] == part and t["key"][0].split(".")[0] == s and not locked(t, lock) and h not in exclude)
-        n, last = 0, None
-        for d in ds:
-            if last is None or (d - last).days >= GAP_DAYS: n += 1; last = d
-        out[s] = n
+def max_session(split: dict, g: str, part: str, lock: dict, exclude: set = frozenset(), eligible: set | None = None) -> dict:
+    """the most signals one session could hold under the six-month rule per symbol AND the group-wide 15-day gap (greedy
+    earliest-first over the whole group: the per-symbol optimum when the group gap does not bind, a lower bound when it does)."""
+    rows = sorted((_date(t), t["key"][0].split(".")[0]) for h, t in split["trades"].items()
+                  if t["group"] == g and t["part"] == part and not locked(t, lock) and h not in exclude and (eligible is None or h in eligible))
+    out = {s: 0 for s in group_syms(g)}; last: dict = {}; prev = None
+    for d, s in rows:
+        if (s not in last or (d - last[s]).days >= GAP_DAYS) and (prev is None or (d - prev).days >= GROUP_GAP_DAYS):
+            out[s] = out.get(s, 0) + 1; last[s] = d; prev = d
     return out
 
 
-def sample_session(split: dict, g: str, part: str, n: int, seed, lock: dict, record: bool = False, exclude: set = frozenset()) -> dict:
+def sample_session(split: dict, g: str, part: str, n: int, seed, lock: dict, record: bool = False, exclude: set = frozenset(),
+                   eligible: set | None = None) -> dict:
     """{ids: [...] (shuffled), shortfall: {stratum: missing}, n_target, menu-free}. Test draws exclude every Test id ever drawn;
     record=True appends the draw to the ledger (only a real Test session does this)."""
     used = set(json.load(open(LEDGER))["ids"]) if (part == "test" and os.path.exists(LEDGER)) else set()
     used = used | set(exclude)                                # dry-run planning of consecutive sessions without touching the ledger
-    pool = {h: t for h, t in split["trades"].items() if t["group"] == g and t["part"] == part and not locked(t, lock) and h not in used}
+    pool = {h: t for h, t in split["trades"].items() if t["group"] == g and t["part"] == part and not locked(t, lock) and h not in used
+            and (eligible is None or h in eligible)}
     st: dict = {}
     for h, t in pool.items(): st.setdefault((t["year"], "L" if t["up"] else "S", t["det"]), []).append(h)
     full = {}
     for h, t in split["trades"].items():                     # proportions = the whole partition (not just what is left)
-        if t["group"] == g and t["part"] == part and not locked(t, lock): full[(t["year"], "L" if t["up"] else "S", t["det"])] = full.get((t["year"], "L" if t["up"] else "S", t["det"]), 0) + 1
+        if t["group"] == g and t["part"] == part and not locked(t, lock) and (eligible is None or h in eligible):
+            full[(t["year"], "L" if t["up"] else "S", t["det"])] = full.get((t["year"], "L" if t["up"] else "S", t["det"]), 0) + 1
     tot = sum(full.values())
     quota = largest_remainder(full, n / tot, n, lambda s: hashlib.sha256(f"{seed}|{s}".encode()).hexdigest()) if tot else {}
     rng = random.Random(f"{seed}|{g}|{part}|{n}")
-    picked: list = []; last: dict = {}; short = {}
+    picked: list = []; last: dict = {}; short = {}; alld: list = []; picked_set: set = set()
     def ok(h):
         t = pool[h]; s = t["key"][0].split(".")[0]; d = _date(t)
-        return all(abs((d - d2).days) >= GAP_DAYS for d2 in last.get(s, []))
+        return all(abs((d - d2).days) >= GAP_DAYS for d2 in last.get(s, [])) and all(abs((d - d2).days) >= GROUP_GAP_DAYS for d2 in alld)
     order = sorted(quota, key=lambda s: (len(st.get(s, [])) / max(1, quota[s]), s))   # tightest strata first
     for s in order:
         cand = sorted(st.get(s, [])); rng.shuffle(cand); got = 0
         for h in cand:
             if got >= quota[s]: break
             if ok(h):
-                picked.append(h); got += 1; t = pool[h]; last.setdefault(t["key"][0].split(".")[0], []).append(_date(t))
+                picked.append(h); picked_set.add(h); got += 1; t = pool[h]; last.setdefault(t["key"][0].split(".")[0], []).append(_date(t)); alld.append(_date(t))
         if got < quota[s]: short[s] = quota[s] - got
+    # coach 2026-10-04: a thin stratum may fill from the neighbouring year (same direction + detector, the nearest year first)
+    filled = 0
+    for s in sorted(short):
+        y0, dr, dt_ = s
+        cand = [h for h, t in pool.items() if h not in picked_set and (t["year"], "L" if t["up"] else "S", t["det"]) != s
+                and ("L" if t["up"] else "S") == dr and t["det"] == dt_]
+        rng.shuffle(cand); cand.sort(key=lambda h: abs(pool[h]["year"] - y0))
+        for h in cand:
+            if short[s] <= 0: break
+            if ok(h):
+                picked.append(h); picked_set.add(h); short[s] -= 1; filled += 1; t = pool[h]
+                last.setdefault(t["key"][0].split(".")[0], []).append(_date(t)); alld.append(_date(t))
+    short = {k: v for k, v in short.items() if v > 0}
     rng.shuffle(picked)
     if record and part == "test":
         led = json.load(open(LEDGER)) if os.path.exists(LEDGER) else {"ids": [], "sessions": []}
         led["ids"] += picked; led["sessions"].append({"group": g, "n": len(picked), "seed": str(seed), "at": time.strftime("%Y-%m-%d %H:%M")})
         json.dump(led, open(LEDGER, "w"))
-    return {"ids": picked, "shortfall": short, "n_target": n}
+    return {"ids": picked, "shortfall": short, "n_target": n, "filled_from_neighbours": filled}
+
+
+def eligible_cards() -> set | None:
+    """review 2026-10-04: only cards the tab serves (calendar available + a regime tag) - read from the built cards file if any."""
+    import gzip
+    for f in ("cards_v2.json.gz", "cards_v1.json.gz"):
+        p = os.path.join(OUT, f)
+        if os.path.exists(p):
+            cards = json.load(gzip.open(p))["cards"]
+            return {h for h, c in cards.items() if c.get("calendar") == "ok" and (c.get("regime") or {}).get("tag")}
+    return None
 
 
 def report(split: dict) -> str:
-    lock = SG.RESEARCH_LOCK
+    lock = SG.RESEARCH_LOCK; el = eligible_cards()
     L = [f"split v{split['version']} seed {split['seed']} created {split['created']} sha256 {split['sha256'][:16]}..",
-         f"lock used for the report: symbol_groups.RESEARCH_LOCK default (the tab uses the live lock reader at serve time)"]
+         f"lock used for the report: symbol_groups.RESEARCH_LOCK default (the tab uses the live lock reader at serve time)",
+         f"session rules: one symbol at most once per {GAP_DAYS} days, any two signals of the group at least {GROUP_GAP_DAYS} days apart; "
+         f"only servable cards ({'calendar + regime tag, ' + str(len(el)) + ' cards' if el is not None else 'no cards file - every trade'})"]
     for g, gi in split["groups"].items():
         L.append(f"\n{gi['name']} ({', '.join(gi['syms'])}): {gi['n']} trades -> practice {gi['practice']}, test {gi['test']} "
                  f"({100 * gi['test'] / gi['n']:.1f}% test)")
         for part in ("practice", "test"):
-            nl = sum(1 for t in split["trades"].values() if t["group"] == g and t["part"] == part and not locked(t, lock))
-            m = max_session(split, g, part, lock)
-            L.append(f"  {part:8} {nl} served after the lock; max signals in ONE session under the six-month rule: {sum(m.values())} "
+            nl = sum(1 for h, t in split["trades"].items() if t["group"] == g and t["part"] == part and not locked(t, lock) and (el is None or h in el))
+            m = max_session(split, g, part, lock, eligible=el)
+            L.append(f"  {part:8} {nl} served after the lock; max signals in ONE session under the session rules: {sum(m.values())} "
                      f"({', '.join(f'{s} {v}' for s, v in m.items())})")
         tgt = SESSION_N[g]
         for part in ("practice", "test"):
-            r = sample_session(split, g, part, tgt, "feasibility", lock)
+            r = sample_session(split, g, part, tgt, "feasibility", lock, eligible=el)
             L.append(f"  trial draw of {tgt} from {part}: got {len(r['ids'])}" + (f", short in {len(r['shortfall'])} strata ({sum(r['shortfall'].values())} signals)" if r["shortfall"] else ""))
         # how many disjoint Test sessions of the target size fit (draw, exclude, repeat; not recorded)
         used: set = set(); k = 0
         while True:
-            m = max_session(split, g, "test", lock, used)
+            m = max_session(split, g, "test", lock, used, eligible=el)
             if sum(m.values()) < tgt: break
-            pool = sorted(h for h, t in split["trades"].items() if t["group"] == g and t["part"] == "test" and not locked(t, lock) and h not in used)
-            last: dict = {}; got = []
+            pool = sorted(h for h, t in split["trades"].items() if t["group"] == g and t["part"] == "test" and not locked(t, lock) and h not in used
+                          and (el is None or h in el))
+            last: dict = {}; got = []; prev = None
             for h in sorted(pool, key=lambda h: split["trades"][h]["key"][1]):
                 t = split["trades"][h]; s = t["key"][0].split(".")[0]; d = _date(t)
-                if all(abs((d - d2).days) >= GAP_DAYS for d2 in last.get(s, [])) and len(got) < tgt:
-                    got.append(h); last.setdefault(s, []).append(d)
+                if all(abs((d - d2).days) >= GAP_DAYS for d2 in last.get(s, [])) and (prev is None or (d - prev).days >= GROUP_GAP_DAYS) and len(got) < tgt:
+                    got.append(h); last.setdefault(s, []).append(d); prev = d
             if len(got) < tgt: break
             used |= set(got); k += 1
-        L.append(f"  disjoint Test sessions of {tgt} that fit (six-month rule, no reuse, ignoring strata): {k}")
+        L.append(f"  disjoint Test sessions of {tgt} that fit (session rules, no reuse, ignoring strata): {k}")
         used = set(); got = []
         for q in range(TEST_SESSIONS[g]):                      # the planned Test sessions, stratified, back to back (dry run)
-            r = sample_session(split, g, "test", tgt, f"plan{q}", lock, exclude=used); used |= set(r["ids"]); got.append(len(r["ids"]))
+            r = sample_session(split, g, "test", tgt, f"plan{q}", lock, exclude=used, eligible=el); used |= set(r["ids"]); got.append(len(r["ids"]))
         L.append(f"  planned {TEST_SESSIONS[g]} stratified Test sessions of {tgt} drawn back to back (dry run): got {got} = {sum(got)} signals")
     return "\n".join(L)
 

@@ -66,3 +66,7 @@ main{max-width:1400px}
 .bt-reveal{border-color:#3987e5}.bt-big{font-size:24px;font-weight:700;margin:2px 0 6px;font-variant-numeric:tabular-nums}
 .bt-cmp td:last-child{text-align:right;font-weight:600}.bt-cmp tr.bt-me td{font-weight:700;background:#0f1d2e}.bt-flags{margin-top:8px}
 .bt-done{max-width:900px;margin:20px auto}.bt-dev{margin-top:10px}.bt-ta{width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:6px;font:12px ui-monospace,monospace}
+
+/* review 2026-10-04 #13: the sessions table scrolls inside its card at phone width (no page-level horizontal scroll) */
+.bt-scroll{overflow-x:auto;max-width:100%}
+.bt-scroll .bt-tbl{min-width:520px}

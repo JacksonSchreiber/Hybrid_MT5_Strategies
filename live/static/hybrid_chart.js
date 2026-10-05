@@ -42,7 +42,7 @@
         }).catch(function () { build((tf === 'h4' ? d.bars_h4 : d.bars_d1) || [], null); });
       }
       var cs, emaS = {}, closes = [], barsAll = [];
-      function setStatus(tick) { if (!status) return; if (d.blind) { status.textContent = 'blind card · price = R from the entry · time = before the signal (weekends removed) · scroll/drag to zoom and pan'; return; } status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live · axis = broker clock (UTC+3 summer / +2 winter)') : (d.live ? 'feed unavailable' : 'bars as of the signal · axis = broker clock'); }
+      function setStatus(tick) { if (!status) return; if (d.blind) { status.textContent = 'blind card · price = R from the entry' + (d.rsign === -1 ? ' (SELL card: R = profit, price up = loss)' : '') + ' · time = before the signal (weekends removed) · scroll/drag to zoom and pan'; return; } status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live · axis = broker clock (UTC+3 summer / +2 winter)') : (d.live ? 'feed unavailable' : 'bars as of the signal · axis = broker clock'); }
       function update(last, tick) {
         // series.update() accepts only the current bar or a newer one: push the forming bar and any new bar, never older ones
         var lastT = barsAll.length ? barsAll[barsAll.length - 1][0] : 0;
@@ -77,7 +77,8 @@
           timeScale: d.blind ? { borderColor: '#30363d', timeVisible: true, secondsVisible: false, rightOffset: 6, fixRightEdge: true, fixLeftEdge: true,
                                   tickMarkFormatter: function (t) { return relLabel(t, false); } }
                              : { borderColor: '#30363d', timeVisible: tf === 'h4', secondsVisible: false, rightOffset: 6 },
-          localization: d.blind ? { priceFormatter: function (p) { return (p >= 0 ? '+' : '') + p.toFixed(2) + 'R'; }, timeFormatter: function (t) { return relLabel(t, true); } }
+          localization: d.blind ? { priceFormatter: function (p) { var v = (d.rsign === -1 ? -p : p); return (v >= 0 ? '+' : '') + v.toFixed(2) + 'R'; },   // SELL cards: labels in profit R (review #7)
+                                    timeFormatter: function (t) { return relLabel(t, true); } }
                                 : { priceFormatter: function (p) { return p.toFixed(d.digits || 5); } }, handleScale: true, handleScroll: true });
         cs = chart.addCandlestickSeries({ upColor: '#3fb950', downColor: '#f85149', borderUpColor: '#3fb950', borderDownColor: '#f85149', wickUpColor: '#3fb950', wickDownColor: '#f85149',
           priceFormat: d.blind ? { type: 'price', precision: 2, minMove: 0.01 } : { type: 'price', precision: d.digits || 5, minMove: Math.pow(10, -(d.digits || 5)) },

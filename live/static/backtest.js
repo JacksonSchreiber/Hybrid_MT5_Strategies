@@ -31,23 +31,38 @@
     return {
       groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', dev: false, devText: '', devBlind: true,
       sess: null, done: false, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
-      plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '',
+      plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '', basePreset: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null, wide: window.innerWidth > 640,
       init: function () {
         var self = this;
         get('/api/bt/init').then(function (j) { if (j.ok === false) { self.err = j.error; return; }
           self.groups = j.groups; self.menu = j.menu; self.sessions = j.sessions; self.dev = j.dev;
+          self.$nextTick(function () { self.syncGroupSelect(0); });
           self.devText = '```levers\n{"schema": "advisor-levers/v1", "nearest_preset": "ruthless", "rationale": "Weak follow-through on this group: cut fast, bank early.",\n "plan": {"entry": {"pct": 100}, "tp2": true, "levers": [{"type": "bank", "pct": 50, "at": 1.0, "tp1": true}, {"type": "move", "to": 0.25, "when": 1.0, "tp1": true, "legs": "all"}, {"type": "cut_avg", "at_h": 1, "below": 0}]}}\n```';
           var m = location.hash.match(/sid=([0-9a-f]{12})/); if (m) self.resume(m[1]); });
-        document.addEventListener('keydown', function (e) {
+        document.addEventListener('keydown', function (e) {     // ONE listener (Alpine calls init() itself - no x-init; review #4)
           if (!self.sess || self.done || self.rev) return;
+          var path = e.composedPath ? e.composedPath() : [e.target];   // typing in a field: the browser's own undo, not the plan's
+          for (var q = 0; q < path.length; q++) { var tg = path[q] && path[q].tagName; if (tg && /^(INPUT|TEXTAREA|SELECT|SL-INPUT|SL-TEXTAREA)$/.test(tg)) return; }
           var z = (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z'), y = (e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y');
           if (z && !e.shiftKey) { e.preventDefault(); self.undo(); } else if ((z && e.shiftKey) || y) { e.preventDefault(); self.redo(); }
         });
       },
+      // review #14: Shoelace drops a value set before its options exist - wait for the options, then set it (start screen re-renders too)
+      syncGroupSelect: function (n) {   // the select AND its options must be upgraded custom elements (the autoloader loads them lazily)
+        var self = this, el = document.querySelector('.bt-w260'), opts = el ? el.querySelectorAll('sl-option') : [];
+        var ready = el && this.groups.length && opts.length >= this.groups.length && typeof el.updateComplete !== 'undefined' &&
+                    Array.prototype.every.call(opts, function (o) { return typeof o.getTextLabel === 'function'; });
+        if (ready) Promise.all([el.updateComplete].concat(Array.prototype.map.call(opts, function (o) { return o.updateComplete; })))
+          .then(function () { el.value = self.startGroup; });
+        else if ((n || 0) < 80) setTimeout(function () { self.syncGroupSelect((n || 0) + 1); }, 75);
+      },
       // ---------------------------------------------------------------- formatting
       fmt: function (v) { if (v === null || v === undefined || v === '') return '-'; v = +v; return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2) + 'R'; },
       fmtR: function (v) { if (v === null || v === undefined) return '-'; v = +v; return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2) + 'R'; },
+      // review #7: the card stores price-R (a SELL's SL at +1R); every R label on a SELL card is shown in PROFIT terms, like the levers
+      sgn: function () { return this.C.card && this.C.card.direction === 'SELL' ? -1 : 1; },
+      fmtP: function (v) { if (v === null || v === undefined) return '-'; return this.fmtR(this.sgn() * v); },
       fmtH: function (h) { h = +h; return h < 48 ? h.toFixed(h < 10 ? 1 : 0) + ' h' : (h / 24).toFixed(1) + ' days'; },
       cls: function (v) { if (v === null || v === undefined || v === '') return ''; return +v > 0.0005 ? 'up' : +v < -0.0005 ? 'dn' : ''; },
       groupName: function (k) { var g = this.groups.filter(function (x) { return x.key === k; })[0]; return g ? g.name : k; },
@@ -64,13 +79,17 @@
                       levers: (cfg.levers || []).map(function (l) { var c = clone(l); c.id = uid(); return c; }) };
       },
       snap: function () { return JSON.stringify(this.toConfig()); },
+      histBase: [],
       commit: function () {             // push a history snapshot after any change
         var s = this.snap(); if (this.hpos >= 0 && this.hist[this.hpos] === s) return;
-        this.hist = this.hist.slice(0, this.hpos + 1); this.hist.push(s); if (this.hist.length > 300) this.hist.shift(); this.hpos = this.hist.length - 1;
+        this.hist = this.hist.slice(0, this.hpos + 1); this.histBase = this.histBase.slice(0, this.hpos + 1);
+        this.hist.push(s); this.histBase.push(null); if (this.hist.length > 300) { this.hist.shift(); this.histBase.shift(); } this.hpos = this.hist.length - 1;
         this.presetSel = ''; this.presetAbout = '';
       },
-      undo: function () { if (this.hpos <= 0) return; this.hpos--; this.fromConfig(JSON.parse(this.hist[this.hpos])); this.presetSel = ''; this.$nextTick(this.bindSort.bind(this)); },
-      redo: function () { if (this.hpos >= this.hist.length - 1) return; this.hpos++; this.fromConfig(JSON.parse(this.hist[this.hpos])); this.presetSel = ''; this.$nextTick(this.bindSort.bind(this)); },
+      undo: function () { if (this.hpos <= 0) return; this.hpos--; this.fromConfig(JSON.parse(this.hist[this.hpos])); this.presetSel = ''; this.syncBase(); this.$nextTick(this.bindSort.bind(this)); },
+      syncBase: function () { var cur = this.hist[this.hpos], self = this;     // after undo/redo: the base preset is the last one loaded at or before this point
+        for (var k = this.hpos; k >= 0; k--) { if (this.histBase[k]) { this.basePreset = this.histBase[k]; return; } } },
+      redo: function () { if (this.hpos >= this.hist.length - 1) return; this.hpos++; this.fromConfig(JSON.parse(this.hist[this.hpos])); this.presetSel = ''; this.syncBase(); this.$nextTick(this.bindSort.bind(this)); },
       loadPreset: function (key) {
         if (!key) return; var cfg = null, about = '';
         if (key === 'default') { cfg = this.C.default.cfg; about = this.C.default.about + ' (' + this.C.default.status + ')'; }
@@ -79,20 +98,24 @@
           post('/bt/adv_loaded', { sid: this.sess.sid, i: this.C.i }); }
         else { var p = this.menu.presets.filter(function (x) { return x.key === key; })[0]; cfg = p.cfg; about = p.about; }
         this.fromConfig(cfg); this.commit(); this.presetSel = key; this.presetAbout = about;   // ONE undoable step
+        this.basePreset = key; this.histBase[this.hpos] = key;          // coach 2026-10-04: the preset the plan was loaded from (kept through later edits) = "loaded_preset"
         this.$nextTick(this.bindSort.bind(this));
       },
       // ---------------------------------------------------------------- edits
       add: function (it) { var c = clone(it.tpl); c.type = it.type; c.id = uid(); this.plan.levers.push(c); this.commit(); this.$nextTick(this.bindSort.bind(this)); },
       addByKey: function (key) { var p = key.split('|'); var it = null; PALETTE.forEach(function (g) { g.items.forEach(function (x) { if (x.type === p[0] && x.label === p[1]) it = x; }); }); if (it) this.add(it); },
       remove: function (idx) { this.plan.levers.splice(idx, 1); this.commit(); },
-      num: function (ev, allowNull) { var s = ev.target.value; if ((s === '' || s === null) && allowNull) return null; var v = parseFloat(s); return isFinite(v) ? v : null; },
-      setF: function (L, k, ev, allowNull) { var v = this.num(ev, allowNull); if (v === null && !allowNull) return; L[k] = v; this.commit(); },
+      // review #6: a blank or non-numeric entry never leaves the screen disagreeing with the plan - the committed value is written back
+      num: function (ev, allowNull) { var s = ev.target.value; if ((s === '' || s === null) && allowNull) return null; var v = parseFloat(s); return isFinite(v) ? v : undefined; },
+      setF: function (L, k, ev, allowNull) { var v = this.num(ev, allowNull);
+        if (v === undefined || (v === null && !allowNull)) { ev.target.value = (L[k] === null || L[k] === undefined) ? '' : L[k]; return; }
+        L[k] = v; this.commit(); },
       setB: function (L, k, ev) { L[k] = !!ev.target.checked; this.commit(); },
       setS: function (L, k, ev) { L[k] = ev.target.value; this.commit(); },
       setStop: function (L, ev) { var v = ev.target.value; L.stop = v === 'trade' ? 'trade' : parseFloat(v); this.commit(); },
       toggleEarly: function (L, ev) { if (ev.target.checked) { L.early_at = 1.0; } else { L.early_at = null; L.hold_avg = null; } this.commit(); },
       toggleHold: function (L, ev) { L.hold_avg = ev.target.checked ? 0.5 : null; this.commit(); },
-      setEntry: function (s) { var v = parseFloat(s); if (isFinite(v)) { this.plan.entry = v; this.commit(); } },
+      setEntry: function (ev) { var v = parseFloat(ev.target.value); if (isFinite(v)) { this.plan.entry = v; this.commit(); } else ev.target.value = this.plan.entry; },
       setTp2: function (ev) { this.plan.tp2 = !!ev.target.checked; this.commit(); },
       setTrim: function (ev) { this.plan.trim = !!ev.target.checked; this.commit(); },
       bindSort: function () {
@@ -135,7 +158,7 @@
       },
       resume: function (sid) { this.sess = { sid: sid }; location.hash = 'sid=' + sid; this.load(); },
       leave: function () { var self = this; this.sess = null; this.done = false; this.rev = null; location.hash = '';
-        get('/api/bt/sessions').then(function (j) { self.sessions = j; }); },
+        get('/api/bt/sessions').then(function (j) { self.sessions = j; }); this.$nextTick(function () { self.syncGroupSelect(0); }); },
       load: function () {
         var self = this; self.busy = true;
         get('/api/bt/card?sid=' + self.sess.sid).then(function (j) { self.busy = false;
@@ -143,8 +166,8 @@
           if (j.done) { self.done = true; self.C = { tally: j.tally, n: j.n }; return; }
           self.sess.group = j.card ? (self.groups.filter(function (g) { return g.name === j.card.group; })[0] || {}).key : self.sess.group;
           self.C = j; self.rev = null; self.done = false;
-          self.hist = []; self.hpos = -1; self.loadPreset('default');     // per-card history starts at the group default
-          self.hist = [self.snap()]; self.hpos = 0;
+          self.hist = []; self.histBase = []; self.hpos = -1; self.loadPreset('default');     // per-card history starts at the preloaded plan
+          self.hist = [self.snap()]; self.histBase = ['default']; self.hpos = 0; self.basePreset = 'default';
           self.$nextTick(function () { self.chart(false); self.bindSort(); });
         });
       },
@@ -161,11 +184,11 @@
             marks.push({ t: t + 14400 * eb, label: 'exit ' + this.fmt(this.rev.R_plan) }); }
         }
         HybridChart.mount(el, { blind: true, live: false, bars_h4: h4, bars_d1: C.d1.bars, ema_h4: ema, ema_d1: C.d1.ema, sig_h4: C.h4.sig, sig_d1: C.d1.sig,
-                                levels: C.levels, strategy: C.detector, overlay: null, marks: marks });
+                                levels: C.levels, strategy: C.detector, overlay: null, marks: marks, rsign: this.sgn() });
       },
       decide: function (d) {
         var self = this; if (d === 'take' && !self.v.ok) return; self.busy = true;
-        post('/bt/decide', { sid: self.sess.sid, i: self.C.i, decision: d, plan: JSON.stringify(self.toConfig()) }).then(function (j) {
+        post('/bt/decide', { sid: self.sess.sid, i: self.C.i, decision: d, plan: JSON.stringify(self.toConfig()), loaded_preset: self.basePreset }).then(function (j) {
           self.busy = false; if (j.ok === false) { self.err = j.error; return; }
           self.rev = j; self.C.tally = j.tally; self.$nextTick(function () { self.chart(true); });
         }).catch(function (e) { self.busy = false; self.err = String(e); });

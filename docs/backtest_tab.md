@@ -86,3 +86,43 @@ The advisor emits a fenced block:
 - **Frame end:** the box frames stop at the first -1R touch or 40 trading days.
 - **Average R:** the EA's AvgRSince definition. The 1 h check uses the window from the entry-bar open; no M1 bar in that hour
   means no check.
+
+## Review fixes + coach rulings (2026-10-04, after the adversarial review)
+- **Events (cards_v2):** a blind card shows only the NEAREST high-impact event of class V and of class W, as a timing bucket (within 1 day /
+  1-3 days / 3-7 days / 7-14 days).
+  - v1's side / kind / exact hours let a naive Bayes name the bloc symbol 76% of the time (baseline 18%); class x bucket counts still
+    gave 24-29%.
+  - v2: bloc 21% (baseline 18%), majors at baseline, year at chance.
+  - Cards without the calendar or a regime tag (144; they revealed 2012) are never served, in Practice or Test.
+- **Sessions:** one symbol at most once per 91 days (coach: the longest history a card shows + a month; was 182). Any two signals of
+  the group at least 15 days apart (>= the 60-bar reveal - the crosses share legs). A thin stratum fills from the neighbouring year
+  (same direction + detector, nearest year first).
+  - Planned Test sessions drawn back to back: bloc 2 x 100 = 200, majors 3 x 35 = 105.
+  - A card holds at most 264 H4 / 44 D1 bars, and the chart pins both edges, so panning cannot reach further back than the window.
+- **Engine:**
+  - A plan whose banks take out everything ends the trade that minute (kind 4 "banked out").
+  - An add's stop "trade" = the ORIGINAL leg's current stop (moves on "all" or "original" legs count).
+  - At most 20 levers per list (adds / take profit / stop moves / cuts) and 60 in all; every malformed plan is a plain-words 400.
+  - Parity with the preset kernel is unchanged (0.0 on all 16 menu entries).
+- **Server:**
+  - /bt/* is always JSON (any exception -> 400; body > 64 KB -> 413); no filesystem paths in errors.
+  - Skip is never blocked: an invalid plan on a skip is stored as null with the reason.
+  - The first commit cannot be overwritten; /bt/adv_loaded only for the current card; a malformed advisor block lands in advisor_rejects.log.
+  - The card payload carries no id before the decision.
+- **Comparator (coach):**
+  - The grading comparator (R_default) is Minimal for both groups.
+  - The bloc's 1h cut is the trader's own plan, not an approved trait: it stays the preloaded plan on bloc cards, labelled "Your simple
+    rules", and its info line is tagged "observed".
+  - No live-stack column (pending).
+- **Report:**
+  - New columns: n_levers, loaded_preset (the preset the plan was loaded from when editing began = the "nearest preset" for grading),
+    R_loaded_preset, and R_*_1pip (after a +1 pip round trip = gross units x 1 pip / stop pips).
+  - Stop pips sit in the server-side results file only.
+  - The summary carries model cost and the +1 pip figures.
+  - The CSV's first line states the 40-trading-day frame cap.
+- **Page:**
+  - One keydown listener; Ctrl+Z inside a field is the field's own.
+  - A blank or non-numeric entry snaps back to the plan's value.
+  - SELL cards label every R in profit terms (SL -1.00R), with a legend.
+  - The group select is set once its options are upgraded.
+  - The sessions table scrolls inside its card at phone width.

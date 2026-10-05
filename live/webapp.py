@@ -1495,8 +1495,11 @@ class H(BaseHTTPRequestHandler):
                     if parts[2] == "init": return self._send(json.dumps(BT.init_payload(CFG), separators=(",", ":")), "application/json")
                     if parts[2] == "card": return self._send(json.dumps(BT.card(CFG, q.get("sid", "")), separators=(",", ":")), "application/json")
                     if parts[2] == "sessions": return self._send(json.dumps(BT.list_sessions(CFG)), "application/json")
-                except (ValueError, OSError, KeyError) as e:
+                except ValueError as e:
                     return self._send(json.dumps({"ok": False, "error": str(e)}), "application/json", 400)
+                except Exception as e:                                  # review 2026-10-04: always JSON, never a path or a trace
+                    if LOG: LOG(f"GET {self.path} error {e!r}")
+                    return self._send(json.dumps({"ok": False, "error": "server error"}), "application/json", 400)
                 return self._send(json.dumps({"ok": False, "error": "unknown"}), "application/json", 404)
             if parts[0] == "bt" and len(parts) == 3 and parts[1] == "report" and parts[2].endswith(".csv"):
                 from live import backtest as BT
@@ -1574,6 +1577,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(page("error", f'<div class="card bad">{E(repr(e))}</div>'), code=500)
     def do_POST(self):
         u = urllib.parse.urlsplit(self.path); n = int(self.headers.get("Content-Length") or 0)
+        if u.path.startswith("/bt/") and n > 64 * 1024:              # review 2026-10-04: the backtest endpoints take small plans only
+            self.close_connection = True
+            return self._send(json.dumps({"ok": False, "error": "request too large (64 KB max)"}), "application/json", 413)
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
         try:
             if u.path == "/task":
@@ -1602,15 +1608,18 @@ class H(BaseHTTPRequestHandler):
                     sid = form.get("sid", ""); i = int(form.get("i", "-1") or -1)
                     plan = json.loads(form["plan"]) if form.get("plan") else None
                     if u.path == "/bt/start": rep = BT.start(CFG, form.get("group", ""), form.get("mode", "practice"), research_lock())
-                    elif u.path == "/bt/decide": rep = BT.decide(CFG, sid, i, form.get("decision", ""), plan)
+                    elif u.path == "/bt/decide": rep = BT.decide(CFG, sid, i, form.get("decision", ""), plan, form.get("loaded_preset", ""))
                     elif u.path == "/bt/commit": rep = BT.commit_first(CFG, sid, i, form.get("decision", ""), plan)
                     elif u.path == "/bt/adv_loaded": rep = BT.mark_adv_loaded(CFG, sid, i)
                     elif u.path == "/bt/dev/advisor": rep = BT.dev_inject(CFG, sid, form.get("text", ""), form.get("blind") == "1")
                     else: return self._send(json.dumps({"ok": False, "error": "unknown"}), "application/json", 404)
                     C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backtest|{u.path}|sid={sid}|i={i}|by=web")
                     return self._send(json.dumps(rep, separators=(",", ":")), "application/json")
-                except (ValueError, KeyError, OSError) as e:
-                    return self._send(json.dumps({"ok": False, "error": str(e)}), "application/json", 400)
+                except ValueError as e:
+                    return self._send(json.dumps({"ok": False, "error": str(e)[:300]}), "application/json", 400)
+                except Exception as e:                                  # review 2026-10-04: always JSON (never the redirect), no paths
+                    if LOG: LOG(f"POST {self.path} error {e!r}")
+                    return self._send(json.dumps({"ok": False, "error": "the request could not be processed"}), "application/json", 400)
             if u.path == "/research_lock":                         # trader 2026-10-04: the Data visualizers' lock, edited on the page; always JSON
                 try: ok, rep = research_lock_post(form)
                 except Exception as e:

@@ -80,12 +80,15 @@ OPTIONS = {
     **{f"banker_stops:{k}": stack(ladder(v, True)) for k, v in BP.LADDERS.items()},
 }
 RAW = stack([])
-DEFAULTS = {"com": {"preset": "com_default", "label": "Commodity bloc default", "about": "Minimal + close at 1 h if the average R is negative "
-                                                                                      "(the trader's 'cut bad trades quickly')",
+# coach 2026-10-04: the GRADING COMPARATOR is Minimal for both groups (no approved group traits yet). The bloc's 1h cut is the trader's
+# own plan, not an approved tested trait: it stays the PRELOADED plan on bloc cards, labelled as his, and its info line is "observed".
+COMPARATOR = "minimal"
+DEFAULTS = {"com": {"preset": "com_default", "label": "Your simple rules (Minimal + 1h cut)", "about": "Your plan: Minimal + close at 1 h if the average "
+                                                                                      "R is negative ('cut bad trades quickly') - not an approved trait",
                     "cfg": stack([dict(BANK1), dict(MOVE_BE), dict(ADD2), dict(CUT1H)]),
-                    "status": "trader-approved 2026-10-04; coach approval of the trait pending"},
-            "maj": {"preset": "minimal", "label": "USD majors default", "about": "Minimal (no approved group traits)", "cfg": MENU["minimal"]["cfg"],
-                    "status": "no traits"}}
+                    "status": "your plan, preloaded - not an approved trait (coach 2026-10-04); the grading comparator is Minimal"},
+            "maj": {"preset": "minimal", "label": "Minimal", "about": "Minimal (no approved group traits)", "cfg": MENU["minimal"]["cfg"],
+                    "status": "no approved traits - the grading comparator is Minimal"}}
 PARITY = {"minimal": "minimal", "ruthless": "ruthless", "slow": "slow", "banker": "banker", "pyramid": "pyramid", "slow_nohold": "slow_nohold",
           "banker_stops": "banker_stops", "minimal_noadd": "minimal_noadd", "com_trait": "com_default", "raw": "raw",
           **{f"banker:{k}": f"banker:{k}" for k in BP.LADDERS}, **{f"banker_stops:{k}": f"banker_stops:{k}" for k in BP.LADDERS}}
@@ -170,7 +173,8 @@ def do_symbol(sym):
             box[nm] = (float(r[0]), int(r[1]), int(r[2]), float(r[3]), int(r[4]), int(r[5]), int(r[6]))
         rv = reveal_bars(F, ctx, p["up"])
         ps = BP.path_stats(F, bctx)
-        out.append((hid, {"meta": meta, "par": par, "full_s": full_s, "full_n": full_n, "box": box, "reveal": rv,
+        stop_pips = abs(x["e"] - x["s"]) / (10 * A.TICK.get(sym, 1e-5))          # for the +1 pip cost summary - server-side only, never in a card
+        out.append((hid, {"meta": meta, "par": par, "full_s": full_s, "full_n": full_n, "box": box, "reveal": rv, "stop_pips": stop_pips,
                           "banked": box["minimal"][4] > 0, "tp2_raw": bool(ps["tp2_raw"]), "ps": ps, "trimmed": jstop + 1 > CAP_MIN and p["n"] > CAP_MIN}))
     fh.close()
     return out
@@ -292,11 +296,12 @@ def main():
         t = SPLIT["trades"][h]; b = v["box"]
         rows[h] = {"group": t["group"], "part": t["part"], "det": t["det"], "dir": "BUY" if t["up"] else "SELL", "year": t["year"],
                    "R": {nm: round(b[nm][0], 4) for nm in NAMES}, "kind": {nm: b[nm][1] for nm in NAMES},
+                   "gross": {nm: round(b[nm][3], 4) for nm in NAMES}, "stop_pips": round(v["stop_pips"], 2),
                    "exit_j": {nm: b[nm][2] for nm in ("raw", "com_default", "minimal")},
-                   "default": DEFAULTS[t["group"]]["preset"], "banked_1R": bool(v["banked"]), "hit_tp2": v["tp2_raw"], "reveal": v["reveal"]}
+                   "default": COMPARATOR, "preload": DEFAULTS[t["group"]]["preset"], "banked_1R": bool(v["banked"]), "hit_tp2": v["tp2_raw"], "reveal": v["reveal"]}
     with gzip.open(os.path.join(OUT, "results_v1.json.gz"), "wt") as f:
         json.dump({"version": 1, "menu": MENU_VERSION, "split_sha": SPLIT["sha256"], "built": time.strftime("%Y-%m-%d %H:%M"), "frames": "frames_v1",
-                   "comparison": "raw", "trades": rows}, f, separators=(",", ":"))
+                   "comparison": "raw", "comparator": COMPARATOR, "frame_cap_days": CAP_DAYS, "trades": rows}, f, separators=(",", ":"))
     # INFO (Practice only)
     info = {"version": 1, "built": time.strftime("%Y-%m-%d %H:%M"), "menu": MENU_VERSION, "groups": {}}
     for g in ("com", "maj"):
@@ -316,13 +321,15 @@ def main():
         if m1:
             q = lambda fr2: m1[min(len(m1) - 1, int(fr2 * len(m1)))]
             L.append({"tag": "observed", "text": f"After +1R, the best R before falling back to entry: quartiles {q(.25):+.1f} / {q(.5):+.1f} / {q(.75):+.1f}R."})
-        dflt = DEFAULTS[g]["preset"]
-        for nm in [dflt] + [k for k in MENU if k != dflt]:
+        pre = DEFAULTS[g]["preset"]
+        names = [COMPARATOR] + ([pre] if pre != COMPARATOR else []) + [k for k in MENU if k not in (COMPARATOR, pre)]
+        for nm in names:
             v = [R[h]["box"][nm][0] for h in hs]; d = np.array(v) - np.array(raw); tt = d.mean() / (d.std(ddof=1) / math.sqrt(len(d))) if d.std() > 0 else 0.0
-            lab = DEFAULTS[g]["label"] if nm == dflt and nm == "com_default" else (MENU[nm]["label"] + (" (group default)" if nm == dflt else ""))
-            L.append({"tag": "tested", "text": f"{lab}: {np.mean(v):+.3f}R/trade vs raw {d.mean():+.3f} (t {tt:+.1f}), worst drawdown {maxdd(v):.0f}R vs raw {maxdd(raw):.0f}R "
+            own = nm == "com_default"                           # the trader's own plan: not an approved tested trait -> "observed"
+            lab = (DEFAULTS[g]["label"] + " - your plan, not an approved trait") if own else (MENU[nm]["label"] + (" (grading comparator)" if nm == COMPARATOR else ""))
+            L.append({"tag": "observed" if own else "tested", "text": f"{lab}: {np.mean(v):+.3f}R/trade vs raw {d.mean():+.3f} (t {tt:+.1f}), worst drawdown {maxdd(v):.0f}R vs raw {maxdd(raw):.0f}R "
                                                f"(Practice, in-sample; model cost - read the difference, not the level)."})
-        info["groups"][g] = {"name": gn, "n_practice": len(hs), "default": DEFAULTS[g]["preset"], "default_status": DEFAULTS[g]["status"], "lines": L}
+        info["groups"][g] = {"name": gn, "n_practice": len(hs), "default": COMPARATOR, "preload": pre, "default_status": DEFAULTS[g]["status"], "lines": L}
     json.dump(info, open(os.path.join(OUT, "info_v1.json"), "w"), indent=1)
     print(json.dumps(info, indent=1)[:3000])
     print(("ALL PASS" if ok_all else "SOME CHECKS FAILED") + f"  ({time.time() - T0:.0f}s)")

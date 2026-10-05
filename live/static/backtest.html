@@ -12,7 +12,7 @@
     </div>
     <div class="card bt-startcard">
       <div class="bt-row">
-        <sl-select label="Symbol group" :value="startGroup" @sl-change="startGroup = $event.target.value" class="bt-w260">
+        <sl-select label="Symbol group" @sl-change="startGroup = $event.target.value || startGroup" class="bt-w260">
           <template x-for="g in groups" :key="g.key"><sl-option :value="g.key" x-text="g.name + ' · ' + g.size + ' signals'"></sl-option></template>
         </sl-select>
         <sl-radio-group label="Mode" value="practice" class="bt-mode-rg">
@@ -26,7 +26,7 @@
     </div>
     <div class="card" x-show="sessions.length">
       <div class="bt-h3">Your sessions</div>
-      <table class="bt-tbl">
+      <div class="bt-scroll"><table class="bt-tbl">
         <thead><tr><th>Started</th><th>Group</th><th>Done</th><th>Your R</th><th>Raw</th><th>vs raw</th><th></th></tr></thead>
         <tbody><template x-for="s in sessions" :key="s.sid"><tr>
           <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.done + ' / ' + s.n"></td>
@@ -35,7 +35,7 @@
           <td class="bt-actions"><sl-button size="small" x-show="s.done < s.n" @click="resume(s.sid)">Resume</sl-button>
             <sl-button size="small" variant="text" :href="'/bt/report/' + s.sid + '.csv'">CSV</sl-button></td>
         </tr></template></tbody>
-      </table>
+      </table></div>
     </div>
   </div>
 </template>
@@ -49,7 +49,7 @@
       <div class="bt-tally">
         <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
         <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
-        <span class="bt-pill">Default <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
+        <span class="bt-pill" title="the grading comparator">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
         <sl-button size="small" variant="text" @click="leave()">Leave</sl-button>
       </div>
     </div>
@@ -67,25 +67,26 @@
             <span class="bt-tag" :class="C.card && C.card.direction === 'BUY' ? 'up' : 'dn'" x-text="C.card && C.card.direction"></span>
             <span class="bt-tag" x-text="C.card && C.card.detector"></span>
             <span class="bt-tag" x-text="C.card && C.card.group"></span>
-            <span class="bt-tag dim" x-text="'regime ' + ((C.card && C.card.regime && C.card.regime.tag) || 'none')"></span>
-            <span class="bt-tag dim" x-show="C.card && C.card.calendar === 'unavailable'">calendar unavailable</span>
+            <span class="bt-tag dim" x-text="'regime ' + ((C.card && C.card.regime && C.card.regime.tag) || '-')"></span>
           </div>
           <div class="bt-cols">
             <div><div class="bt-h4">Levels (R from entry)</div>
               <table class="bt-mini"><template x-for="k in ['entry','sl','tp1','tp2']"><tr x-show="C.card && C.card.levels[k] !== null && C.card.levels[k] !== undefined">
-                <td x-text="k.toUpperCase()"></td><td x-text="C.card ? fmtR(C.card.levels[k]) : ''"></td></tr></template></table></div>
+                <td x-text="k.toUpperCase()"></td><td x-text="C.card ? fmtP(C.card.levels[k]) : ''"></td></tr></template></table>
+              <div class="k bt-small" x-show="C.card && C.card.direction === 'SELL'">SELL card: R = profit (price up = loss)</div></div>
             <div><div class="bt-h4">Swings (newest first)</div>
-              <div class="bt-sw"><span class="k">highs</span> <template x-for="s in (C.card ? C.card.swings.hi.slice(0,4) : [])"><span class="bt-chip" x-text="fmtR(s.p) + ' · ' + s.bars_ago + 'b'"></span></template></div>
-              <div class="bt-sw"><span class="k">lows</span> <template x-for="s in (C.card ? C.card.swings.lo.slice(0,4) : [])"><span class="bt-chip" x-text="fmtR(s.p) + ' · ' + s.bars_ago + 'b'"></span></template></div></div>
-            <div><div class="bt-h4">Events (next 14 days)</div>
-              <div class="k" x-show="C.card && !C.card.events.length">none scheduled</div>
-              <template x-for="e in (C.card ? C.card.events.slice(0,6) : [])"><div class="bt-ev"><span class="bt-cls" :class="'c' + e.cls" x-text="e.cls"></span>
-                <span x-text="'in ' + fmtH(e.in_h)"></span> <span class="k" x-text="e.kind + ' · ' + e.side"></span></div></template></div>
+              <div class="bt-sw"><span class="k">highs</span> <template x-for="s in (C.card ? C.card.swings.hi.slice(0,4) : [])"><span class="bt-chip" x-text="fmtP(s.p) + ' · ' + s.bars_ago + 'b'"></span></template></div>
+              <div class="bt-sw"><span class="k">lows</span> <template x-for="s in (C.card ? C.card.swings.lo.slice(0,4) : [])"><span class="bt-chip" x-text="fmtP(s.p) + ' · ' + s.bars_ago + 'b'"></span></template></div></div>
+            <div><div class="bt-h4">High-impact events (next 14 days)</div>
+              <div class="k" x-show="C.card && !C.card.events.length">no V or W event scheduled</div>
+              <template x-for="e in (C.card ? C.card.events : [])"><div class="bt-ev"><span class="bt-cls" :class="'c' + e.cls" x-text="e.cls"></span>
+                <span x-text="'nearest: ' + e.when"></span></div></template>
+              <div class="k bt-small">the nearest V and W event only - no names, sides or exact times (they identified the symbol)</div></div>
           </div>
         </div>
         <sl-details summary="Group notes" class="bt-info" :open="wide">
           <template x-for="l in (C.info ? C.info.lines : [])"><div class="bt-line"><span class="bt-ltag" :class="l.tag" x-text="l.tag"></span><span x-text="l.text"></span></div></template>
-          <div class="k bt-small" x-text="C.default ? ('Group default: ' + C.default.label + ' - ' + C.default.status) : ''"></div>
+          <div class="k bt-small" x-text="C.default ? ('Preloaded plan: ' + C.default.label + ' - ' + C.default.status) : ''"></div>
         </sl-details>
       </div>
 
@@ -95,7 +96,7 @@
           <div class="bt-planhead">
             <div class="bt-h3">Your plan</div>
             <sl-select size="small" placeholder="Load a preset…" :value="presetSel" @sl-change="loadPreset($event.target.value)" class="bt-preset" :disabled="!!rev" hoist>
-              <sl-option value="default" x-text="'Group default · ' + (C.default ? C.default.label : '')"></sl-option>
+              <sl-option value="default" x-text="(C.default ? C.default.label : '') + ' (preloaded)'"></sl-option>
               <template x-for="p in menu.presets" :key="p.key"><sl-option :value="p.key" x-text="p.label"></sl-option></template>
               <sl-option value="raw">Raw signal (nothing added)</sl-option>
               <template x-if="C.advisor"><sl-option value="advisor" x-text="'Advisor recommended · ' + C.advisor.note"></sl-option></template>
@@ -112,7 +113,7 @@
           <!-- entry (always first) -->
           <div class="bt-lever fixed">
             <span class="bt-lt">Entry</span>
-            <div class="bt-sent">Enter <sl-input type="number" size="small" class="bt-n" :value="plan.entry" min="1" max="200" step="5" @sl-change="setEntry($event.target.value)" :disabled="!!rev"><span slot="suffix">%</span></sl-input> at the signal</div>
+            <div class="bt-sent">Enter <sl-input type="number" size="small" class="bt-n" :value="plan.entry" min="1" max="200" step="5" @sl-change="setEntry($event)" :disabled="!!rev"><span slot="suffix">%</span></sl-input> at the signal</div>
           </div>
 
           <div id="bt-stack" class="bt-stack">
@@ -201,7 +202,8 @@
             <table class="bt-tbl bt-cmp">
               <tr class="bt-me"><td>Your plan</td><td :class="cls(rev?.R_plan)" x-text="rev?.R_plan === null ? '-' : fmt(rev?.R_plan)"></td></tr>
               <tr><td><b>Raw signal</b></td><td :class="cls(rev?.R_raw)" x-text="fmt(rev?.R_raw)"></td></tr>
-              <tr><td x-text="'Group default · ' + rev?.default_label"></td><td :class="cls(rev?.R_default)" x-text="fmt(rev?.R_default)"></td></tr>
+              <tr><td x-text="rev?.default_label"></td><td :class="cls(rev?.R_default)" x-text="fmt(rev?.R_default)"></td></tr>
+              <template x-if="rev && rev.preload_label && rev.preload_label !== 'Minimal'"><tr><td x-text="rev?.preload_label"></td><td :class="cls(rev?.R_preload)" x-text="fmt(rev?.R_preload)"></td></tr></template>
               <template x-for="p in rev?.presets" :key="p.key"><tr><td x-text="p.label"></td><td :class="cls(p.R)" x-text="fmt(p.R)"></td></tr></template>
               <template x-if="rev && rev.advisor"><tr><td>Advisor · first (blind) plan</td><td :class="cls(rev?.advisor?.R_adv_v1)" x-text="rev?.advisor?.R_adv_v1 === '' ? '-' : fmt(rev?.advisor?.R_adv_v1)"></td></tr></template>
               <template x-if="rev && rev.advisor"><tr><td>Advisor · latest plan</td><td :class="cls(rev?.advisor?.R_adv_latest)" x-text="rev?.advisor?.R_adv_latest === '' ? '-' : fmt(rev?.advisor?.R_adv_latest)"></td></tr></template>
@@ -230,8 +232,9 @@
       <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
       <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
       <span class="bt-pill">vs raw <b :class="cls(C.tally.R_choice - C.tally.R_raw)" x-text="fmt(C.tally.R_choice - C.tally.R_raw)"></b></span>
-      <span class="bt-pill">Default <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
+      <span class="bt-pill">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
       <span class="bt-pill" x-text="C.tally.taken + ' taken · ' + C.tally.skipped + ' skipped'"></span>
+      <span class="bt-pill" title="after a +1 pip round trip per trade">at +1 pip: you <b :class="cls(C.tally.R_choice_1pip)" x-text="fmt(C.tally.R_choice_1pip)"></b> · raw <b :class="cls(C.tally.R_raw_1pip)" x-text="fmt(C.tally.R_raw_1pip)"></b></span>
     </div>
     <div class="bt-row"><sl-button variant="primary" :href="'/bt/report/' + sess.sid + '.csv'"><sl-icon slot="prefix" name="check2"></sl-icon>Download the report (CSV)</sl-button>
       <sl-button @click="leave()">Back</sl-button></div>

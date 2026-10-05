@@ -13,7 +13,8 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
                                             "all" | "original" | "adds"; src: "exit" (default - the price you could close at) |
                                             "bid" (used by the Pyramid preset's -0.5R raise, as the preset kernel)
     add_reach   {pct, at, within_h, stop}   add pct% when +at R is reached (within within_h hours of the entry; null = any time);
-                                            its stop: a number in R (0 = entry) or "trade" (the trade's stop at that moment)
+                                            its stop: a number in R (0 = entry) or "trade" = the ORIGINAL leg's current stop at
+                                            that moment (moves with legs "all" or "original" count; "adds"-only moves do not)
     add_bar     {pct, bar, early_at, hold_avg, stop}   add pct% at the bar-N close; early_at: go in early at the first +early_at R
                                             before that bar; hold_avg: hold the early add while the average R is below it and go in
                                             the first minute the average reaches it (still before the bar)
@@ -21,6 +22,7 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
     cut_avg     {at_h, below}               close everything at at_h hours if the average R (the EA's AvgRSince: mean of the M1
                                             bid closes since the entry-bar open, against the card entry) is below `below`
     cut_unless  {at_h, reach}               close everything at at_h hours unless +reach R was reached (bid high) by then
+  At most 20 levers per list (adds / take profit / stop moves / cuts) and 60 in all (review 2026-10-04).
   entry.pct = the first position (% of ruled size); every leg's first stop is the signal stop (-1R) unless the card says else;
   stops are never set below -1R; cap_pct = gross units entered (banking does not free room): an add is trimmed to what is left.
   Hours: H4 bar b = H // 4, then H % 4 hours into it, from the entry-bar open (24 h = the bar-6 close).
@@ -41,6 +43,7 @@ NEVER = 1e18                 # a level that is never reached
 BEYOND = 1 << 40             # a minute that never comes
 NOCHK = 1 << 40
 CAP_DEFAULT = 200.0
+MAX_PER_LIST, MAX_LEVERS = 20, 60      # review 2026-10-04: the kernel loops every lever every minute, under the tab's lock
 
 
 # ------------------------------------------------------------------------------------------------------------- the kernel
@@ -49,8 +52,8 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
          mv_when, mv_to, mv_legs, mv_src, nmv,
          ad_type, ad_lvl, ad_until, ad_k, ad_early, ad_hold, ad_pct, ad_stop, ad_trade, nad,
          ct_type, ct_k, ct_thr, nct):
-    """-> (R of the full ruled position, kind 0 stopped / 1 TP2 / 2 cut / 3 frame end, exit minute, gross units entered,
-    banks fired, adds fired, cut index or -1)."""
+    """-> (R of the full ruled position, kind 0 stopped / 1 TP2 / 2 cut / 3 frame end / 4 banked out (everything open was banked:
+    the trade ends that minute), exit minute, gross units entered, banks fired, adds fired, cut index or -1)."""
     nleg = 1 + nad
     ls = np.zeros(nleg); le = np.zeros(nleg); lst = np.zeros(nleg); alive = np.zeros(nleg, dtype=np.bool_)
     ls[0] = F0; le[0] = e0; lst[0] = -1.0; alive[0] = True; nl = 1
@@ -82,6 +85,12 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                     for q in range(nl):
                         if alive[q]:
                             locked += f * ls[q] * (bk_lvl[b] - le[q]); ls[q] = ls[q] * (1.0 - f)
+                    left = False
+                    for q in range(nl):
+                        if alive[q] and ls[q] > 1e-12:
+                            left = True
+                    if not left:
+                        return locked, 4, j, gross, nbf, naf, -1
         for m in range(nmv):
             if not mv_done[m]:
                 hv = xh[j] if mv_src[m] == 0 else bh[j]
@@ -90,7 +99,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                     for q in range(nl):
                         if alive[q] and (lg == 0 or (lg == 1 and q == 0) or (lg == 2 and q > 0)) and v > lst[q]:
                             lst[q] = v
-                    if lg == 0 and v > tstop:
+                    if (lg == 0 or lg == 1) and v > tstop:
                         tstop = v
         for a in range(nad):
             if ad_type[a] == 1:
@@ -163,21 +172,34 @@ def validate(cfg: dict) -> tuple[dict, list[str]]:
     """-> (normalised config, warnings). Raises ValueError with a plain-words message when the config is not valid
     (unknown lever, bad number, size over the cap). The size check is the worst case: every add at full size."""
     if not isinstance(cfg, dict): raise ValueError("the plan must be an object")
-    if cfg.get("schema", SCHEMA) != SCHEMA: raise ValueError(f"unknown plan schema {cfg.get('schema')!r} (expected {SCHEMA})")
-    entry = _num((cfg.get("entry") or {}).get("pct", 100), 1, 200, "the entry size")
+    if cfg.get("schema", SCHEMA) != SCHEMA: raise ValueError(f"unknown plan schema {str(cfg.get('schema'))[:40]!r} (expected {SCHEMA})")
+    ent = cfg.get("entry")
+    if ent is None: ent = {}
+    if not isinstance(ent, dict): raise ValueError("the entry must be an object like {\"pct\": 100}")
+    entry = _num(ent.get("pct", 100), 1, 200, "the entry size")
     cap = _num(cfg.get("cap_pct", CAP_DEFAULT), 1, CAP_DEFAULT, "the size cap")
-    out = []; warn = []
-    for i, c in enumerate(cfg.get("levers") or []):
+    levers = cfg.get("levers")
+    if levers is None: levers = []
+    if not isinstance(levers, list): raise ValueError("levers must be a list")
+    if len(levers) > MAX_LEVERS: raise ValueError(f"at most {MAX_LEVERS} levers in a plan")
+    fam = {}
+    for c in levers:
         t = c.get("type") if isinstance(c, dict) else None
-        if t not in TYPES: raise ValueError(f"lever {i + 1}: unknown type {t!r}")
+        k = (t[:3] if isinstance(t, str) and t[:3] in ("add", "cut") else t) if isinstance(t, str) else None
+        fam[k] = fam.get(k, 0) + 1
+        if k is not None and fam[k] > MAX_PER_LIST: raise ValueError(f"at most {MAX_PER_LIST} levers of one kind (adds / take profit / stop moves / cuts)")
+    out = []; warn = []
+    for i, c in enumerate(levers):
+        t = c.get("type") if isinstance(c, dict) else None
+        if not isinstance(t, str) or t not in TYPES: raise ValueError(f"lever {i + 1}: unknown type {str(t)[:40]!r}")
         d = {"type": t}
         if t == "bank":
             d.update(pct=_num(c.get("pct"), 0, 100, "a bank's %"), at=_num(c.get("at"), 0.05, 50, "a bank's R level"), tp1=bool(c.get("tp1", False)))
         elif t == "move":
             d.update(to=_num(c.get("to"), -1, 50, "a stop move's new stop"), when=_num(c.get("when"), -0.99, 50, "a stop move's trigger"),
                      tp1=bool(c.get("tp1", False)), legs=c.get("legs", "all"), src=c.get("src", "exit"))
-            if d["legs"] not in ("all", "original", "adds"): raise ValueError(f"lever {i + 1}: legs must be all / original / adds")
-            if d["src"] not in ("exit", "bid"): raise ValueError(f"lever {i + 1}: src must be exit or bid")
+            if not isinstance(d["legs"], str) or d["legs"] not in ("all", "original", "adds"): raise ValueError(f"lever {i + 1}: legs must be all / original / adds")
+            if not isinstance(d["src"], str) or d["src"] not in ("exit", "bid"): raise ValueError(f"lever {i + 1}: src must be exit or bid")
             if d["to"] >= d["when"]: warn.append(f"lever {i + 1}: the new stop ({d['to']:+g}R) is at or above its trigger ({d['when']:+g}R) - it will close the trade at once")
         elif t == "add_reach":
             w = c.get("within_h")
@@ -206,7 +228,7 @@ def validate(cfg: dict) -> tuple[dict, list[str]]:
 
 
 def _stop(v, i):
-    if v == "trade": return "trade"
+    if isinstance(v, str) and v == "trade": return "trade"
     return _num(v, -1, 50, f"lever {i + 1}'s stop")
 
 

@@ -9,14 +9,16 @@ A card holds only what was knowable at the signal close, with nothing that names
   levels  entry / SL / TP1 / TP2;  swings  the EA's swing table (live/overlays.swing_table) on the window
   regime  the frozen D1 tag (pipeline/trader_selection_study.regime_series) on COMPLETED days only, + with/counter trend
   events  scheduled econ events (data: MT5 Common Files econ_events.csv, 2013-01..2026-07, UTC, classes V/W/C/H) for the
-          symbol's base / quote currency and "All", in the next 14 days, as relative hours, a generic kind and the class - no
-          actual / forecast values, no currency or country names (base / quote / all instead)
+          symbol's base / quote currency and "All", in the next 14 days - v2 (review 2026-10-04: v1's side / kind / exact hours let a
+          naive Bayes name the bloc symbol 76% of the time; class x bucket COUNTS still gave 24-29% vs an 18% baseline): only the
+          NEAREST high-impact event of each class V and W, as a timing bucket (within 1 day / 1-3 days / 3-7 days / 7-14 days) -
+          symbol 21% vs 18% baseline, year at chance. No C/H classes, no counts, no side, no names, no hours, no values
 BLIND: every price is (p - entry) / R (R = |entry - SL|; unsigned, so a short's SL sits at +1R); times are synthetic and
 contiguous (weekends removed) and labelled relative to the signal. Detector overlays (zones / fib leg) are NOT in the historical
 record - a gap; the chart's own imbalance zones and swing markers are drawn from the bars.
 check_card() runs on EVERY card: nothing after the signal close (every real timestamp behind the card <= the signal bar), the D1
 partial day only from H4 bars up to the signal bar, the window <= 264 H4 / 44 D1 bars, no identifying fields, no event values.
-    python3 pipeline/backtest_cards.py              -> data/backtest/cards_v1.json.gz (+ build report)
+    python3 pipeline/backtest_cards.py              -> data/backtest/cards_v2.json.gz (+ build report)
     python3 pipeline/backtest_cards.py --dev N      also write N local dev pages (data/backtest/dev/<hid>.html)
 """
 from __future__ import annotations
@@ -29,7 +31,9 @@ from pipeline import backtest_split as BS                    # noqa: E402
 from pipeline.trader_selection_study import regime_series    # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-OUT = os.path.join(ROOT, "data", "backtest", "cards_v1.json.gz"); REPORT = os.path.join(ROOT, "data", "backtest", "cards_v1_report.txt")
+OUT = os.path.join(ROOT, "data", "backtest", "cards_v2.json.gz"); REPORT = os.path.join(ROOT, "data", "backtest", "cards_v2_report.txt")
+CARD_V = 2
+BUCKETS = [(24, "within 1 day"), (72, "1-3 days"), (168, "3-7 days"), (336, "7-14 days")]
 DEV = os.path.join(ROOT, "data", "backtest", "dev")
 ECON = "/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/Common/Files/econ_events.csv"
 H4N, D1N, EV_DAYS = 264, 44, 14
@@ -101,8 +105,12 @@ def events_for(root: str, sig_close_min: int) -> tuple[list, str]:
     while i < len(ev) and ev[i][0] <= sig_close_min + EV_DAYS * 1440:
         t, c, name, cls = ev[i]; i += 1
         side = "base" if c == base else ("quote" if c == quote else ("all" if c.lower() == "all" else None))
-        if side: out.append({"in_h": round((t - sig_close_min) / 60, 1), "side": side, "kind": kind_of(name), "cls": cls})
-    return out[:20], "ok"
+        if side: out.append(((t - sig_close_min) / 60, cls))
+    res = []
+    for cls in "VW":                                  # v2: the nearest V and the nearest W event, as a bucket - nothing else
+        hs = [h for h, c in out if c == cls]
+        if hs: res.append({"cls": cls, "when": next(lbl for lim, lbl in BUCKETS if min(hs) <= lim)})
+    return res, "ok"
 
 
 def build_card(bars: list, isig: int, e: float, sl: float, tp1, tp2, up: bool, det: str, group: str, root: str, hid: str,
@@ -134,15 +142,17 @@ def build_card(bars: list, isig: int, e: float, sl: float, tp1, tp2, up: bool, d
     else:   # the render check only: real prices and real times (epoch seconds)
         h4b = [[tmin(b[0]) * 60, b[1], b[2], b[3], b[4], b[5] if len(b) > 5 else 0] for b in win]
         d1b = [[tmin(d[0] + " 00:00") * 60, d[1], d[2], d[3], d[4], 0] for d in dwin]
-    card = {"v": 1, "hid": hid, "group": group, "detector": det, "direction": "BUY" if up else "SELL",
+    card = {"v": CARD_V, "hid": hid, "group": group, "detector": det, "direction": "BUY" if up else "SELL",
             "regime": {"tag": tag, "with_trend": wt},
             "levels": {"entry": nz(e), "sl": nz(sl), "tp1": nz(tp1) if tp1 else None, "tp2": nz(tp2) if tp2 else None},
             "h4": {"bars": h4b, "ema": {str(n): [round(nz(v), 3) if blind else v for v in eh[n]] for n in eh}, "sig": len(h4b) - 1},
             "d1": {"bars": d1b, "ema": {str(n): [round(nz(v), 3) if blind else v for v in ed[n]] for n in ed}, "sig": len(d1b) - 1},
             "swings": {k: [{"p": nz(s["p"]), "bars_ago": s["bars_ago"]} for s in sw[k]] for k in ("hi", "lo")},
             "events": evs, "calendar": cal}
-    prov = {"sig_bar_min": tmin(bars[isig][0]), "sig_close_min": sig_close, "h4_last_min": tmin(win[-1][0]),
-            "ema_last_index": isig, "d1_part_h4_max_min": max(tmin(bars[i][0]) for i in part_idx) if part_idx else None,
+    prov = {"sig_bar_min": tmin(bars[isig][0]), "sig_close_min": sig_close, "h4_last_min": tmin(win[-1][0]), "isig": isig, "kd": kd,
+            "ema_h4_last": {n: lo + len(eh[n]) - 1 for n in eh},                 # the index of the last H4 EMA value shown
+            "ema_d1_completed_last": {n: dlo + len(ed[n]) - 2 for n in ed},      # the last COMPLETED-day EMA (the final one is today's step)
+            "d1_part_h4_max_min": max(tmin(bars[i][0]) for i in part_idx) if part_idx else None,
             "d1_days": [d[0] for d in dwin], "regime_days_max": ctx["days"][kd - 1][0] if kd else None, "sig_day": sig_day}
     return card, prov
 
@@ -152,7 +162,10 @@ def check_card(card: dict, prov: dict) -> None:
     """raises AssertionError when the card could show anything after the signal close or identify the symbol / date."""
     assert prov["h4_last_min"] == prov["sig_bar_min"], "H4 window does not end at the signal bar"
     assert prov["h4_last_min"] < prov["sig_close_min"], "H4 window reaches the signal close or later"
-    assert prov["ema_last_index"] is not None
+    for n, k in prov["ema_h4_last"].items():                                  # review #17: a real check, not "is not None"
+        assert k == prov["isig"], f"H4 EMA{n} ends at bar {k}, not the signal bar {prov['isig']}"
+    for n, k in prov["ema_d1_completed_last"].items():
+        assert k <= prov["kd"] - 1, f"D1 EMA{n} uses day {k} >= the signal day {prov['kd']}"
     assert prov["d1_part_h4_max_min"] is None or prov["d1_part_h4_max_min"] <= prov["sig_bar_min"], "D1 partial day uses a bar after the signal"
     assert prov["d1_days"][-1] == prov["sig_day"] and all(d < prov["sig_day"] for d in prov["d1_days"][:-1]), "D1 window is not completed days + today"
     assert prov["regime_days_max"] is None or prov["regime_days_max"] < prov["sig_day"], "regime uses the signal day"
@@ -160,7 +173,7 @@ def check_card(card: dict, prov: dict) -> None:
     for n in ("20", "50", "200"):
         assert len(card["h4"]["ema"][n]) == len(card["h4"]["bars"]) and len(card["d1"]["ema"][n]) == len(card["d1"]["bars"])
     for ev in card["events"]:
-        assert set(ev) == {"in_h", "side", "kind", "cls"} and ev["in_h"] >= 0, "event carries values / is in the past"
+        assert set(ev) == {"when", "cls"} and ev["when"] in [b for _, b in BUCKETS] and ev["cls"] in ("V", "W"), "event carries more than the nearest V/W bucket"
     s = json.dumps({k: v for k, v in card.items() if k != "group"})          # the group label is allowed (coach item 3)
     assert not IDENT.search(s), f"identifying text in the card: {IDENT.search(s).group(0)}"
     assert not any(k in card for k in ("sym", "symbol", "t", "date", "time", "key")), "identifying field"
@@ -172,7 +185,7 @@ def dev_page(card: dict, path: str) -> None:
 <title>Blind card {card['hid']}</title><style>body{{background:#0d1117;color:#c9d1d9;font:14px system-ui;margin:16px}} .hc-bar button{{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;margin-right:6px}} .hc-bar button.on{{background:#1f6feb}} .k{{color:#8b949e}} table{{border-collapse:collapse}} td{{padding:2px 8px}}</style></head><body>
 <h3>{card['group']} · {card['detector']} {card['direction']} · regime {card['regime']['tag'] or 'n/a'}</h3>
 <div id="c"><div class="hc-bar"><button data-tf="h4" class="on">H4</button><button data-tf="d1">D1</button><span class="hc-status k"></span></div><div class="hc-box"></div></div>
-<div class="k">events (next 14 days): {', '.join(f"in {e['in_h']:g}h {e['side']} {e['kind']} [{e['cls']}]" for e in card['events']) or card['calendar']}</div>
+<div class="k">nearest high-impact events: {', '.join(f"{e['cls']} {e['when']}" for e in card['events']) or card['calendar']}</div>
 <script src="{rel}/lw.js"></script><script src="{rel}/hybrid_chart.js"></script>
 <script>var C={json.dumps(card, separators=(",", ":"))};
 HybridChart.mount("c", {{blind: true, live: false, bars_h4: C.h4.bars, bars_d1: C.d1.bars, ema_h4: C.h4.ema, ema_d1: C.d1.ema, sig_h4: C.h4.sig, sig_d1: C.d1.sig,
@@ -197,10 +210,10 @@ def main():
         cal_gap += card["calendar"] != "ok"; cards[h] = card
     if any(f[1] != "too little history" for f in fails):
         raise SystemExit(f"CHECK FAILED on {sum(1 for f in fails if f[1] != 'too little history')} cards, e.g. {[f for f in fails if f[1] != 'too little history'][:3]}")
-    doc = {"v": 1, "built": time.strftime("%Y-%m-%d %H:%M"), "split_sha": split["sha256"], "n": len(cards), "cards": cards}
+    doc = {"v": CARD_V, "built": time.strftime("%Y-%m-%d %H:%M"), "split_sha": split["sha256"], "n": len(cards), "cards": cards}
     raw = json.dumps(doc, separators=(",", ":")).encode()
     with gzip.open(OUT, "wb", compresslevel=9) as f: f.write(raw)
-    L = [f"cards v1 built {doc['built']} from split {split['sha256'][:16]}..: {len(cards)} of {ntr} trades carded, "
+    L = [f"cards v{CARD_V} built {doc['built']} from split {split['sha256'][:16]}..: {len(cards)} of {ntr} trades carded, "
          f"{len(fails)} skipped (too little history before the signal), check_card PASS on every carded trade",
          f"calendar unavailable on {cal_gap} cards (signal before 2013 or within 14 days of the feed's end)",
          f"size {len(raw) / 1e6:.1f} MB raw, {os.path.getsize(OUT) / 1e6:.1f} MB gzip; {time.time() - t0:.0f}s"]
