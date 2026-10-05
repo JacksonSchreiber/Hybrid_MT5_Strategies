@@ -57,7 +57,10 @@ REPO="/home/jack/hybrid_project"
 cd "$REPO" || exit 1
 QDM_DIR="/home/jack/QDM"; QDMCLI="$QDM_DIR/qdmcli"
 MT5_DATA="/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/EE0304F13905552AE0B5EAEFB04866EB"
-STATUS_FILE="$MT5_DATA/MQL5/Files/import/import_status.txt"
+STATUS_FILE="$MT5_DATA/MQL5/Files/import/import_status.txt"; MT5_IMPORT_DIR="$MT5_DATA/MQL5/Files/import"
+# disk (coordinator 2026-10-04): the export writes the tick CSV inside WSL (the vhdx on C: grows) and mt5_import.sh copies it again
+# into MQL5/Files/import on C:. Before an export C: needs EXPECT_CSV_GB x 1.1 + 30 GB free; a stop for disk exits 4 (resumable).
+EXPECT_CSV_GB="${EXPECT_CSV_GB:-20}"
 EX5="$MT5_DATA/MQL5/Experts/HybridForwardTest.ex5"
 OUT="$REPO/data/study/oos_aa"; STATE="$OUT/state"; LOGS="$OUT/logs"
 READY="$REPO/data/mt5_ready"; FLEET="$REPO/data/qdm_csv/fleet"
@@ -174,6 +177,8 @@ for row in "${REG[@]}"; do
   # 1 export ----------------------------------------------------------
   if want export && ! done_ "$BASE" imported && { ! done_ "$BASE" exported || [[ ! -f "$CSV" ]]; }; then
     while qdm_running; do log "$BASE: qdmcli busy - waiting"; sleep 60; done
+    need=$(( EXPECT_CSV_GB + EXPECT_CSV_GB / 10 + 30 ))
+    if (( $(free_gb /mnt/c) < need )); then log "$BASE: C: has $(free_gb /mnt/c) GB free, an export needs ~$need GB (expected CSV ${EXPECT_CSV_GB} GB) - stopping (disk)"; exit 4; fi
     log "$BASE: exportToMT5 TICK $START..$EXPORT_TO ..."
     ( cd "$QDM_DIR" && "$QDMCLI" -data action=exportToMT5 "symbol=$DUK" timeframe=TICK "datefrom=$START" "dateto=$EXPORT_TO" \
         "outputdir=$READY" "filename=$BASE" ) > "$LOGS/${BASE}_export.log" 2>&1
@@ -205,7 +210,7 @@ for row in "${REG[@]}"; do
   if want import && ! done_ "$BASE" imported; then
     done_ "$BASE" h4 || { log "$BASE: import refused - H4 not built yet (the import deletes the tick CSV H4 is built from)"; FAILED+=("$BASE(import: no H4)"); continue; }
     sz=$(( $(stat -c %s "$CSV") / 1073741824 + 1 )); need=$(( sz + sz / 10 + 30 ))
-    if (( $(free_gb /mnt/c) < need )); then log "$BASE: C: has $(free_gb /mnt/c) GB free, need ~$need GB - stopping"; exit 1; fi
+    if (( $(free_gb /mnt/c) < need )); then log "$BASE: C: has $(free_gb /mnt/c) GB free, need ~$need GB - stopping (disk)"; exit 4; fi
     mt5_running && { log "terminal64 appeared - stopping (resumable)"; exit 1; }
     log "$BASE: importing ($sz GB CSV) ..."; prog "$BASE: MT5 import start (mt5_import.sh --clean, $sz GB tick CSV; C: $(free_gb /mnt/c) GB free)"
     if ! bash "$REPO/pipeline/mt5_import.sh" --clean --timeout "$IMPORT_TIMEOUT" "$BASE" > "$LOGS/${BASE}_import.log" 2>&1; then
@@ -217,7 +222,8 @@ for row in "${REG[@]}"; do
       log "$BASE: import status implausible: '$line'"; FAILED+=("$BASE(import-check)"); continue; fi
     log "$BASE: imported $ticks ticks $ifirst .. $ilast"; prog "$BASE: MT5 import end - $ticks ticks $ifirst .. $ilast as $SYM (C: $(free_gb /mnt/c) GB free)"
     mark "$BASE" imported
-    (( KEEP_CSV )) || { rm -f "$CSV"; log "$BASE: source CSV deleted"; }
+    (( KEEP_CSV )) || { rm -f "$CSV"; rm -f "$MT5_IMPORT_DIR/$BASE.csv"
+      log "$BASE: source CSV and the MT5 import copy ($MT5_IMPORT_DIR/$BASE.csv) deleted (C: $(free_gb /mnt/c) GB free)"; }
   fi
 
   # 4 AA tester run ----------------------------------------------------
