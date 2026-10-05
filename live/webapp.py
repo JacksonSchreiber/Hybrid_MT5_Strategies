@@ -53,6 +53,7 @@ textarea,select,input{width:100%;background:#0b0f14;color:var(--txt);border:1px 
 .vp.wait,.vp.none{background:#21262d;color:var(--dim);border:1px solid var(--line)}
 .chips{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
 .chip{display:inline-block;padding:2px 8px;border-radius:9px;font-size:12px;font-weight:700;background:#21262d;color:var(--dim);border:1px solid transparent}
+.kid{border-top:1px solid var(--line);padding:7px 0}.kid:first-of-type{border-top:0}
 .chip.ok{color:#3fb950}.chip.no{color:#ff7b72}.chip.maybe{color:#e3b341}.chip.na{color:var(--dim)}
 .chip.dec{border-color:#f85149;box-shadow:0 0 0 1px #f85149;background:#2a1717}
 .chip.diff{border-color:#58a6ff}
@@ -969,7 +970,6 @@ def dashboard(q: dict) -> str:
     rv_pill = positions_review_pills()
     if not pos: out.append('<div class="card k">none</div>')
     # a staged add (tranche 2) or a pyramid add (tranche 3) sits indented under the position it was added to
-    def _tr(p): return int(p.get("tranche") or 0)
     parents = [p for p in pos if _tr(p) < 2]
     children = {}
     for p in pos:
@@ -980,7 +980,7 @@ def dashboard(q: dict) -> str:
         for c in sorted(children.pop((p["symbol"], str(p.get("signal_id"))), []), key=_tr): ordered.append((c, True))
     for rest in children.values(): ordered += [(c, False) for c in rest]   # parent already closed: show it on its own
     for p, child in ordered:
-        what = {2: "staged add", 3: "pyramid add (+1.5R)", 4: "improving add (day 2)"}.get(_tr(p), "")
+        what = TRANCHE_WHAT.get(_tr(p), "")
         title = (f'↳ {E(what)} {E(p["direction"])}' if child else f'{E(p["symbol"])} {E(p["strategy"])} {E(p["direction"])}'
                  + (f' <span class="k">({E(what)})</span>' if what else "") + grp_pill(p["symbol"]) + bloc_pills(p))
         style = ' style="margin-left:28px;border-left:3px solid var(--line, #888)"' if child else ""
@@ -1044,7 +1044,8 @@ def signal_page(key: str, q: dict) -> str:
     out.append(f'<h1>{E(s["symbol"])} · {E(s["strategy"])} {E(s["direction"])} <span class="k">#{s["signal_id"]}</span></h1>'
                f'<div class="row">{grp_pill(s["symbol"])}{cls_pill(s.get("decision_class"))}{status_pill(s.get("status", ""))}<span class="pill">{E(rg.get("pretty", ""))}</span>'
                + (f'<span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span>' if is_open else "") + f'<span class="k">{E(s.get("sigtime_text", ""))} · {E(s.get("session", ""))}</span></div>'
-               f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>' + grp_box(s["symbol"]))
+               f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>' + grp_box(s["symbol"]) + signal_parent_line(s))
+    out.append(signal_kids(s))
     if s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
     if s.get("reoffer"): out.append(f'<div class="flash"><span class="pill warn">RE-OFFERED</span> {E(C.reoffer_line(s, CFG))}</div>')   # coach item 26
     d = s.get("delay_count", 0)
@@ -1229,20 +1230,112 @@ def _acks() -> list[dict]:
     import glob
     return [a for a in (C.load_json(p) for p in glob.glob(os.path.join(CFG["root"], "acks", "*.json"))) if a]
 
+# ----------------------------------------------------------------------------- spawned children (trader 2026-10-05: "reach any of its
+# children signals that spawned from it from within the parent signal"). Links come only from explicit references: an add tranche (2-4)
+# shares its entry's symbol + signal_id; an Inverse signal names its parent's signal_id and posid (signal JSON "parent"). Signal ids
+# restart after a box MT5 restart, so an id match must also come AFTER the parent (a reused id never links to an older signal's trades).
+TRANCHE_WHAT = {2: "staged add", 3: "pyramid add (+1.5R)", 4: "improving add (day 2)"}
+
+def _tr(p: dict) -> int: return int(p.get("tranche") or 0)
+
+def _opened_utc(p: dict) -> int:
+    """a position's open time as a TRUE UTC epoch (the EA writes the server clock)."""
+    t = int(p.get("opened_at") or 0)
+    return t - C.server_offset_h(datetime.fromtimestamp(t, timezone.utc), CFG) * 3600 if t else 0
+
+def _all_positions() -> list[dict]:
+    """open + closed positions, oldest first (a position mid-move between the folders is listed once)."""
+    seen, out = set(), []
+    for closed in (False, True):
+        for p in C.list_positions(CFG, closed=closed):
+            k = (p.get("symbol"), p.get("posid"))
+            if k not in seen: seen.add(k); out.append(dict(p, _closed=closed))
+    return sorted(out, key=_opened_utc)
+
+def _entry_of(add: dict, pos: list[dict]) -> dict | None:
+    """the entry tranche an add was added to: the latest tranche-0/1 position of the same signal opened at or before it."""
+    cands = [p for p in pos if _tr(p) < 2 and p.get("symbol") == add.get("symbol") and str(p.get("signal_id")) == str(add.get("signal_id"))
+             and _opened_utc(p) <= _opened_utc(add)]
+    return cands[-1] if cands else None
+
+def _pos_row(p: dict) -> str:
+    what = TRANCHE_WHAT.get(_tr(p)) or ("entry (staged first tranche)" if _tr(p) == 1 else "entry")
+    st = '<span class="pill">closed</span>' if p.get("_closed") else f'<span class="pill ok">open</span><b class="v {"ok" if (p.get("open_r") or 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</b>'
+    t = _opened_utc(p)
+    return (f'<div class="row kid"><a href="/position/{E(p["symbol"])}-{p["posid"]}"><b>{E(what)}</b> · pos {p["posid"]}</a><span>{E(str(p.get("direction", "")))}</span>{st}'
+            f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · opened {E(C.fmt_dt(datetime.fromtimestamp(t, timezone.utc))) if t else "-"}</span></div>')
+
+def _sig_row(s: dict) -> str:
+    return (f'<div class="row kid"><a href="/signal/{E(s["signal_key"])}"><b>{E(s.get("strategy", ""))}</b> · signal #{s["signal_id"]}</a><span>{E(str(s.get("direction", "")))}</span>'
+            f'{status_pill(s.get("status", ""))}<span class="k">offered {E(C.fmt_dt(C.parse_iso(s.get("published_at"))))}</span></div>')
+
+def spawned_card(rows: list[str], title: str) -> str:
+    return f'<div class="card"><h2>{E(title)}</h2>{"".join(rows)}</div>' if rows else ""
+
+def signal_kids(s: dict) -> str:
+    """a signal's children: the positions it opened (entry + adds) and the Inverse signals offered against it."""
+    t0 = C.parse_iso(s.get("published_at")); t0e = int(t0.timestamp()) - 300 if t0 else 0     # 5 min slack for clock skew
+    pos = [p for p in _all_positions() if p.get("symbol") == s["symbol"] and str(p.get("signal_id")) == str(s["signal_id"]) and _opened_utc(p) >= t0e]
+    inv = [x for x in C.list_signals(CFG, s["symbol"]) if str((x.get("parent") or {}).get("signal_id")) == str(s["signal_id"])
+           and t0 and (C.parse_iso(x.get("published_at")) or t0) >= t0]
+    return spawned_card([_pos_row(p) for p in pos] + [_sig_row(x) for x in sorted(inv, key=lambda x: x.get("published_at") or "")], "Spawned from this signal")
+
+def position_kids(p: dict) -> str:
+    """an entry position's children: its add tranches and the Inverse signals offered against it (matched on its posid)."""
+    rows = []
+    if _tr(p) < 2:
+        pos = _all_positions()
+        rows += [_pos_row(c) for c in pos if _tr(c) >= 2 and c.get("symbol") == p["symbol"] and str(c.get("signal_id")) == str(p.get("signal_id"))
+                 and (_entry_of(c, pos) or {}).get("posid") == p["posid"]]
+    inv = [x for x in C.list_signals(CFG, p["symbol"]) if str((x.get("parent") or {}).get("posid")) == str(p["posid"])]
+    rows += [_sig_row(x) for x in sorted(inv, key=lambda x: x.get("published_at") or "")]
+    return spawned_card(rows, "Spawned from this position")
+
+def _signal_parent_links(s: dict) -> list[str]:
+    """'spawned from' links for an Inverse signal: the parent signal (only if it is the one published before this) and its position."""
+    par = s.get("parent") or {}
+    if not par: return []
+    ps = C.signal(CFG, f'{s["symbol"]}-{par.get("signal_id")}') if par.get("signal_id") is not None else None
+    t_s = C.parse_iso(s.get("published_at")); t_p = C.parse_iso((ps or {}).get("published_at"))
+    if ps and t_s and t_p and t_p <= t_s:
+        out = [f'<a href="/signal/{E(ps["signal_key"])}">↑ spawned from #{ps["signal_id"]} {E(ps.get("strategy", ""))} {E(ps.get("direction", ""))}</a>']
+    else:
+        out = [f'↑ spawned from #{E(str(par.get("signal_id")))} {E(str(par.get("strategy", "")))} {E(str(par.get("direction", "")))} (signal no longer on the box)']
+    if par.get("posid") and C.position(CFG, f'{s["symbol"]}-{par["posid"]}'):
+        out.append(f'<a href="/position/{E(s["symbol"])}-{par["posid"]}">parent position {par["posid"]}</a>')
+    return out
+
+def signal_parent_line(s: dict) -> str:
+    links = _signal_parent_links(s)
+    return f'<div class="k">{" · ".join(links)}</div>' if links else ""
+
+def position_parent_line(p: dict, src: dict | None) -> str:
+    """'spawned from' links on a position: an add -> the entry tranche it was added to; an Inverse fill -> the parent signal/position."""
+    links = []
+    if _tr(p) >= 2:
+        ent = _entry_of(p, _all_positions())
+        links.append(f'<a href="/position/{E(p["symbol"])}-{ent["posid"]}">↑ {E(TRANCHE_WHAT.get(_tr(p), "add"))} to pos {ent["posid"]} (the entry)</a>' if ent
+                     else f'↑ {E(TRANCHE_WHAT.get(_tr(p), "add"))} (entry position not found)')
+    if src: links += _signal_parent_links(src)
+    return f'<div class="k">{" · ".join(links)}</div>' if links else ""
+
 def position_page(key: str, q: dict) -> str:
     p = C.position(CFG, key)
     if not p: return page("Position", '<div class="card bad">no such position</div>')
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
     closed = p.get("_closed")
+    src = C.signal(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
+    t_src = C.parse_iso((src or {}).get("published_at"))
+    src_ok = src if src and t_src and int(t_src.timestamp()) - 300 <= _opened_utc(p) else None   # a reused signal id is not this trade's signal
     out.append(f'<h1>{E(p["symbol"])} · {E(p["strategy"])} {E(p["direction"])} <span class="k">pos {p["posid"]} · signal #{p.get("signal_id")}</span></h1>'
-               + f'<div class="row">{grp_pill(p["symbol"])}{bloc_pills(p)}</div>' + grp_box(p["symbol"]) +
+               + f'<div class="row">{grp_pill(p["symbol"])}{bloc_pills(p)}</div>' + grp_box(p["symbol"]) + position_parent_line(p, src_ok) +
                f'<div class="card" id="poslive" data-key="{E(key)}" data-closed="{1 if closed else 0}"><div class="grid2"><div><div class="k">open R</div><div id="p-open_r" class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</div></div><div><div class="k">banked R</div><div id="p-banked_r" class="big v">{C.r_fmt(p.get("banked_r"))}</div></div>'
                f'<div><span class="k">entry</span> <b class="v">{p.get("entry")}</b></div><div><span class="k">SL live</span> <b id="p-sl_live" class="v bad">{p.get("sl_live")}</b> <span class="k">(risk basis {p.get("sl_risk_basis")})</span></div>'
                f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b id="p-tp_live" class="v">{p.get("tp_live") or "-"}</b></div>'
                f'<div><span class="k">lots</span> <b id="p-lots_live" class="v">{p.get("lots_live")}</b> <span class="k">of {p.get("lots_init")}</span></div><div><span class="k">bars open</span> <b id="p-bars_open" class="v">{p.get("bars_open")}</b></div></div>'
                f'<div class="k" id="p-flags">{E(pos_flags(p, closed))}</div></div>')
+    out.append(position_kids(p))
     out.append(staged_block(p))
-    src = C.signal(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
     plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
     if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None))
     else: out.append(tv_block(p["symbol"], 240, plv))
