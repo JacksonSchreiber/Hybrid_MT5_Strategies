@@ -38,6 +38,10 @@ fi
 $SSH "New-Item -ItemType Directory -Force -Path $APP/live/static, $ADV/advisor/.claude, $ADV/advisor/library, C:/ProgramData/hybrid/logs | Out-Null; 'dirs ok'" | tr -d '\r'
 $SCP "$REPO"/live/*.py "$HOST:$APP/live/"
 $SCP "$REPO"/live/static/lw.js "$REPO"/live/static/hybrid_chart.js "$REPO"/live/static/rpaths.js "$REPO"/live/static/rpaths.json "$REPO"/live/static/rpaths.json.gz "$HOST:$APP/live/static/"
+# backtest tab (2026-10-05): its page files + the self-hosted lever-builder libraries (Alpine, SortableJS, Shoelace); its DATA goes up
+# separately with provisioning/upload_backtest_data.sh
+$SCP "$REPO"/live/static/backtest.js "$REPO"/live/static/backtest.css "$REPO"/live/static/backtest.html "$HOST:$APP/live/static/"
+$SCP -r "$REPO"/live/static/vendor "$HOST:$APP/live/static/"
 $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
 $SCP "$REPO"/config/symbol_rules.json "$HOST:$APP/symbol_rules.json"      # per-symbol doctrine flags (class + suspended session rules) for the advisor card
 $SCP "$REPO"/provisioning/live_tasks.ps1 "$HOST:C:/ProgramData/hybrid/live_tasks.ps1"
