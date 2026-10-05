@@ -12,12 +12,19 @@
 #   USDJPY.dk / EURUSD.dk / GBPUSD.dk are ORIGINAL symbols (never touched here) with MT5 history from 2020-01 / 2016-07 / 2013-07,
 #   so the JPY crosses only yield 2020+, the EUR-base crosses 2016-07+ (margin EUR), the GBP-base crosses 2013-07+. AUDJPY and NZDJPY
 #   are therefore not re-imported (their 2020+ MT5 copies run aa only, phase A2).
+# QDM sharing (coordinator 2026-10-04): a third downloader (fleet3-download) keeps QDM busy after fleet2. Before each export the
+#   driver touches data/qdm_csv/fleet/QDM_YIELD (fleet3 starts no new qdmcli call while it exists), waits until qdmcli is idle
+#   (anchored checks; never kills a call in progress), runs export+h4 only, then removes the file - QDM is held for the export, not
+#   for the import or the tester run.
 # terminal64 open (the trader) -> WAIT and resume (never kill). Any other stage stop (timeout, disk) -> the driver stops and logs it.
 # The 9 reserved symbols' journals are produced but never opened; no study result is computed here.
 #   setsid nohup pipeline/fleet2_aa_run.sh > data/study/fleet2_aa/driver.out 2>&1 < /dev/null &
 set -uo pipefail
 REPO=/home/jack/hybrid_project; cd "$REPO" || exit 1
 OUT=data/study/fleet2_aa; P="$OUT/progress.log"; mkdir -p "$OUT"
+YIELD=data/qdm_csv/fleet/QDM_YIELD
+qdm_busy(){ pgrep -x qdmcli >/dev/null 2>&1 || pgrep -f "^/home/jack/QDM/j64" >/dev/null 2>&1; }
+trap 'rm -f "$REPO/$YIELD"' EXIT
 prog(){ printf '[%s] driver: %s\n' "$(date '+%F %T')" "$*" >> "$P"; }
 mt5_running(){ tasklist.exe /FI "IMAGENAME eq terminal64.exe" 2>/dev/null | grep -qi terminal64.exe; }
 wait_mt5(){ local n=0; while mt5_running; do (( n++ % 6 == 0 )) && prog "terminal64 is open (the trader?) - waiting, never killing"; sleep 300; done; }
@@ -44,7 +51,14 @@ run_stage --steps aa $A2 || { prog "phase A2 stopped"; exit 1; }
 prog "phase A finished in $(( ($(date +%s) - t0) / 60 )) min; phase B waits for the fleet2-download service to finish (QDM idle)"
 while systemctl --user is-active --quiet fleet2-download; do sleep 600; done
 prog "downloads finished - phase B (export,h4,import,aa), one symbol at a time: $B"
-for s in $B; do run_stage --steps export,h4,import,aa "$s" || { prog "phase B stopped at $s"; exit 1; }; done
+for s in $B; do
+  if [[ ! -f "$OUT/state/$s.h4" ]]; then
+    touch "$YIELD"; n=0; while qdm_busy; do (( n++ % 10 == 0 )) && prog "$s: QDM_YIELD set - waiting for the current qdmcli call to finish"; sleep 30; done
+    run_stage --steps export,h4 "$s"; rc=$?; rm -f "$YIELD"
+    (( rc == 0 )) || { prog "phase B stopped at $s (export/h4)"; exit 1; }
+  fi
+  run_stage --steps import,aa "$s" || { prog "phase B stopped at $s (import/aa)"; exit 1; }
+done
 for s in $C; do
   c="USD${s#EUR}"
   if [[ -f "$OUT/state/$c.imported" && -f "$OUT/state/$c.exported" ]]; then

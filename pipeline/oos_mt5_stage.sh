@@ -111,7 +111,7 @@ mkdir -p "$STATE" "$LOGS" "$OUT/actions"
 log(){ printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$OUT/stage.log" >&2; }
 prog(){ (( HOLDOUT || FLEET2 )) && printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$OUT/progress.log"; return 0; }
 mt5_running(){ tasklist.exe /FI "IMAGENAME eq terminal64.exe" 2>/dev/null | grep -qi terminal64.exe; }
-qdm_running(){ pgrep -f "qdmcli " >/dev/null 2>&1; }
+qdm_running(){ pgrep -x qdmcli >/dev/null 2>&1 || pgrep -f "^$QDM_DIR/j64" >/dev/null 2>&1; }   # anchored: an unanchored -f matches shells
 done_(){ [[ -f "$STATE/$1.$2" ]]; }
 mark(){ date -Iseconds > "$STATE/$1.$2"; }
 free_gb(){ df -BG --output=avail "$1" | tail -1 | tr -dc '0-9'; }
