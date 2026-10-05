@@ -8,10 +8,11 @@
 #            stops itself if C: is short of space. USD-base pairs FIRST: they are the profit-currency conversion symbols of the EUR
 #            exotics (USDSEK for EURSEK, USDNOK for EURNOK, USDHUF for EURHUF, USDPLN for EURPLN).
 #   Phase C: EURSEK, EURHUF, EURPLN - aa only on their long MT5 copies, AFTER their conversion pairs are extended.
-# CONVERSION (found on the first run, 2026-10-04): the tester produces no signals while a conversion symbol has no prices.
-#   USDJPY.dk / EURUSD.dk / GBPUSD.dk are ORIGINAL symbols (never touched here) with MT5 history from 2020-01 / 2016-07 / 2013-07,
-#   so the JPY crosses only yield 2020+, the EUR-base crosses 2016-07+ (margin EUR), the GBP-base crosses 2013-07+. AUDJPY and NZDJPY
-#   are therefore not re-imported (their 2020+ MT5 copies run aa only, phase A2).
+# CONVERSION (measured on phase A, 2026-10-04): a missing PROFIT-currency conversion symbol stops the tester producing signals - the
+#   JPY crosses yield 2020+ only, because USDJPY.dk (an ORIGINAL symbol, never touched here) has MT5 history from 2020-01; so AUDJPY and
+#   NZDJPY are not re-imported (phase A2 runs their 2020+ copies). A missing MARGIN-currency symbol does NOT: EURUSD.dk (2016-07+) /
+#   GBPUSD.dk (2013-07+) only log "no prices" warnings - EURCHF/EURNZD/GBPCAD/GBPNZD have full 2012-26 signals with ~95% filled in both
+#   periods. Hence the order: USD-base exotics (USDSEK/USDNOK/USDHUF/USDPLN = the profit conversion of EURSEK/EURNOK/EURHUF/EURPLN) first.
 # QDM sharing (coordinator 2026-10-04): a third downloader (fleet3-download) keeps QDM busy after fleet2. Before each export the
 #   driver touches data/qdm_csv/fleet/QDM_YIELD (fleet3 starts no new qdmcli call while it exists), waits until qdmcli is idle
 #   (anchored checks; never kills a call in progress), runs export+h4 only, then removes the file - QDM is held for the export, not
