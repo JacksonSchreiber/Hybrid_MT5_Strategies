@@ -192,7 +192,7 @@
             marks.push({ t: t + 14400 * eb, label: 'exit ' + this.fmt(this.rev.R_plan) }); }
         }
         HybridChart.mount(el, { blind: true, live: false, bars_h4: h4, bars_d1: C.d1.bars, ema_h4: ema, ema_d1: C.d1.ema, sig_h4: C.h4.sig, sig_d1: C.d1.sig,
-                                levels: C.levels, strategy: C.detector, overlay: null, marks: marks, rsign: this.sgn() });
+                                levels: C.levels, strategy: C.detector, overlay: C.overlay || null, marks: marks, rsign: this.sgn() });
       },
       decide: function (d) {
         var self = this; if (d === 'take' && !self.v.ok) return; self.busy = true;

@@ -78,8 +78,9 @@ def web_dir(cfg: dict, *sub) -> str:
 
 def store(cfg: dict) -> dict:
     """the read-only data, loaded once (reloaded when the results file changes)."""
-    d = data_dir(cfg); cf = os.path.join(d, "cards_v2.json.gz")
-    if not os.path.exists(cf): cf = os.path.join(d, "cards_v1.json.gz")
+    d = data_dir(cfg)
+    cf = next((os.path.join(d, n) for n in ("cards_v3.json.gz", "cards_v2.json.gz", "cards_v1.json.gz") if os.path.exists(os.path.join(d, n))),
+              os.path.join(d, "cards_v1.json.gz"))      # v3 = with the detector overlays (coach: required)
     key = (d, os.path.getmtime(os.path.join(d, "results_v1.json.gz")), cf, os.path.getmtime(cf))
     if _STORE.get("key") != key:
         with _LOCK:
