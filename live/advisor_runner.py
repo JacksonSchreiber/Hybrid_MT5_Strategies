@@ -24,6 +24,7 @@ from live import charts
 from live import overlays as OV
 from live import exposure as EXP
 from live import brief_runner
+from live import positions_review
 from live import verdict_fmt as VF
 
 SESSION_NS = uuid.UUID("5f0a3c1e-9b7d-4c1a-8f2e-2d3b4a5c6d7e")
@@ -414,7 +415,8 @@ class Runner:
         self.cfg = cfg; self.log = C.Log("advisor", cfg["logs_dir"])
         self.mu = threading.Lock(); self.inflight: set[tuple[str, str]] = set()
         self.sem = {m["id"]: threading.BoundedSemaphore(max(1, int(m.get("max_parallel", 2)))) for m in models(cfg)}
-        for sub in ("advisor/verdicts", "advisor/replies", "advisor/replies/done", "advisor/retry", "web/charts", "advisor/briefs", "advisor/briefs/requests"): os.makedirs(os.path.join(cfg["root"], sub), exist_ok=True)
+        for sub in ("advisor/verdicts", "advisor/replies", "advisor/replies/done", "advisor/retry", "web/charts", "advisor/briefs", "advisor/briefs/requests", "advisor/positions", "advisor/positions/requests"): os.makedirs(os.path.join(cfg["root"], sub), exist_ok=True)
+        positions_review.recover(cfg)            # trader 2026-10-04: the on-demand open-positions review (one at a time, same tick)
         live_dir = cfg["advisor"]["live_dir"]; os.makedirs(os.path.join(live_dir, "bundles"), exist_ok=True)
         legacy = os.path.join(live_dir, "notes.live.md")
         for m in models(cfg):                     # each model starts from the shared history, then keeps its own
@@ -555,6 +557,7 @@ class Runner:
 
     def tick(self) -> None:
         brief_runner.poll_requests(self.cfg, self.log)
+        positions_review.poll_requests(self.cfg, self.log)
         ms = models(self.cfg)
         for sig in C.list_signals(self.cfg, light=True):
             if sig.get("status") != "open": continue

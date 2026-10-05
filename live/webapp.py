@@ -784,6 +784,113 @@ def signal_live(key: str) -> dict:
     if not s: return {"error": "no such signal"}
     return {"status": s.get("status", ""), "delay_count": s.get("delay_count", 0), "deadline": s.get("deadline", ""), "auto_reason": s.get("auto_reason", "")}
 
+# ----------------------------------------------------------------------------- open-positions review (trader 2026-10-04)
+PR_CSS = """<style>
+.pr-act{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700;letter-spacing:.02em;background:#21262d;border:1px solid var(--line)}
+.pr-act.now{background:#3a1d1d;border-color:#a33;color:#ff7b72}.pr-act.today{background:#3a2f1f;border-color:#9e6a03;color:var(--warn)}
+.pr-act.watch{color:var(--dim)}.pr-act.hold{background:#12301a;border-color:#2ea043;color:var(--up)}
+.pr-item{border-left:4px solid var(--line);padding:8px 10px;margin:8px 0;border-radius:6px;background:#11161d}
+.pr-item.now{border-left-color:#f85149}.pr-item.today{border-left-color:#d29922}.pr-item.hold{border-left-color:#2ea043}
+.pr-item .why{margin-top:4px;font-size:14px;line-height:1.45;color:var(--txt)}.pr-sum p,.pr-sum li{font-size:14px;line-height:1.5}
+.pr-top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+@media (max-width:600px){.pr-top .big{font-size:18px}}
+</style>"""
+
+def _pr_time(ts: str) -> str:
+    try:
+        from datetime import datetime as _dt
+        t = _dt.strptime(ts, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        return f"{t.strftime('%a %d %b %H:%M UTC')} ({C.rel_time(t)})"
+    except Exception: return ts
+
+def _pr_badge(r: dict) -> str:
+    from live import positions_review as PR
+    a = r.get("action", "other"); u = "hold" if a == "hold" else r.get("urgency", "watch")
+    pt = PR.params_text(r)
+    return f'<span class="pr-act {u}">{E(PR.ACTION_TXT.get(a, a.upper()))}{(" " + E(pt)) if pt else ""}</span>' + (f' <span class="pr-act {u}">{E(r.get("urgency", ""))}</span>' if a != "hold" else "")
+
+def _pr_status_line(st: dict, rv: dict | None, npos: int) -> str:
+    stt = st.get("state")
+    if stt == "queued": return '<span class="warn">queued — the advisor picks it up within a few seconds</span>'
+    if stt == "running":
+        t = C.parse_iso(st.get("started")); el = int((C.now_utc() - t).total_seconds()) if t else 0
+        return f'<span class="warn">the advisor is reviewing {npos} position{"s" if npos != 1 else ""} · {el // 60}m{el % 60:02d}s so far (usually a few minutes; this page refreshes itself)</span>'
+    if stt == "error": return f'<span class="bad">the last review failed: {E(str(st.get("error") or "?"))[:200]}</span>'
+    return f'last review {E(_pr_time(rv["ts"]))}' if rv else "no review yet"
+
+def _pr_button(running: bool, npos: int, back: str = "/") -> str:
+    dis = running or npos == 0
+    return (f'<form method="post" action="/positions_review" class="inline"><input type="hidden" name="back" value="{E(back)}">'
+            f'<button class="btn" {"disabled" if dis else ""} title="One advisor read of every open position: events, time in trade, giving back R, stops, correlation">'
+            f'{"Reviewing…" if running else "Review my open positions"}</button></form>')
+
+def positions_review_card(npos: int) -> str:
+    """Home: the on-demand review button, its status, and the latest review's 'act now / today' items."""
+    from live import positions_review as PR
+    st = PR.status(CFG); rv = PR.load_review(CFG); running = st.get("state") in ("queued", "running")
+    out = [PR_CSS, '<div class="card"><div class="row"><div style="min-width:0;flex:1"><div class="k">Advisor · open positions</div>'
+           f'<div style="font-size:14px;margin-top:2px">{_pr_status_line(st, rv, npos)}</div></div>{_pr_button(running, npos)}</div>']
+    if rv and rv.get("ok") and rv.get("recs"):
+        cnt = PR.counts(rv); hold = sum(1 for r in rv["recs"] if r.get("action") == "hold")
+        out.append(f'<div class="k" style="margin-top:8px"><b class="{"bad" if cnt["now"] else "k"}">{cnt["now"]} act now</b> · <b class="{"warn" if cnt["today"] else "k"}">{cnt["today"]} today</b>'
+                   f' · {cnt["change"] - cnt["now"] - cnt["today"]} watch · {hold} hold — <a href="/review?r={E(rv["ts"])}">full review →</a></div>')
+        snap = {x["key"]: x for x in rv.get("positions") or []}
+        top = [r for r in rv["recs"] if r.get("action") != "hold" and r.get("urgency") in ("now", "today") and not r.get("missing")]
+        for r in sorted(top, key=lambda r: (r["urgency"] != "now", r["key"]))[:6]:
+            x = snap.get(r["key"], {})
+            out.append(f'<a href="/position/{E(r["key"])}"><div class="pr-item {E(r["urgency"])}"><div class="pr-top"><b>{E(x.get("symbol", r["key"]))} {E(str(x.get("direction", "")))}</b>{grp_pill(x.get("symbol", ""))}'
+                       f'{_pr_badge(r)}</div><div class="why">{E(r.get("reason", ""))}</div></div></a>')
+    elif rv and not rv.get("ok"):
+        out.append(f'<div class="k bad" style="margin-top:6px">last review failed: {E(str(rv.get("error") or ""))[:200]}</div>')
+    out.append("</div>")
+    return "".join(out)
+
+def positions_review_pills() -> dict:
+    """position key -> a small badge for the open-positions list, from a review younger than 12 h (non-hold only)."""
+    try:
+        from live import positions_review as PR
+        from datetime import datetime as _dt
+        rv = PR.load_review(CFG)
+        if not rv or not rv.get("ok"): return {}
+        t = _dt.strptime(rv["ts"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        if (C.now_utc() - t).total_seconds() > 12 * 3600: return {}
+        return {r["key"]: f' <span class="k">advisor:</span> {_pr_badge(r)}' for r in rv.get("recs") or [] if r.get("action") != "hold" and not r.get("missing")}
+    except Exception: return {}
+
+def review_page(q: dict) -> str:
+    from live import positions_review as PR
+    st = PR.status(CFG); names = PR.list_reviews(CFG); rv = PR.load_review(CFG, q.get("r")); running = st.get("state") in ("queued", "running")
+    npos = len(C.list_positions(CFG))
+    out = [PR_CSS, flash(q.get("msg"), q.get("ok", "1") == "1"), '<h1>Open-positions review</h1>',
+           f'<div class="card"><div class="row"><div style="min-width:0;flex:1;font-size:14px">{_pr_status_line(st, PR.load_review(CFG), npos)}<div class="k">Advisory only — nothing is executed. '
+           f'Each position links to its page, where the buttons are (SL → BE, SL → TP1, Close 50%, Close all).</div></div>{_pr_button(running, npos, "/review")}</div>']
+    if names:
+        opts = "".join(f'<option value="{E(n)}" {"selected" if rv and rv.get("ts") == n else ""}>{E(_pr_time(n))}</option>' for n in names)
+        out.append(f'<form method="get" action="/review" style="margin-top:8px"><select name="r" onchange="this.form.submit()">{opts}</select></form>')
+    out.append("</div>")
+    if not rv: return page("Positions review", "".join(out) + '<div class="card k">No review yet — press the button.</div>', "home", refresh=15 if running else None)
+    meta = (f'{E(rv.get("model", ""))} · {E(rv.get("effort", ""))} effort · {rv.get("elapsed_s", "?")} s · {rv.get("n_positions", 0)} positions · requested by {E(str(rv.get("by", "")))}')
+    if not rv.get("ok"):
+        out.append(f'<div class="card"><div class="bad">This review failed: {E(str(rv.get("error") or "?"))[:400]}</div><div class="k">{meta}</div></div>')
+        return page("Positions review", "".join(out), "home", refresh=15 if running else None)
+    cnt = PR.counts(rv)
+    out.append(f'<div class="card pr-sum"><div class="row"><b class="{"bad" if cnt["now"] else "k"}">{cnt["now"]} act now</b><b class="{"warn" if cnt["today"] else "k"}">{cnt["today"]} today</b>'
+               f'<span class="k">{cnt["change"]} change(s) suggested of {rv.get("n_positions", 0)}</span></div>{md_html(rv.get("summary") or "")}'
+               + (f'<p><b>Portfolio:</b> {E(rv.get("portfolio") or "")}</p>' if rv.get("portfolio") else "")
+               + (f'<div class="k">notes: {E("; ".join(rv.get("warnings") or []))}</div>' if rv.get("warnings") else "") + f'<div class="k">{meta}</div></div>')
+    snap = {x["key"]: x for x in rv.get("positions") or []}
+    order = {"now": 0, "today": 1, "watch": 2}
+    for r in sorted(rv.get("recs") or [], key=lambda r: (r.get("action") == "hold", order.get(r.get("urgency"), 3), r["key"])):
+        x = snap.get(r["key"], {}); cur = C.position(CFG, r["key"]); u = "hold" if r.get("action") == "hold" else r.get("urgency", "watch")
+        now_txt = ("<span class='k'>closed since the review</span>" if (not cur or cur.get("_closed")) else f'<span class="k">now</span> <b class="v {"ok" if (cur.get("open_r") or 0) >= 0 else "bad"}">{C.r_fmt(cur.get("open_r"))}</b>')
+        best = f' · best {x["best_r"]:+.2f}R' if x.get("best_r") is not None else ""
+        out.append(f'<div class="pr-item {E(u)}"><div class="pr-top"><a href="/position/{E(r["key"])}"><b class="big">{E(x.get("symbol", r["key"]))}</b> {E(str(x.get("direction", "")))} <span class="k">{E(str(x.get("strategy", "")))}</span></a>'
+                   f'{grp_pill(x.get("symbol", ""))}{_pr_badge(r)}</div>'
+                   f'<div class="k" style="margin-top:4px">at review {C.r_fmt(x.get("open_r"))}{best} · banked {C.r_fmt(x.get("banked_r"))} · {E(str(x.get("hours", "")))} · {now_txt}</div>'
+                   f'<div class="why">{E(r.get("reason", ""))}</div></div>')
+    if rv.get("raw"): out.append(f'<div class="card"><details><summary class="k">the advisor\'s full answer</summary><pre>{E(rv["raw"])}</pre></details></div>')
+    return page("Positions review", "".join(out), "home", refresh=15 if running else None)
+
 # ----------------------------------------------------------------------------- pages
 def dashboard(q: dict) -> str:
     out = [flash(q.get("msg"), q.get("ok", "1") == "1")]
@@ -841,6 +948,8 @@ def dashboard(q: dict) -> str:
     # positions
     pos = C.list_positions(CFG)
     out.append("<h2>Open positions</h2>")
+    out.append(positions_review_card(len(pos)))
+    rv_pill = positions_review_pills()
     if not pos: out.append('<div class="card k">none</div>')
     # a staged add (tranche 2) or a pyramid add (tranche 3) sits indented under the position it was added to
     def _tr(p): return int(p.get("tranche") or 0)
@@ -869,6 +978,7 @@ def dashboard(q: dict) -> str:
                 left = f" · add in {mins // 60}h{mins % 60:02d}" if mins > 0 else " · add due now"
             title += f' <span class="pill warn">TRIAL {p.get("lots_init")}/{p.get("full_lots")} lots{left}</span>'
         if int(p.get("short_raise") or 0) == 1 and not child: title += ' <span class="pill ok">STOP +0.25R</span>'
+        title += rv_pill.get(f'{p["symbol"]}-{p["posid"]}', "")
         out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"{style}><div class="row"><span class="big">{title}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
                    f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
     # instances: one compact table (the expanded universe runs ~40 charts - a card each would bury everything below)
@@ -1535,6 +1645,7 @@ class H(BaseHTTPRequestHandler):
             if parts[0] == "equity": return self._send(equity_page(q))
             if parts[0] == "events": return self._send(events_page(q))
             if parts[0] == "settings": return self._send(settings_page(q))
+            if parts[0] == "review": return self._send(review_page(q))
             if parts[0] == "chart" and len(parts) == 3 and parts[2] in ("h4.png", "d1.png"):
                 s = C.signal(CFG, parts[1])
                 if not s: return self._send("no signal", "text/plain", 404)
@@ -1565,6 +1676,12 @@ class H(BaseHTTPRequestHandler):
                 from live import brief_runner
                 brief_runner.request(CFG, "web"); C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|brief_requested|by=web")
                 return self._redirect("/context", "brief requested - the page refreshes itself while it generates", True)
+            if u.path == "/positions_review":                                 # trader 2026-10-04: on-demand open-positions review
+                from live import positions_review as PR
+                ok = PR.request(CFG, "web"); back = form.get("back") if form.get("back") in ("/", "/review") else "/"
+                C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|positions_review_requested|by=web|{'queued' if ok else 'refused: already running'}")
+                return self._redirect(back, "positions review requested - the advisor reads every open position (a few minutes); this page refreshes itself"
+                                      if ok else "a positions review is already running", ok)
             if u.path == "/telegram_test":
                 ok = C.telegram_send(CFG, f"Test from the web app ({C.now_iso()}). If you read this, alerts from the box reach you.", LOG)
                 return self._redirect("/", "Telegram test sent" if ok else "Telegram send FAILED - check token/chat id/network on the box", ok)
