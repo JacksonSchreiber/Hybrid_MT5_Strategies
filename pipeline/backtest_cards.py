@@ -18,7 +18,10 @@ contiguous (weekends removed) and labelled relative to the signal. Detector over
 record - a gap; the chart's own imbalance zones and swing markers are drawn from the bars.
 check_card() runs on EVERY card: nothing after the signal close (every real timestamp behind the card <= the signal bar), the D1
 partial day only from H4 bars up to the signal bar, the window <= 264 H4 / 44 D1 bars, no identifying fields, no event values.
-    python3 pipeline/backtest_cards.py              -> data/backtest/cards_v2.json.gz (+ build report)
+    python3 pipeline/backtest_cards.py              -> data/backtest/cards_v3.json.gz (+ build report)
+v3 (coach 2026-10-04: overlays required): every card carries the detector's live-card overlay - zone, fib leg, aux lines, labelled
+swings - rebuilt by pipeline/backtest_overlays.py from bars up to the signal bar, in R and synthetic time like everything else. A
+card whose overlay can't be verified (the SweepMSS replay must emit on the signal bar with the trade's SL/TP) is left out.
     python3 pipeline/backtest_cards.py --dev N      also write N local dev pages (data/backtest/dev/<hid>.html)
 """
 from __future__ import annotations
@@ -31,8 +34,8 @@ from pipeline import backtest_split as BS                    # noqa: E402
 from pipeline.trader_selection_study import regime_series    # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-OUT = os.path.join(ROOT, "data", "backtest", "cards_v2.json.gz"); REPORT = os.path.join(ROOT, "data", "backtest", "cards_v2_report.txt")
-CARD_V = 2
+OUT = os.path.join(ROOT, "data", "backtest", "cards_v3.json.gz"); REPORT = os.path.join(ROOT, "data", "backtest", "cards_v3_report.txt")
+CARD_V = 3
 BUCKETS = [(24, "within 1 day"), (72, "1-3 days"), (168, "3-7 days"), (336, "7-14 days")]
 DEV = os.path.join(ROOT, "data", "backtest", "dev")
 ECON = "/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/Common/Files/econ_events.csv"
@@ -72,8 +75,11 @@ def prep_symbol(bars: list) -> dict:
         if d != cur: days.append([d, b[1], b[2], b[3], b[4]]); first.append(i); cur = d
         else: days[-1][2] = max(days[-1][2], b[2]); days[-1][3] = min(days[-1][3], b[3]); days[-1][4] = b[4]
     dc = [d[4] for d in days]
+    from pipeline import backtest_overlays as BO
+    ob = BO.Bars([b[0] for b in bars], [b[1] for b in bars], [b[2] for b in bars], [b[3] for b in bars], [b[4] for b in bars])
+    per = BO.Periods([(d[0], d[2], d[3]) for d in days])
     return {"ema_h4": {n: ema(closes, n) for n in (20, 50, 200)}, "days": days, "first": first, "day_idx": {d[0]: k for k, d in enumerate(days)},
-            "ema_d1": {n: ema(dc, n) for n in (20, 50, 200)}, "regime": regime_series(days)}
+            "ema_d1": {n: ema(dc, n) for n in (20, 50, 200)}, "regime": regime_series(days), "ob": ob, "per": per}
 
 
 _EV = None
@@ -113,8 +119,26 @@ def events_for(root: str, sig_close_min: int) -> tuple[list, str]:
     return res, "ok"
 
 
+def build_overlay(ctx: dict, bars: list, isig: int, lo: int, e: float, sl: float, tp1, tp2, up: bool, det: str, tol: float,
+                  nz, tsyn) -> tuple[dict | None, dict]:
+    """the detector's live-card overlay (pipeline/backtest_overlays.py) in card units: prices nz(), bar indices -> tsyn()."""
+    from pipeline import backtest_overlays as BO
+    ov, prov = BO.overlay_for(det, ctx["ob"], isig, up, {"entry": e, "sl": sl, "tp1": tp1, "tp2": tp2}, tol, ctx["per"],
+                              lambda i: day_of(bars[i][0]))
+    if not ov: return None, prov
+    idx = [ov["zone"]["i_from"], ov["zone"]["i_to"]] + ([ov["leg"]["i0"], ov["leg"]["i1"]] if ov.get("leg") else []) \
+          + [j for j, _ in ov.get("swings_hi", [])] + [j for j, _ in ov.get("swings_lo", [])]
+    out = {"zone": {"from": tsyn(max(lo, ov["zone"]["i_from"])), "to": tsyn(ov["zone"]["i_to"]), "hi": nz(ov["zone"]["hi"]), "lo": nz(ov["zone"]["lo"])},
+           "aux": [{"price": nz(p), "label": lbl} for p, lbl in ov.get("aux", [])],
+           "swings_hi": [{"t": tsyn(j)} for j, _ in ov.get("swings_hi", []) if j >= lo],
+           "swings_lo": [{"t": tsyn(j)} for j, _ in ov.get("swings_lo", []) if j >= lo]}
+    if ov.get("leg"): out["leg"] = {"t0": tsyn(max(lo, ov["leg"]["i0"])), "p0": nz(ov["leg"]["p0"]), "t1": tsyn(ov["leg"]["i1"]), "p1": nz(ov["leg"]["p1"])}
+    prov = dict(prov, idx_min=min(idx), idx_max=max(idx), clamped=sum(1 for j in idx if j < lo))
+    return out, prov
+
+
 def build_card(bars: list, isig: int, e: float, sl: float, tp1, tp2, up: bool, det: str, group: str, root: str, hid: str,
-               blind: bool = True, ctx: dict | None = None) -> tuple[dict, dict]:
+               blind: bool = True, ctx: dict | None = None, tol: float | None = None) -> tuple[dict, dict]:
     """bars = the symbol's FULL H4 history [[time, o, h, l, c, (v)]], isig = index of the signal bar, ctx = prep_symbol(bars).
     -> (card, provenance)."""
     ctx = ctx or prep_symbol(bars)
@@ -142,14 +166,18 @@ def build_card(bars: list, isig: int, e: float, sl: float, tp1, tp2, up: bool, d
     else:   # the render check only: real prices and real times (epoch seconds)
         h4b = [[tmin(b[0]) * 60, b[1], b[2], b[3], b[4], b[5] if len(b) > 5 else 0] for b in win]
         d1b = [[tmin(d[0] + " 00:00") * 60, d[1], d[2], d[3], d[4], 0] for d in dwin]
+    tsyn = (lambda j: T0 + (j - lo) * 14400) if blind else (lambda j: tmin(bars[j][0]) * 60)
+    rnd = (lambda p: round((p - e) / R, 3)) if blind else (lambda p: p)
+    tol = tol if tol is not None else 10 ** -max(len(str(e).split(".")[-1]) if "." in str(e) else 0, 1) / 2
+    ovl, oprov = build_overlay(ctx, bars, isig, lo, e, sl, tp1, tp2, up, det, tol, rnd, tsyn)
     card = {"v": CARD_V, "hid": hid, "group": group, "detector": det, "direction": "BUY" if up else "SELL",
             "regime": {"tag": tag, "with_trend": wt},
             "levels": {"entry": nz(e), "sl": nz(sl), "tp1": nz(tp1) if tp1 else None, "tp2": nz(tp2) if tp2 else None},
             "h4": {"bars": h4b, "ema": {str(n): [round(nz(v), 3) if blind else v for v in eh[n]] for n in eh}, "sig": len(h4b) - 1},
             "d1": {"bars": d1b, "ema": {str(n): [round(nz(v), 3) if blind else v for v in ed[n]] for n in ed}, "sig": len(d1b) - 1},
             "swings": {k: [{"p": nz(s["p"]), "bars_ago": s["bars_ago"]} for s in sw[k]] for k in ("hi", "lo")},
-            "events": evs, "calendar": cal}
-    prov = {"sig_bar_min": tmin(bars[isig][0]), "sig_close_min": sig_close, "h4_last_min": tmin(win[-1][0]), "isig": isig, "kd": kd,
+            "events": evs, "calendar": cal, "overlay": ovl}
+    prov = {"overlay": oprov, "window_lo": lo, "sig_bar_min": tmin(bars[isig][0]), "sig_close_min": sig_close, "h4_last_min": tmin(win[-1][0]), "isig": isig, "kd": kd,
             "ema_h4_last": {n: lo + len(eh[n]) - 1 for n in eh},                 # the index of the last H4 EMA value shown
             "ema_d1_completed_last": {n: dlo + len(ed[n]) - 2 for n in ed},      # the last COMPLETED-day EMA (the final one is today's step)
             "d1_part_h4_max_min": max(tmin(bars[i][0]) for i in part_idx) if part_idx else None,
@@ -177,6 +205,16 @@ def check_card(card: dict, prov: dict) -> None:
     s = json.dumps({k: v for k, v in card.items() if k != "group"})          # the group label is allowed (coach item 3)
     assert not IDENT.search(s), f"identifying text in the card: {IDENT.search(s).group(0)}"
     assert not any(k in card for k in ("sym", "symbol", "t", "date", "time", "key")), "identifying field"
+    # v3: the overlay - read only bars up to the signal bar, every element inside the visible window, synthetic times only
+    op = prov["overlay"]; ov = card.get("overlay")
+    assert ov is not None, "no verified overlay"
+    assert op["max_i"] <= prov["isig"] and op["idx_max"] <= prov["isig"], "overlay uses a bar after the signal"
+    t_lo, t_hi = card["h4"]["bars"][0][0], card["h4"]["bars"][-1][0]
+    ts = [ov["zone"]["from"], ov["zone"]["to"]] + ([ov["leg"]["t0"], ov["leg"]["t1"]] if ov.get("leg") else []) \
+         + [x["t"] for x in ov.get("swings_hi", []) + ov.get("swings_lo", [])]
+    assert all(t_lo <= t <= t_hi for t in ts), "overlay time outside the card window"
+    assert ov["zone"]["to"] == t_hi, "zone does not end at the signal bar"
+    for a in ov.get("aux", []): assert set(a) == {"price", "label"} and isinstance(a["price"], (int, float)), "aux carries more than price/label"
 
 
 def dev_page(card: dict, path: str) -> None:
@@ -189,7 +227,7 @@ def dev_page(card: dict, path: str) -> None:
 <script src="{rel}/lw.js"></script><script src="{rel}/hybrid_chart.js"></script>
 <script>var C={json.dumps(card, separators=(",", ":"))};
 HybridChart.mount("c", {{blind: true, live: false, bars_h4: C.h4.bars, bars_d1: C.d1.bars, ema_h4: C.h4.ema, ema_d1: C.d1.ema, sig_h4: C.h4.sig, sig_d1: C.d1.sig,
-  levels: C.levels, strategy: C.detector, overlay: null}});</script></body></html>"""
+  levels: C.levels, strategy: C.detector, overlay: C.overlay}});</script></body></html>"""
     open(path, "w").write(html)
 
 
@@ -198,15 +236,19 @@ def main():
     t0 = time.time(); split = BS.load_split()
     popk = {(x["sym"], x["t"], x["strat"]): x for x in CB.population()}
     gname = {g: gi["name"] for g, gi in split["groups"].items()}
-    cards = {}; fails = []; cal_gap = 0; ntr = 0; ctxs: dict = {}
+    from pipeline import ask_side_study as A
+    import collections
+    cards = {}; fails = []; cal_gap = 0; ntr = 0; ctxs: dict = {}; no_ov: list = []; nov = collections.Counter()
     for h, t in sorted(split["trades"].items(), key=lambda kv: kv[1]["key"][0]):
         x = popk[tuple(t["key"])]; ntr += 1
         if x["i0"] < 400: fails.append((h, "too little history")); continue
         if x["sym"] not in ctxs: ctxs.clear(); ctxs[x["sym"]] = prep_symbol(x["bars"])
         card, prov = build_card(x["bars"], x["i0"] - 1, x["e"], x["s"], x["tp1"], x["tp2"], x["up"], x["strat"], gname[t["group"]],
-                                x["sym"].split(".")[0], h, ctx=ctxs[x["sym"]])
+                                x["sym"].split(".")[0], h, ctx=ctxs[x["sym"]], tol=A.TICK[x["sym"]] / 2)
+        if card["overlay"] is None: no_ov.append((h, x["strat"], prov["overlay"].get("why"))); continue
         try: check_card(card, prov)
         except AssertionError as ex: fails.append((h, str(ex))); continue
+        nov[x["strat"]] += 1
         cal_gap += card["calendar"] != "ok"; cards[h] = card
     if any(f[1] != "too little history" for f in fails):
         raise SystemExit(f"CHECK FAILED on {sum(1 for f in fails if f[1] != 'too little history')} cards, e.g. {[f for f in fails if f[1] != 'too little history'][:3]}")
@@ -216,6 +258,8 @@ def main():
     L = [f"cards v{CARD_V} built {doc['built']} from split {split['sha256'][:16]}..: {len(cards)} of {ntr} trades carded, "
          f"{len(fails)} skipped (too little history before the signal), check_card PASS on every carded trade",
          f"calendar unavailable on {cal_gap} cards (signal before 2013 or within 14 days of the feed's end)",
+         f"overlays (v3): verified and drawn on {dict(nov)}; left out (overlay not verifiable): {len(no_ov)} "
+         f"{dict(collections.Counter(w for _, _, w in no_ov))} by detector {dict(collections.Counter(d for _, d, _ in no_ov))}",
          f"size {len(raw) / 1e6:.1f} MB raw, {os.path.getsize(OUT) / 1e6:.1f} MB gzip; {time.time() - t0:.0f}s"]
     if "--dev" in sys.argv:
         os.makedirs(DEV, exist_ok=True); k = int(sys.argv[sys.argv.index("--dev") + 1])

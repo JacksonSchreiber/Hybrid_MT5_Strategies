@@ -99,6 +99,9 @@
           if (d.blind ? (lv[L[0]] !== null && lv[L[0]] !== undefined && isFinite(lv[L[0]])) : lv[L[0]] > 0) cs.createPriceLine({ price: lv[L[0]], color: L[1], lineWidth: L[3], lineStyle: L[4], axisLabelVisible: true, title: L[2] });
         });
         var ov = d.overlay || {};
+        // blind cards (v3 overlays): prices are R from the entry (0 or negative is valid) and times are synthetic epoch numbers
+        function has(p) { return d.blind ? (p !== null && p !== undefined && isFinite(p)) : p > 0; }
+        function tv(x) { return typeof x === 'number' ? x : iso(x); }
         function band(t0, t1, hi, lo, fill, line) {   // filled band between lo..hi over [t0,t1] (Lightweight Charts has no rectangles)
           var z = chart.addBaselineSeries({ baseValue: { type: 'price', price: lo }, topFillColor1: fill, topFillColor2: fill, topLineColor: line, bottomLineColor: line, bottomFillColor1: 'rgba(0,0,0,0)', bottomFillColor2: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
           var pts = bars.filter(function (b) { return b[0] >= t0 && b[0] <= t1; }).map(function (b) { return { time: b[0], value: hi }; });
@@ -106,23 +109,23 @@
           if (pts.length) z.setData(pts);
         }
         if (tf === 'h4' && bars.length) guard('zones', function () {
-          var zf = iso(ov.zone && ov.zone.from) || bars[0][0], zt = iso(ov.zone && ov.zone.to) || bars[bars.length - 1][0];
-          if (ov.zone && ov.zone.hi > 0) band(zf, zt, ov.zone.hi, ov.zone.lo, 'rgba(112,128,144,0.35)', 'rgba(112,128,144,0.8)');
-          if (ov.zone2 && ov.zone2.hi > 0) band(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
+          var zf = tv(ov.zone && ov.zone.from) || bars[0][0], zt = tv(ov.zone && ov.zone.to) || bars[bars.length - 1][0];
+          if (ov.zone && has(ov.zone.hi) && has(ov.zone.lo) && (!d.blind || ov.zone.hi !== ov.zone.lo)) band(zf, zt, ov.zone.hi, ov.zone.lo, 'rgba(112,128,144,0.35)', 'rgba(112,128,144,0.8)');
+          if (ov.zone2 && has(ov.zone2.hi) && has(ov.zone2.lo) && ov.zone2.hi !== ov.zone2.lo) band(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
           imbalances(bars).forEach(function (z) { band(z.t0, z.t1, z.hi, z.lo, z.state === 0 ? 'rgba(147,112,219,0.18)' : 'rgba(147,112,219,0.08)', 'rgba(147,112,219,0.5)'); });
-          if (d.strategy === 'DeepFib' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
+          if (d.strategy === 'DeepFib' && ov.leg && has(ov.leg.p0) && has(ov.leg.p1)) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
             cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: true, axisLabelColor: gp ? '#7a6400' : '#3a3f47', axisLabelTextColor: '#e6edf3', title: FIB_LT[i] }); });
         });
-        if (tf === 'h4' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0 && iso(ov.leg.t0) && iso(ov.leg.t1)) {
+        if (tf === 'h4' && ov.leg && has(ov.leg.p0) && has(ov.leg.p1) && tv(ov.leg.t0) && tv(ov.leg.t1)) {
           var lg = chart.addLineSeries({ color: '#ee82ee', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-          var t0 = iso(ov.leg.t0), t1 = iso(ov.leg.t1); if (t0 < t1) lg.setData([{ time: t0, value: ov.leg.p0 }, { time: t1, value: ov.leg.p1 }]);
+          var t0 = tv(ov.leg.t0), t1 = tv(ov.leg.t1); if (t0 < t1) lg.setData([{ time: t0, value: ov.leg.p0 }, { time: t1, value: ov.leg.p1 }]);
         }
-        (ov.aux || []).forEach(function (a) { if (a.price > 0 && tf === 'h4') cs.createPriceLine({ price: a.price, color: '#c0c0c0', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, axisLabelColor: '#3a3f47', axisLabelTextColor: '#e6edf3', title: a.label || '' }); });
+        (ov.aux || []).forEach(function (a) { if (has(a.price) && tf === 'h4') cs.createPriceLine({ price: a.price, color: '#c0c0c0', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, axisLabelColor: '#3a3f47', axisLabelTextColor: '#e6edf3', title: a.label || '' }); });
         var marks = [];
         if (tf === 'h4') {
           swings(bars).forEach(function (s) { marks.push({ time: s.t, position: s.kind === 'hi' ? 'aboveBar' : 'belowBar', color: '#8b949e', shape: s.kind === 'hi' ? 'arrowDown' : 'arrowUp', size: 0.5 }); });
-          (ov.swings_hi || []).forEach(function (s) { var t = iso(s.t); if (t) marks.push({ time: t, position: 'aboveBar', color: '#ffc878', shape: 'arrowDown', size: 0.9, text: 'swing hi' }); });
-          (ov.swings_lo || []).forEach(function (s) { var t = iso(s.t); if (t) marks.push({ time: t, position: 'belowBar', color: '#ffc878', shape: 'arrowUp', size: 0.9, text: 'swing lo' }); });
+          (ov.swings_hi || []).forEach(function (s) { var t = tv(s.t); if (t) marks.push({ time: t, position: 'aboveBar', color: '#ffc878', shape: 'arrowDown', size: 0.9, text: 'swing hi' }); });
+          (ov.swings_lo || []).forEach(function (s) { var t = tv(s.t); if (t) marks.push({ time: t, position: 'belowBar', color: '#ffc878', shape: 'arrowUp', size: 0.9, text: 'swing lo' }); });
         }
         if (d.blind && bars.length) { var si = d['sig_' + tf] != null ? d['sig_' + tf] : bars.length - 1; marks.push({ time: bars[si][0], position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 }); }
         else if (d.signal_t) marks.push({ time: tf === 'h4' ? d.signal_t : d.signal_t - (d.signal_t % 86400), position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 });
