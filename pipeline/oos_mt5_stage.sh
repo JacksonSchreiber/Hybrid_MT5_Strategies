@@ -26,6 +26,12 @@
 #   set AUDNZD, AUDCAD, NZDCAD (oos_build_inputs.HOLDOUT, never in NEW): state, logs and journals in data/study/holdout_aa/ (never
 #   oos_aa/), no parity run, build/drag/qa --holdout, milestones appended to data/study/holdout_aa/progress.log, and after every AA
 #   run the agent-log conversion check (pipeline/mt5_agentlog_check.py: "no prices for symbol" counts in that run's new log bytes).
+# FLEET2 (2026-10-04, trader "start running mt5"; docs/new_symbols_prereg_2026-10-04.md): --fleet2 runs the same steps and settings
+#   on the 26 fleet2 symbols: state, logs, journals and progress.log in data/study/fleet2_aa/ (never oos_aa/holdout_aa), no parity,
+#   no 'final' (the study inputs for these symbols are registered later). Symbols whose MT5 custom copy already covers 2012-01..2026-06
+#   are pre-marked 'imported' by pipeline/fleet2_aa_run.sh and run --steps aa only (no M1 CSV needed then). USDZAR (dropped from
+#   the downloads: Dukascopy HTTP 429) runs on its existing 2020-01.. MT5 copy. The 9 reserved symbols' journals are produced but
+#   never opened (the one look waits for the coach + trader).
 # --steps LIST (comma-separated subset of export,h4,import,aa,final; default all) lets a driver pipeline the steps
 #   (pipeline/holdout_run.sh). Only runs whose steps include import or aa need MT5 closed; import needs the h4 marker, aa needs the
 #   imported marker; build/drag/qa run only when 'final' is among the steps.
@@ -57,7 +63,7 @@ OUT="$REPO/data/study/oos_aa"; STATE="$OUT/state"; LOGS="$OUT/logs"
 READY="$REPO/data/mt5_ready"; FLEET="$REPO/data/qdm_csv/fleet"
 EXPORT_TO="2026.10.03"; TESTER_TO="2026.06.30"        # TESTER_TO = oos_build_inputs.TESTER_TO (signals before 2026.07.01)
 STRATS="SMC,Fib,TrendCont,EMArevQ"
-AA_TIMEOUT=14400; IMPORT_TIMEOUT=5400; KEEP_CSV=0; PARITY=1; DRY=0; HOLDOUT=0; STEPS="export,h4,import,aa,final"
+AA_TIMEOUT=14400; IMPORT_TIMEOUT=5400; KEEP_CSV=0; PARITY=1; DRY=0; HOLDOUT=0; FLEET2=0; STEPS="export,h4,import,aa,final"
 
 # BASE (importer / journal name)  QDM code  first date
 REG=("AUDUSD AUDUSD 2012.01.01" "USDCAD USDCAD 2012.01.01" "USDCHF USDCHF 2012.01.01" "NZDUSD NZDUSD 2012.01.01"
@@ -65,6 +71,13 @@ REG=("AUDUSD AUDUSD 2012.01.01" "USDCAD USDCAD 2012.01.01" "USDCHF USDCHF 2012.0
      "XAGUSD XAGUSD 2012.01.01" "US30 USA30IDXUSD 2013.01.01")
 # HOLDOUT set (= pipeline/oos_build_inputs.py HOLDOUT; selected only by --holdout)
 HREG=("AUDNZD AUDNZD 2012.01.01" "AUDCAD AUDCAD 2012.01.01" "NZDCAD NZDCAD 2012.01.01")
+# FLEET2 set (selected only by --fleet2)
+FREG=("CADJPY CADJPY 2012.01.01" "CHFJPY CHFJPY 2012.01.01" "EURCHF EURCHF 2012.01.01" "GBPCHF GBPCHF 2012.01.01" "NZDCHF NZDCHF 2012.01.01"
+      "EURCAD EURCAD 2012.01.01" "EURNZD EURNZD 2012.01.01" "GBPCAD GBPCAD 2012.01.01" "GBPNZD GBPNZD 2012.01.01" "EURSEK EURSEK 2012.01.01"
+      "EURHUF EURHUF 2012.01.01" "EURPLN EURPLN 2012.01.01" "USDZAR USDZAR 2020.01.01"
+      "AUDJPY AUDJPY 2012.01.01" "NZDJPY NZDJPY 2012.01.01" "AUDCHF AUDCHF 2012.01.01" "CADCHF CADCHF 2012.01.01" "EURAUD EURAUD 2012.01.01"
+      "GBPAUD GBPAUD 2012.01.01" "USDSGD USDSGD 2012.01.01" "EURNOK EURNOK 2012.01.01" "USDSEK USDSEK 2012.01.01" "USDNOK USDNOK 2012.01.01"
+      "USDHUF USDHUF 2012.01.01" "USDPLN USDPLN 2012.01.01" "USDCZK USDCZK 2012.01.01")
 ORIG="EURUSD GBPUSD US100 US500 USDJPY USOIL XAUUSD BTCUSD"
 # every knob mt5_verify.sh turns into an EA input - unset so the EA runs on its input defaults
 KNOBS=(STAGED PYR TC_BANK SHORT_RAISE ADD_GATE SHORT_CUT IMPR_ADD EARLY INVERSE V2_EXIT EMA_STRETCH STOP_FLOOR_ATR STOP_FLOOR_SYM
@@ -78,6 +91,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --import-timeout) IMPORT_TIMEOUT="$2"; shift 2;;
   --dry-run) DRY=1; shift;;
   --holdout) HOLDOUT=1; shift;;
+  --fleet2) FLEET2=1; shift;;
   --steps) STEPS="$2"; shift 2;;
   -h|--help) sed -n '3,40p' "$0"; exit 0;;
   -*) echo "unknown flag $1" >&2; exit 2;;
@@ -88,13 +102,16 @@ for st_ in ${STEPS//,/ }; do [[ " export h4 import aa final " == *" $st_ "* ]] |
 want(){ [[ ",$STEPS," == *",$1,"* ]]; }
 if (( HOLDOUT )); then
   REG=("${HREG[@]}"); OUT="$REPO/data/study/holdout_aa"; STATE="$OUT/state"; LOGS="$OUT/logs"; PARITY=0; SETFLAG="--holdout"
+elif (( FLEET2 )); then
+  REG=("${FREG[@]}"); OUT="$REPO/data/study/fleet2_aa"; STATE="$OUT/state"; LOGS="$OUT/logs"; PARITY=0; SETFLAG="--fleet2"
+  STEPS="${STEPS//,final/}"; STEPS="${STEPS//final,/}"; [[ "$STEPS" == final ]] && STEPS=""
 else SETFLAG=""; fi
 mkdir -p "$STATE" "$LOGS" "$OUT/actions"
-(( HOLDOUT )) || mkdir -p "$OUT/parity"
+(( HOLDOUT || FLEET2 )) || mkdir -p "$OUT/parity"
 log(){ printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$OUT/stage.log" >&2; }
-prog(){ (( HOLDOUT )) && printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$OUT/progress.log"; return 0; }
+prog(){ (( HOLDOUT || FLEET2 )) && printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$OUT/progress.log"; return 0; }
 mt5_running(){ tasklist.exe /FI "IMAGENAME eq terminal64.exe" 2>/dev/null | grep -qi terminal64.exe; }
-qdm_running(){ pgrep -f "qdmcli " >/dev/null 2>&1; }
+qdm_running(){ pgrep -x qdmcli >/dev/null 2>&1 || pgrep -f "^$QDM_DIR/j64" >/dev/null 2>&1; }   # anchored: an unanchored -f matches shells
 done_(){ [[ -f "$STATE/$1.$2" ]]; }
 mark(){ date -Iseconds > "$STATE/$1.$2"; }
 free_gb(){ df -BG --output=avail "$1" | tail -1 | tr -dc '0-9'; }
@@ -102,7 +119,7 @@ FAILED=()
 
 if (want import || want aa || (( PARITY ))) && mt5_running && (( ! DRY )); then
   echo "terminal64.exe is running - refusing to start (close MT5 first; this script never kills it)." >&2; exit 1; fi
-log "=== oos_mt5_stage start (pid $$) set=$( (( HOLDOUT )) && echo holdout || echo oos) steps=$STEPS parity=$PARITY keep_csv=$KEEP_CSV aa_timeout=$AA_TIMEOUT"
+log "=== oos_mt5_stage start (pid $$) set=$( (( HOLDOUT )) && echo holdout || { (( FLEET2 )) && echo fleet2 || echo oos; }) steps=$STEPS parity=$PARITY keep_csv=$KEEP_CSV aa_timeout=$AA_TIMEOUT"
 [[ -f "$EX5" ]] && log "EA build: HybridForwardTest.ex5 modified $(stat -c '%y' "$EX5")" || log "WARN: $EX5 not found"
 
 AA_J=""
@@ -145,7 +162,8 @@ for row in "${REG[@]}"; do
   [[ -f "$M1" ]] || M1="$FLEET/$BASE-M1-No Session.csv"
   if done_ "$BASE" aa; then log "$BASE: done (AA journal in $OUT) - skipped"; continue; fi
   if ! want export && ! want h4 && ! want import && ! want aa; then continue; fi
-  if [[ ! -f "$M1" ]]; then log "$BASE: no M1 CSV ($DUK) - download not finished; skipped"; FAILED+=("$BASE(no M1)"); continue; fi
+  if [[ ! -f "$M1" ]] && { want export || want h4 || ! done_ "$BASE" imported; }; then
+    log "$BASE: no M1 CSV ($DUK) - download not finished; skipped"; FAILED+=("$BASE(no M1)"); continue; fi
   log "=== $BASE ($DUK) from $START"
   if (( DRY )); then
     log "DRY: export $DUK TICK $START..$EXPORT_TO -> $CSV ; H4 -> data/study/h4/$SYM.csv ; mt5_import.sh --clean $BASE ;"
@@ -234,6 +252,7 @@ if want final; then
 fi
 log "=== stage finished (steps $STEPS). failed/skipped: ${FAILED[*]:-none}"
 if (( HOLDOUT )); then want final && log "next (the ONE LOOK, trader's command): python3 pipeline/cbloc_holdout_look.py --look"
+elif (( FLEET2 )); then log "fleet2: journals in $OUT (the reserved symbols' journals are never opened; the look waits for the coach + trader)"
 else
 log "next (the ONE LOOK, trader's command): python3 pipeline/oos_queue_study.py            # readiness check, computes nothing"
 log "                                       python3 pipeline/oos_queue_study.py --look [--exclude US30]"

@@ -1,0 +1,4 @@
+alpinejs 3.14.1 (MIT) cdnjs
+sortablejs 1.15.2 (MIT) jsdelivr
+@shoelace-style/shoelace 2.15.1 (MIT) jsdelivr cdn/ build: chunks, components (.js), themes/dark.css, autoloader, 29 icons
+fetched 2026-10-04 19:54 - self-hosted, nothing is fetched at runtime

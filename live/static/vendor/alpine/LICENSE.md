@@ -1,0 +1,1 @@
+Alpine.js 3.14.1 - MIT License - Copyright (c) Caleb Porzio and contributors - https://github.com/alpinejs/alpine/blob/main/LICENSE.md (the npm package ships no licence file; package.json: license MIT)

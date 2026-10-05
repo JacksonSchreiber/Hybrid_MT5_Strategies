@@ -1,0 +1,303 @@
+<!-- backtest.html - the Backtest tab's markup (Alpine.js component btApp() in backtest.js; Shoelace components; SortableJS for the
+     lever stack). Served inside webapp.page() by live/backtest.py page_body(). -->
+<template x-if="err"><sl-alert variant="danger" open closable @sl-after-hide="err=''" class="bt-err"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon><span x-text="err"></span></sl-alert></template>
+
+<!-- ============================================================ start screen -->
+<template x-if="!sess">
+  <div class="bt-start">
+    <div class="bt-hero">
+      <h1>Backtest</h1>
+      <p class="k">Blind historical signals, one at a time: decide <b>skip</b> or <b>take</b>, and build how you'd manage it. <b>Practice</b> reveals the
+        result after each decision. <b>Test</b> is graded: each signal can be tested only once, ever; every card takes two steps (your first call,
+        then the advisor's view, then your final call) and nothing is revealed until the session ends. The comparison is always the <b>raw signal</b>;
+        the grading comparator is <b>Minimal</b>. Model costs - read the differences, not the levels.</p>
+    </div>
+    <div class="card bt-startcard">
+      <div class="bt-row">
+        <sl-select label="Symbol group" @sl-change="startGroup = $event.target.value || startGroup" class="bt-w260">
+          <template x-for="g in groups" :key="g.key"><sl-option :value="g.key" x-text="g.name + ' · ' + g.size + ' signals'"></sl-option></template>
+        </sl-select>
+        <sl-radio-group label="Mode" value="practice" class="bt-mode-rg" @sl-change="startMode = $event.target.value">
+          <sl-radio-button value="practice">Practice</sl-radio-button>
+          <sl-radio-button value="test" :disabled="!menuFrozen">Test</sl-radio-button>
+        </sl-radio-group>
+        <template x-if="dev"><sl-input size="small" type="number" label="Dev: size" placeholder="full" class="bt-n" :value="devN" @sl-change="devN = $event.target.value"></sl-input></template>
+        <sl-button :variant="startMode === 'test' ? 'warning' : 'primary'" size="large" @click="start()" :loading="busy"><sl-icon slot="prefix" name="lightning-charge"></sl-icon><span x-text="startMode === 'test' ? 'Start a Test session' : 'Start a session'"></span></sl-button>
+      </div>
+      <p class="k bt-small">Sessions are a stratified random draw from the group's partition (years, directions and detectors in proportion), one symbol at most
+        once per three months, any two signals at least 15 days apart, nothing research-locked.
+        <span x-show="startMode === 'test'" x-text="'Test signals left: ' + groups.map(function (g) { return g.name + ' ' + (testLeft[g.key] === undefined ? '?' : testLeft[g.key]); }).join(' · ') + ' · menu v1 frozen'"></span></p>
+      <p class="k bt-small" x-show="startMode === 'test'">Cost: every Test card runs one blind advisor consult on the box (a few minutes of the advisor's model each),
+        queued about 10 cards ahead of you; follow-up questions are capped at 5 per card and 50 per session.</p>
+    </div>
+    <div class="card" x-show="sessions.length">
+      <div class="bt-h3">Your sessions</div>
+      <div class="bt-scroll"><table class="bt-tbl">
+        <thead><tr><th>Started</th><th>Group</th><th>Mode</th><th>Done</th><th>Your R</th><th>Raw</th><th>vs raw</th><th></th></tr></thead>
+        <tbody><template x-for="s in sessions" :key="s.sid"><tr>
+          <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.mode === 'test' ? 'Test' : 'Practice'"></td><td x-text="s.done + ' / ' + s.n"></td>
+          <td :class="s.tally ? cls(s.tally.R_choice) : ''" x-text="s.tally ? fmt(s.tally.R_choice) : 'hidden'"></td><td :class="s.tally ? cls(s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_raw) : '-'"></td>
+          <td :class="s.tally ? cls(s.tally.R_choice - s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_choice - s.tally.R_raw) : '-'"></td>
+          <td class="bt-actions"><sl-button size="small" x-show="s.done < s.n" @click="resume(s.sid)">Resume</sl-button>
+            <sl-button size="small" variant="text" x-show="s.mode !== 'test' || s.done >= s.n" :href="'/bt/report/' + s.sid + '.csv'">CSV</sl-button></td>
+        </tr></template></tbody>
+      </table></div>
+    </div>
+  </div>
+</template>
+
+<!-- ============================================================ session -->
+<template x-if="sess && !done">
+  <div>
+    <div class="bt-top">
+      <div class="bt-top-l"><span class="bt-gdot" :style="'background:' + (C.card ? '#3fb950' : '#888')"></span>
+        <b x-text="groupName(sess.group)"></b><span class="k" x-text="' · ' + (isTest() ? 'TEST' : 'Practice') + ' · card ' + (C.i + 1) + ' of ' + C.n"></span></div>
+      <div class="bt-tally">
+        <span class="bt-pill" x-show="isTest()">results hidden until the last card</span>
+        <span class="bt-pill" x-show="!isTest()">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
+        <span class="bt-pill" x-show="!isTest()">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
+        <span class="bt-pill" x-show="!isTest()" title="the grading comparator">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
+        <sl-button size="small" variant="text" @click="leave()">Leave</sl-button>
+      </div>
+    </div>
+    <sl-progress-bar class="bt-prog" :value="C.n ? (100 * C.i / C.n) : 0"></sl-progress-bar>
+    <template x-if="flash"><div class="bt-flash" x-text="flash"></div></template>
+
+    <div class="bt-grid">
+      <!-- left: the card -->
+      <div class="bt-left">
+        <div class="card bt-chartcard">
+          <div id="bt-chart"><div class="hc-bar"><button data-tf="h4" class="on">H4</button><button data-tf="d1">D1</button><span class="hc-status k"></span></div>
+            <div class="hc-box"></div></div>
+        </div>
+        <div class="card bt-facts" x-show="C.card">
+          <div class="bt-row bt-pills">
+            <span class="bt-tag" :class="C.card && C.card.direction === 'BUY' ? 'up' : 'dn'" x-text="C.card && C.card.direction"></span>
+            <span class="bt-tag" x-text="C.card && C.card.detector"></span>
+            <span class="bt-tag" x-text="C.card && C.card.group"></span>
+            <span class="bt-tag dim" x-text="'regime ' + ((C.card && C.card.regime && C.card.regime.tag) || '-')"></span>
+          </div>
+          <div class="bt-cols">
+            <div><div class="bt-h4">Levels (R from entry)</div>
+              <table class="bt-mini"><template x-for="k in ['entry','sl','tp1','tp2']"><tr x-show="C.card && C.card.levels[k] !== null && C.card.levels[k] !== undefined">
+                <td x-text="k.toUpperCase()"></td><td x-text="C.card ? fmtP(C.card.levels[k]) : ''"></td></tr></template></table>
+              <div class="k bt-small" x-show="C.card && C.card.direction === 'SELL'">SELL card: R = profit (price up = loss)</div></div>
+            <div><div class="bt-h4">Swings (newest first)</div>
+              <div class="bt-sw"><span class="k">highs</span> <template x-for="s in (C.card ? C.card.swings.hi.slice(0,4) : [])"><span class="bt-chip" x-text="fmtP(s.p) + ' · ' + s.bars_ago + 'b'"></span></template></div>
+              <div class="bt-sw"><span class="k">lows</span> <template x-for="s in (C.card ? C.card.swings.lo.slice(0,4) : [])"><span class="bt-chip" x-text="fmtP(s.p) + ' · ' + s.bars_ago + 'b'"></span></template></div></div>
+            <div><div class="bt-h4">High-impact events (next 14 days)</div>
+              <div class="k" x-show="C.card && !C.card.events.length">no V or W event scheduled</div>
+              <template x-for="e in (C.card ? C.card.events : [])"><div class="bt-ev"><span class="bt-cls" :class="'c' + e.cls" x-text="e.cls"></span>
+                <span x-text="'nearest: ' + e.when"></span></div></template>
+              <div class="k bt-small">the nearest V and W event only - no names, sides or exact times (they identified the symbol)</div></div>
+          </div>
+        </div>
+        <sl-details summary="Group notes" class="bt-info" :open="wide">
+          <template x-for="l in (C.info ? C.info.lines : [])"><div class="bt-line"><span class="bt-ltag" :class="l.tag" x-text="l.tag"></span><span x-text="l.text"></span></div></template>
+          <div class="k bt-small" x-text="C.default ? ('Preloaded plan: ' + C.default.label + ' - ' + C.default.status) : ''"></div>
+        </sl-details>
+      </div>
+
+      <!-- right: the plan -->
+      <div class="bt-right">
+        <div class="card bt-plan" :class="rev ? 'locked' : ''">
+          <div class="bt-planhead">
+            <div class="bt-h3">Your plan</div>
+            <sl-select size="small" placeholder="Load a preset…" :value="presetSel" @sl-change="loadPreset($event.target.value)" class="bt-preset" :disabled="!!rev" hoist>
+              <sl-option value="default" x-text="(C.default ? C.default.label : '') + ' (preloaded)'"></sl-option>
+              <template x-for="p in menu.presets" :key="p.key"><sl-option :value="p.key" x-text="p.label"></sl-option></template>
+              <sl-option value="raw">Raw signal (nothing added)</sl-option>
+              <template x-if="C.advisor"><sl-option value="advisor" x-text="'Advisor recommended · ' + (C.advisor_v1 ? 'latest, ' : '') + C.advisor.note"></sl-option></template>
+              <template x-if="C.advisor_v1"><sl-option value="advisor_v1">Advisor v1 (its blind first plan)</sl-option></template>
+            </sl-select>
+            <sl-tooltip content="Undo (Ctrl+Z)"><sl-icon-button name="arrow-counterclockwise" label="Undo" @click="undo()" :disabled="!!rev || hpos <= 0"></sl-icon-button></sl-tooltip>
+            <sl-tooltip content="Redo (Ctrl+Shift+Z)"><sl-icon-button name="arrow-clockwise" label="Redo" @click="redo()" :disabled="!!rev || hpos >= hist.length - 1"></sl-icon-button></sl-tooltip>
+          </div>
+          <div class="k bt-small" x-show="presetAbout" x-text="presetAbout"></div>
+          <template x-if="C.advisor && !isTest()">
+            <div class="bt-adv"><sl-icon name="stars"></sl-icon> <b>Advisor</b> <span class="k" x-text="'(' + C.advisor.note + ', nearest preset: ' + labelOf(C.advisor.nearest_preset) + ')'"></span>
+              <div x-text="C.advisor.rationale"></div></div>
+          </template>
+
+          <!-- entry (always first) -->
+          <div class="bt-lever fixed">
+            <span class="bt-lt">Entry</span>
+            <div class="bt-sent">Enter <sl-input type="number" size="small" class="bt-n" :value="plan.entry" min="1" max="200" step="5" @sl-change="setEntry($event)" :disabled="!!rev"><span slot="suffix">%</span></sl-input> at the signal</div>
+          </div>
+
+          <div id="bt-stack" class="bt-stack">
+            <template x-for="(L, idx) in plan.levers" :key="L.id">
+              <div class="bt-lever" :data-id="L.id">
+                <span class="bt-grip" title="drag to reorder" x-show="!rev"><sl-icon name="grip-vertical"></sl-icon></span>
+                <span class="bt-lt" :class="kindOf(L.type)" x-text="typeLabel(L.type)"></span>
+                <div class="bt-sent">
+                  <template x-if="L.type === 'add_reach'"><span>Add <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="1" max="200" step="5" @sl-change="setF(L,'pct',$event)" :disabled="!!rev"><span slot="suffix">%</span></sl-input>
+                    if <sl-input type="number" size="small" class="bt-n" :value="L.at" step="0.25" @sl-change="setF(L,'at',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input> is reached
+                    within <sl-input type="number" size="small" class="bt-n" :value="L.within_h === null ? '' : L.within_h" placeholder="any" step="1" @sl-change="setF(L,'within_h',$event,true)" :disabled="!!rev"><span slot="suffix">h</span></sl-input>,
+                    its stop at <sl-select size="small" class="bt-s" :value="String(L.stop)" @sl-change="setStop(L,$event)" :disabled="!!rev" hoist><sl-option value="trade">the trade's stop</sl-option><sl-option value="-1">-1R (signal stop)</sl-option><sl-option value="-0.5">-0.5R</sl-option><sl-option value="0">entry</sl-option><sl-option value="0.25">+0.25R</sl-option><sl-option value="0.5">+0.5R</sl-option><sl-option value="1">+1R</sl-option><sl-option value="2">+2R</sl-option></sl-select><span class="bt-hint" x-show="!['trade','-1','-0.5','0','0.25','0.5','1','2'].includes(String(L.stop))" x-text="'(' + fmtR(L.stop) + ')'"></span></span></template>
+                  <template x-if="L.type === 'add_bar'"><span>Add <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="1" max="200" step="5" @sl-change="setF(L,'pct',$event)" :disabled="!!rev"><span slot="suffix">%</span></sl-input>
+                    at the bar <sl-input type="number" size="small" class="bt-n" :value="L.bar" min="1" max="60" step="1" @sl-change="setF(L,'bar',$event)" :disabled="!!rev"></sl-input> close
+                    <span class="k" x-text="'(' + (L.bar * 4) + ' h)'"></span>, its stop at <sl-select size="small" class="bt-s" :value="String(L.stop)" @sl-change="setStop(L,$event)" :disabled="!!rev" hoist><sl-option value="trade">the trade's stop</sl-option><sl-option value="-1">-1R (signal stop)</sl-option><sl-option value="-0.5">-0.5R</sl-option><sl-option value="0">entry</sl-option><sl-option value="0.25">+0.25R</sl-option><sl-option value="0.5">+0.5R</sl-option><sl-option value="1">+1R</sl-option><sl-option value="2">+2R</sl-option></sl-select><span class="bt-hint" x-show="!['trade','-1','-0.5','0','0.25','0.5','1','2'].includes(String(L.stop))" x-text="'(' + fmtR(L.stop) + ')'"></span>
+                    <div class="bt-sub"><sl-checkbox size="small" :checked="L.early_at !== null" @sl-change="toggleEarly(L,$event)" :disabled="!!rev">go in early at</sl-checkbox>
+                      <sl-input type="number" size="small" class="bt-n" :value="L.early_at === null ? '' : L.early_at" step="0.25" @sl-change="setF(L,'early_at',$event,true)" :disabled="!!rev || L.early_at === null"><span slot="suffix">R</span></sl-input>
+                      <sl-checkbox size="small" :checked="L.hold_avg !== null" @sl-change="toggleHold(L,$event)" :disabled="!!rev || L.early_at === null">hold it while the average R is below</sl-checkbox>
+                      <sl-input type="number" size="small" class="bt-n" :value="L.hold_avg === null ? '' : L.hold_avg" step="0.25" @sl-change="setF(L,'hold_avg',$event,true)" :disabled="!!rev || L.hold_avg === null"><span slot="suffix">R</span></sl-input></div></span></template>
+                  <template x-if="L.type === 'add_tp1'"><span>Add <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="1" max="200" step="5" @sl-change="setF(L,'pct',$event)" :disabled="!!rev"><span slot="suffix">%</span></sl-input>
+                    at TP1 (if TP1 is above <sl-input type="number" size="small" class="bt-n" :value="L.min_R" step="0.25" @sl-change="setF(L,'min_R',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input>),
+                    its stop at <sl-select size="small" class="bt-s" :value="String(L.stop)" @sl-change="setStop(L,$event)" :disabled="!!rev" hoist><sl-option value="trade">the trade's stop</sl-option><sl-option value="-1">-1R (signal stop)</sl-option><sl-option value="-0.5">-0.5R</sl-option><sl-option value="0">entry</sl-option><sl-option value="0.25">+0.25R</sl-option><sl-option value="0.5">+0.5R</sl-option><sl-option value="1">+1R</sl-option><sl-option value="2">+2R</sl-option></sl-select><span class="bt-hint" x-show="!['trade','-1','-0.5','0','0.25','0.5','1','2'].includes(String(L.stop))" x-text="'(' + fmtR(L.stop) + ')'"></span></span></template>
+                  <template x-if="L.type === 'bank'"><span>Bank <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="0" max="100" step="5" @sl-change="setF(L,'pct',$event)" :disabled="!!rev"><span slot="suffix">%</span></sl-input>
+                    at <sl-input type="number" size="small" class="bt-n" :value="L.at" step="0.25" @sl-change="setF(L,'at',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input>
+                    <sl-checkbox size="small" :checked="L.tp1" @sl-change="setB(L,'tp1',$event)" :disabled="!!rev">or TP1 if nearer</sl-checkbox></span></template>
+                  <template x-if="L.type === 'move'"><span>Move the stop to <sl-input type="number" size="small" class="bt-n" :value="L.to" step="0.25" min="-1" @sl-change="setF(L,'to',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input><span class="bt-hint" x-show="L.to === 0">(entry)</span>
+                    when <sl-input type="number" size="small" class="bt-n" :value="L.when" step="0.25" @sl-change="setF(L,'when',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input> is reached
+                    <sl-checkbox size="small" :checked="L.tp1" @sl-change="setB(L,'tp1',$event)" :disabled="!!rev">or TP1 if nearer</sl-checkbox>
+                    · applies to <sl-select size="small" class="bt-s" :value="L.legs" @sl-change="setS(L,'legs',$event)" :disabled="!!rev" hoist><sl-option value="all">all legs</sl-option><sl-option value="original">the first entry</sl-option><sl-option value="adds">the adds</sl-option></sl-select></span></template>
+                  <template x-if="L.type === 'cut_avg'"><span>Close at <sl-input type="number" size="small" class="bt-n" :value="L.at_h" step="0.5" min="0.25" @sl-change="setF(L,'at_h',$event)" :disabled="!!rev"><span slot="suffix">h</span></sl-input>
+                    if the average R is below <sl-input type="number" size="small" class="bt-n" :value="L.below" step="0.05" @sl-change="setF(L,'below',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input></span></template>
+                  <template x-if="L.type === 'cut_unless'"><span>Close at <sl-input type="number" size="small" class="bt-n" :value="L.at_h" step="1" min="0.25" @sl-change="setF(L,'at_h',$event)" :disabled="!!rev"><span slot="suffix">h</span></sl-input>
+                    unless <sl-input type="number" size="small" class="bt-n" :value="L.reach" step="0.25" @sl-change="setF(L,'reach',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input> was reached</span></template>
+                </div>
+                <sl-icon-button name="x-lg" label="Remove" class="bt-x" @click="remove(idx)" x-show="!rev"></sl-icon-button>
+              </div>
+            </template>
+            <div class="k bt-empty" x-show="!plan.levers.length">No levers - the raw signal: in at the signal, out at TP2 or the stop.</div>
+          </div>
+
+          <!-- target (always last) -->
+          <div class="bt-lever fixed">
+            <span class="bt-lt tgt">Target</span>
+            <div class="bt-sent">Exit at TP2 <sl-switch size="small" :checked="plan.tp2" @sl-change="setTp2($event)" :disabled="!!rev"></sl-switch>
+              <span class="k" x-text="plan.tp2 ? 'on' : 'off - runs until a stop, a cut or the 40-day frame end'"></span></div>
+          </div>
+
+          <!-- palette -->
+          <div class="bt-palette" x-show="!rev">
+            <div class="bt-palhead k">Add a lever</div>
+            <div class="bt-palgrid">
+              <template x-for="grp in palette" :key="grp.name">
+                <div class="bt-palgrp"><div class="bt-palname" x-text="grp.name"></div>
+                  <template x-for="it in grp.items" :key="it.type + it.label"><button class="bt-palbtn" :class="kindOf(it.type)" @click="add(it)" :title="it.help"><sl-icon name="plus-lg"></sl-icon><span x-text="it.label"></span></button></template>
+                </div>
+              </template>
+            </div>
+            <sl-dropdown class="bt-palmenu" hoist><sl-button slot="trigger" size="small" caret><sl-icon slot="prefix" name="plus-lg"></sl-icon>Add lever</sl-button>
+              <sl-menu @sl-select="addByKey($event.detail.item.value)"><template x-for="grp in palette"><div><sl-menu-label x-text="grp.name"></sl-menu-label>
+                <template x-for="it in grp.items"><sl-menu-item :value="it.type + '|' + it.label" x-text="it.label"></sl-menu-item></template></div></template></sl-menu></sl-dropdown>
+          </div>
+
+          <!-- size meter -->
+          <div class="bt-meter">
+            <div class="bt-row bt-meterrow"><span class="k">Size if every add fires</span><b :class="v.over && !plan.trim ? 'dn' : (v.over ? 'warn' : '')" x-text="v.worst + '% of 200%'"></b>
+              <sl-switch size="small" :checked="plan.trim" @sl-change="setTrim($event)" :disabled="!!rev">trim adds to fit the cap</sl-switch></div>
+            <div class="bt-bar"><div class="bt-barfill" :class="v.over ? (plan.trim ? 'warn' : 'dn') : ''" :style="'width:' + Math.min(100, v.worst / 2) + '%'"></div><div class="bt-barcap"></div></div>
+            <template x-for="m in v.msgs"><div class="bt-msg" :class="m.level" x-text="m.text"></div></template>
+          </div>
+
+          <!-- decide: Practice = one step -->
+          <div class="bt-decide" x-show="!rev && !isTest()">
+            <sl-button size="large" @click="decide('skip')" :loading="busy">Skip</sl-button>
+            <sl-button size="large" variant="primary" @click="decide('take')" :disabled="!v.ok" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon>Take</sl-button>
+          </div>
+          <!-- decide: Test = first call (locked), then the advisor, then the final -->
+          <template x-if="isTest() && !C.committed">
+            <div><div class="k bt-small">Step 1 of 2 - your first call. It is locked once sent; then the advisor's view opens.</div>
+              <div class="bt-decide">
+                <sl-button size="large" @click="commitFirst('skip')" :loading="busy">First call: Skip</sl-button>
+                <sl-button size="large" variant="primary" @click="commitFirst('take')" :disabled="!v.ok" :loading="busy"><sl-icon slot="prefix" name="shield-check"></sl-icon>First call: Take</sl-button>
+              </div></div>
+          </template>
+          <template x-if="isTest() && C.committed">
+            <div class="bt-step2">
+              <div class="bt-commit"><sl-icon name="shield-check"></sl-icon> Your first call: <b x-text="C.committed.decision.toUpperCase()"></b> <span class="k">(locked)</span></div>
+              <div class="bt-advbox">
+                <template x-if="advWorking()"><div class="bt-advwait"><sl-spinner></sl-spinner> <span>The advisor is still working on this card…</span>
+                  <span class="k" x-show="!proceedNoAdv">Wait for it to appear here, or choose to give your final call without it.</span>
+                  <sl-button size="small" variant="text" x-show="!proceedNoAdv" @click="proceedNoAdv = true">Proceed without it</sl-button>
+                  <span class="k" x-show="proceedNoAdv">Final call unlocked - the advisor's view will still appear here if it arrives first.</span></div></template>
+                <template x-if="advState() === 'failed' || advState() === 'none'"><div class="k">The advisor has no view on this card<span x-text="C.adv && C.adv.error ? ' (' + C.adv.error + ')' : ''"></span>.</div></template>
+                <template x-if="advState() === 'done'"><div>
+                  <div><sl-icon name="stars"></sl-icon> <b>Advisor:</b> <span class="bt-tag" :class="(C.adv||{}).verdict === 'TAKE' ? 'up' : ((C.adv||{}).verdict === 'SKIP' ? 'dn' : 'dim')" x-text="(C.adv||{}).verdict || 'no verdict'"></span>
+                    <span class="k" x-show="(C.adv||{}).confidence !== null && (C.adv||{}).confidence !== undefined" x-text="'confidence ' + (C.adv||{}).confidence"></span></div>
+                  <div x-show="(C.adv||{}).why" x-text="(C.adv||{}).why"></div>
+                  <div class="k bt-small" x-show="C.advisor" x-text="C.advisor ? ('Its plan is in the preset list as “Advisor recommended” (' + C.advisor.note + ', nearest preset: ' + labelOf(C.advisor.nearest_preset) + ')') : ''"></div>
+                  <div class="k bt-small" x-show="!C.advisor">Its lever plan was not usable (rejected) - its verdict still counts and is graded as if it had used Minimal.</div></div></template>
+                <div class="bt-thread"><template x-for="t in (C.adv && C.adv.thread) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + t.q"></div>
+                  <div class="bt-a" x-text="'Advisor: ' + t.a"></div><div class="k bt-small" x-show="t.new_version" x-text="typeof t.new_version === 'number' ? ('new plan v' + t.new_version + ' - in the preset list') : t.new_version"></div></div></template>
+                  <template x-for="q in (C.adv && C.adv.pending) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + q"></div><div class="k"><sl-spinner></sl-spinner> the advisor is answering…</div></div></template></div>
+                <div class="bt-ask" x-show="advState() === 'done'"><sl-input size="small" placeholder="Ask the advisor about this card…" :value="askText" @sl-input="askText = $event.target.value" @keydown.enter="askAdvisor()"></sl-input>
+                  <sl-button size="small" @click="askAdvisor()">Ask</sl-button></div>
+              </div>
+              <div class="k bt-small">Step 2 of 2 - your final call (you can load the advisor's plan from the preset list; Undo goes back).</div>
+              <div class="bt-decide">
+                <sl-button size="large" @click="decide('skip')" :disabled="finalLocked()" :loading="busy">Final: Skip</sl-button>
+                <sl-button size="large" variant="primary" @click="decide('take')" :disabled="!v.ok || finalLocked()" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon>Final: Take</sl-button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- reveal -->
+        <template x-if="rev">
+          <div class="card bt-reveal">
+            <div class="bt-big" :class="rev?.decision === 'take' ? cls(rev?.R_choice) : ''">
+              <span x-text="rev?.decision === 'take' ? ('Taken · ' + fmt(rev?.R_choice)) : 'Skipped'"></span>
+              <span class="k bt-small" x-show="rev?.decision === 'skip' && rev?.R_plan !== null" x-text="' - your plan would have made ' + fmt(rev?.R_plan)"></span>
+            </div>
+            <div class="k" x-show="rev?.kind" x-text="'Your plan: ' + rev?.kind + (rev?.exit_h !== null ? ' after ' + fmtH(rev?.exit_h) : '') + (rev?.adds_fired ? ' · adds fired: ' + rev?.adds_fired : '')"></div>
+            <table class="bt-tbl bt-cmp">
+              <tr class="bt-me"><td>Your plan</td><td :class="cls(rev?.R_plan)" x-text="rev?.R_plan === null ? '-' : fmt(rev?.R_plan)"></td></tr>
+              <tr><td><b>Raw signal</b></td><td :class="cls(rev?.R_raw)" x-text="fmt(rev?.R_raw)"></td></tr>
+              <tr><td x-text="rev?.default_label"></td><td :class="cls(rev?.R_default)" x-text="fmt(rev?.R_default)"></td></tr>
+              <template x-if="rev && rev.preload_label && rev.preload_label !== 'Minimal'"><tr><td x-text="rev?.preload_label"></td><td :class="cls(rev?.R_preload)" x-text="fmt(rev?.R_preload)"></td></tr></template>
+              <template x-for="p in rev?.presets" :key="p.key"><tr><td x-text="p.label"></td><td :class="cls(p.R)" x-text="fmt(p.R)"></td></tr></template>
+              <template x-if="rev && rev.advisor"><tr><td>Advisor · first (blind) plan</td><td :class="cls(rev?.advisor?.R_adv_v1)" x-text="rev?.advisor?.R_adv_v1 === '' ? '-' : fmt(rev?.advisor?.R_adv_v1)"></td></tr></template>
+              <template x-if="rev && rev.advisor"><tr><td>Advisor · latest plan</td><td :class="cls(rev?.advisor?.R_adv_latest)" x-text="rev?.advisor?.R_adv_latest === '' ? '-' : fmt(rev?.advisor?.R_adv_latest)"></td></tr></template>
+            </table>
+            <div class="bt-row bt-flags"><span class="bt-tag" :class="rev?.banked_1R ? 'up' : 'dim'" x-text="'+1R reached: ' + (rev?.banked_1R ? 'yes' : 'no')"></span>
+              <span class="bt-tag" :class="rev?.hit_tp2 ? 'up' : 'dim'" x-text="'raw TP2: ' + (rev?.hit_tp2 ? 'yes' : 'no')"></span></div>
+            <div class="bt-decide"><sl-button variant="primary" size="large" @click="next()"><span x-text="rev?.next ? 'Next card' : 'Finish'"></span><sl-icon slot="suffix" name="chevron-right"></sl-icon></sl-button></div>
+          </div>
+        </template>
+
+        <template x-if="dev"><sl-details summary="Dev: inject an advisor recommendation" class="bt-dev">
+          <textarea x-model="devText" rows="6" class="bt-ta"></textarea>
+          <div class="bt-row"><sl-checkbox :checked="devBlind" @sl-change="devBlind = $event.target.checked">blind v1</sl-checkbox>
+            <sl-button size="small" @click="devInject()">Inject</sl-button></div>
+        </sl-details></template>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ============================================================ end of session -->
+<template x-if="sess && done">
+  <div class="card bt-done">
+    <h2 x-text="C.mode === 'test' ? 'Test session finished - the results' : 'Session finished'"></h2>
+    <template x-if="summary && summary.grading">
+      <div class="bt-scroll"><table class="bt-tbl bt-grade">
+        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
+        <tbody><template x-for="row in gradeRows()"><tr>
+          <td><b x-text="row[0]"></b></td>
+          <td x-text="row[1].n ? (row[1].taken + ' of ' + row[1].n) : 'n/a'"></td>
+          <td :class="cls(row[1].total_R)" x-text="row[1].n ? fmt(row[1].total_R) : '-'"></td>
+          <td :class="cls(row[1].vs_minimal)" x-text="row[1].n ? fmt(row[1].vs_minimal) : '-'"></td>
+          <td :class="cls(row[1].vs_raw)" x-text="row[1].n ? fmt(row[1].vs_raw) : '-'"></td>
+          <td :class="row[1].n ? cls(row[1].at_1pip.vs_minimal) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_minimal) : '-'"></td>
+          <td x-text="row[1].n ? (pct(row[1].selection.take_rate_reached_1R) + ' / ' + pct(row[1].selection.take_rate_went_to_stop) + (row[1].selection.spread_points !== null ? ' (' + (row[1].selection.spread_points > 0 ? '+' : '') + row[1].selection.spread_points + ' pts' + (row[1].selection.z !== null ? ', z ' + row[1].selection.z : '') + ')' : '')) : '-'"></td>
+          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_minimal) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
+        </tr></template></tbody></table>
+        <div class="k bt-small">Model cost. The advisor's grade leaves out cards where it gave no verdict; a verdict whose plan was rejected is graded with Minimal. Bars (coach): selection spread of at least 15 points
+          at z/t >= 2 and total R at or above Minimal; presets/plans +0.05R vs Minimal on taken trades at t >= 2.</div></div>
+    </template>
+    <div class="bt-row bt-tally">
+      <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
+      <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
+      <span class="bt-pill">vs raw <b :class="cls(C.tally.R_choice - C.tally.R_raw)" x-text="fmt(C.tally.R_choice - C.tally.R_raw)"></b></span>
+      <span class="bt-pill">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
+      <span class="bt-pill" x-text="C.tally.taken + ' taken · ' + C.tally.skipped + ' skipped'"></span>
+      <span class="bt-pill" title="after a +1 pip round trip per trade">at +1 pip: you <b :class="cls(C.tally.R_choice_1pip)" x-text="fmt(C.tally.R_choice_1pip)"></b> · raw <b :class="cls(C.tally.R_raw_1pip)" x-text="fmt(C.tally.R_raw_1pip)"></b></span>
+    </div>
+    <div class="bt-row"><sl-button variant="primary" :href="'/bt/report/' + sess.sid + '.csv'"><sl-icon slot="prefix" name="check2"></sl-icon>Download the report (CSV)</sl-button>
+      <sl-button @click="leave()">Back</sl-button></div>
+  </div>
+</template>

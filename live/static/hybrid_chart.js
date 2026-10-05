@@ -1,11 +1,16 @@
 // hybrid_chart.js - interactive signal/position chart on Lightweight Charts (self-hosted).
 // mount(el, data): data = {bars_h4, bars_d1 [[t,o,h,l,c,v]], levels{entry,sl,tp1,tp2}, overlay{zone,zone2,leg,aux,swings_hi,swings_lo},
 //                        signal_t (epoch), digits, marks:[{t,label}], title}
+// BLIND mode (backtest tab, coach 2026-10-04): data.blind = true, bars carry synthetic contiguous times and prices in R from the entry,
+// ema_h4 / ema_d1 = precomputed {20,50,200} arrays aligned with the bars (right from the first bar), sig_h4 / sig_d1 = the index of the
+// signal bar. Axis labels are relative to the signal ("-2d", "signal"); prices print as R; nothing is fetched; zoom/pan only over the
+// bars given (the server sends nothing after the signal and nothing older than ~2 months).
 (function () {
   function ema(vals, n) { var k = 2 / (n + 1), out = [], p = vals[0]; for (var i = 0; i < vals.length; i++) { p = i ? p + k * (vals[i] - p) : vals[0]; out.push(p); } return out; }
   function iso(s) { return s ? Math.floor(new Date(s).getTime() / 1000) : null; }
   var EMA = { 20: '#ffd700', 50: '#00bfff', 200: '#ee82ee' };
   var FIB_LV = [0.0, 0.5, 0.618, 0.705, 0.786, 0.886, 1.0], FIB_LT = ['0.0', '50.0', '61.8', '70.5 OTE', '78.6', '88.6 SL', '100.0'];
+  var FIB_LT_BLIND = ['0.0', '50.0', '61.8', '70.5 OTE', '78.6', '88.6', '100.0'];   // review 2 #13c: on a blind card "88.6 SL" read as a second stop
   function imbState(r, iformed, lo, hi, dir) { var inv = false; for (var j = iformed + 1; j < r.length; j++) { var b = r[j], enters = b[2] >= lo && b[3] <= hi;
       if (!inv) { var through = dir > 0 ? b[4] < lo : b[4] > hi; if (through) { inv = true; continue; } if (enters) return 2; } else if (enters) return 2; } return inv ? 1 : 0; }
   function imbalances(bars) { var r = bars.length > 1 ? bars.slice(0, -1) : bars, cnt = r.length, z = [], out = []; if (cnt < 25) return out;
@@ -38,7 +43,7 @@
         }).catch(function () { build((tf === 'h4' ? d.bars_h4 : d.bars_d1) || [], null); });
       }
       var cs, emaS = {}, closes = [], barsAll = [];
-      function setStatus(tick) { if (!status) return; status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live · axis = broker clock (UTC+3 summer / +2 winter)') : (d.live ? 'feed unavailable' : 'bars as of the signal · axis = broker clock'); }
+      function setStatus(tick) { if (!status) return; if (d.blind) { status.textContent = 'blind card · price = R from the entry' + (d.rsign === -1 ? ' (SELL card: R = profit, price up = loss)' : '') + ' · time = before the signal (weekends removed) · scroll/drag to zoom and pan'; return; } status.textContent = tick ? ('bid ' + tick.bid.toFixed(d.digits || 5) + ' ask ' + tick.ask.toFixed(d.digits || 5) + ' · live · axis = broker clock (UTC+3 summer / +2 winter)') : (d.live ? 'feed unavailable' : 'bars as of the signal · axis = broker clock'); }
       function update(last, tick) {
         // series.update() accepts only the current bar or a newer one: push the forming bar and any new bar, never older ones
         var lastT = barsAll.length ? barsAll[barsAll.length - 1][0] : 0;
@@ -54,6 +59,15 @@
       function showErr(where, e) { if (status) { status.textContent = 'chart error in ' + where + ': ' + (e && e.message || e); status.style.color = '#f85149'; } console.log('chart error', where, e); }
       function guard(where, fn) { try { fn(); } catch (e) { showErr(where, e); } }
       function build(bars, tick) { try { build0(bars, tick); } catch (e) { showErr('build', e); } }
+      function relLabel(t, long) {   // blind: synthetic time -> position relative to the signal bar
+        var step = tf === 'h4' ? 14400 : 86400, b0 = barsAll.length ? barsAll[0][0] : 0, sig = d['sig_' + tf] != null ? d['sig_' + tf] : barsAll.length - 1;
+        var rel = Math.round((t - b0) / step) - sig;
+        if (rel === 0) return tf === 'h4' ? 'signal' : 'signal day';
+        if (rel > 0) return '+' + rel;
+        if (tf === 'd1') return '-' + (-rel) + 'd';
+        var hrs = -rel * 4; if (hrs < 24) return '-' + hrs + 'h';
+        var dd = hrs / 24; return '-' + (dd % 1 ? dd.toFixed(1) : dd) + 'd' + (long ? ' (' + (-rel) + ' bars)' : '');
+      }
       function build0(bars, tick) {
         if (chart) { chart.remove(); }
         barsAll = bars.slice();
@@ -61,48 +75,64 @@
         chart = LightweightCharts.createChart(box, { height: h, layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
           grid: { vertLines: { color: '#1e242e' }, horzLines: { color: '#1e242e' } }, crosshair: { mode: 0 },
           rightPriceScale: { borderColor: '#30363d', scaleMargins: { top: 0.08, bottom: 0.08 } },
-          timeScale: { borderColor: '#30363d', timeVisible: tf === 'h4', secondsVisible: false, rightOffset: 6 },
-          localization: { priceFormatter: function (p) { return p.toFixed(d.digits || 5); } }, handleScale: true, handleScroll: true });
+          timeScale: d.blind ? { borderColor: '#30363d', timeVisible: true, secondsVisible: false, rightOffset: 6, fixRightEdge: true, fixLeftEdge: true,
+                                  tickMarkFormatter: function (t) { return relLabel(t, false); } }
+                             : { borderColor: '#30363d', timeVisible: tf === 'h4', secondsVisible: false, rightOffset: 6 },
+          localization: d.blind ? { priceFormatter: function (p) { var v = (d.rsign === -1 ? -p : p); return (v >= 0 ? '+' : '') + v.toFixed(2) + 'R'; },   // SELL cards: labels in profit R (review #7)
+                                    timeFormatter: function (t) { return relLabel(t, true); } }
+                                : { priceFormatter: function (p) { return p.toFixed(d.digits || 5); } }, handleScale: true, handleScroll: true });
         cs = chart.addCandlestickSeries({ upColor: '#3fb950', downColor: '#f85149', borderUpColor: '#3fb950', borderDownColor: '#f85149', wickUpColor: '#3fb950', wickDownColor: '#f85149',
-          priceFormat: { type: 'price', precision: d.digits || 5, minMove: Math.pow(10, -(d.digits || 5)) } });
+          priceFormat: d.blind ? { type: 'price', precision: 2, minMove: 0.01 } : { type: 'price', precision: d.digits || 5, minMove: Math.pow(10, -(d.digits || 5)) },
+          autoscaleInfoProvider: d.blind ? function (orig) {   // blind: keep entry / SL / TP1 / TP2 in view, as the live image does
+            var r = orig(), lv = d.levels || {}, ps = ['entry', 'sl', 'tp1', 'tp2'].map(function (k) { return lv[k]; }).filter(function (v) { return v !== null && v !== undefined && isFinite(v); });
+            if (r && r.priceRange && ps.length) { r.priceRange.minValue = Math.min.apply(null, [r.priceRange.minValue].concat(ps)); r.priceRange.maxValue = Math.max.apply(null, [r.priceRange.maxValue].concat(ps)); }
+            return r; } : undefined });
         cs.setData(bars.map(function (b) { return { time: b[0], open: b[1], high: b[2], low: b[3], close: b[4] }; }));
         closes = bars.map(function (b) { return b[4]; });
+        var pre = d.blind ? d['ema_' + tf] : null;     // blind: EMAs computed on the full history server-side, right from the first bar
         [20, 50, 200].forEach(function (n) {
-          var e = ema(closes, n), ls = chart.addLineSeries({ color: EMA[n], lineWidth: n === 200 ? 2 : 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-          ls.setData(bars.map(function (b, i) { return { time: b[0], value: e[i] }; }).slice(n)); emaS[n] = ls;
+          var e = pre && pre[String(n)] ? pre[String(n)] : ema(closes, n), ls = chart.addLineSeries({ color: EMA[n], lineWidth: n === 200 ? 2 : 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+          var pts = bars.map(function (b, i) { return { time: b[0], value: e[i] }; }); ls.setData(pre ? pts : pts.slice(n)); emaS[n] = ls;
         });
         setStatus(tick);
         var lv = d.levels || {};
         [['entry', '#3fb950', 'entry', 2, 0], ['sl', '#f85149', 'SL', 2, 2], ['tp1', '#58a6ff', 'TP1', 1, 2], ['tp2', '#58a6ff', 'TP2', 1, 3]].forEach(function (L) {
-          if (lv[L[0]] > 0) cs.createPriceLine({ price: lv[L[0]], color: L[1], lineWidth: L[3], lineStyle: L[4], axisLabelVisible: true, title: L[2] });
+          if (d.blind ? (lv[L[0]] !== null && lv[L[0]] !== undefined && isFinite(lv[L[0]])) : lv[L[0]] > 0) cs.createPriceLine({ price: lv[L[0]], color: L[1], lineWidth: L[3], lineStyle: L[4], axisLabelVisible: true, title: L[2] });
         });
         var ov = d.overlay || {};
+        // blind cards (v3 overlays): prices are R from the entry (0 or negative is valid) and times are synthetic epoch numbers
+        function has(p) { return d.blind ? (p !== null && p !== undefined && isFinite(p)) : p > 0; }
+        function tv(x) { return typeof x === 'number' ? x : iso(x); }
         function band(t0, t1, hi, lo, fill, line) {   // filled band between lo..hi over [t0,t1] (Lightweight Charts has no rectangles)
           var z = chart.addBaselineSeries({ baseValue: { type: 'price', price: lo }, topFillColor1: fill, topFillColor2: fill, topLineColor: line, bottomLineColor: line, bottomFillColor1: 'rgba(0,0,0,0)', bottomFillColor2: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
           var pts = bars.filter(function (b) { return b[0] >= t0 && b[0] <= t1; }).map(function (b) { return { time: b[0], value: hi }; });
-          if (pts.length === 1) pts.push({ time: pts[0].time + (tf === 'h4' ? 14400 : 86400), value: hi });
+          if (pts.length === 1) {       // a one-bar zone: live pads it forward; a blind card ends at the signal bar, so pad BACK (review 2 #13b)
+            if (d.blind) { var k0 = bars.findIndex(function (b) { return b[0] === pts[0].time; }); if (k0 > 0) pts.unshift({ time: bars[k0 - 1][0], value: hi }); }
+            else pts.push({ time: pts[0].time + (tf === 'h4' ? 14400 : 86400), value: hi });
+          }
           if (pts.length) z.setData(pts);
         }
         if (tf === 'h4' && bars.length) guard('zones', function () {
-          var zf = iso(ov.zone && ov.zone.from) || bars[0][0], zt = iso(ov.zone && ov.zone.to) || bars[bars.length - 1][0];
-          if (ov.zone && ov.zone.hi > 0) band(zf, zt, ov.zone.hi, ov.zone.lo, 'rgba(112,128,144,0.35)', 'rgba(112,128,144,0.8)');
-          if (ov.zone2 && ov.zone2.hi > 0) band(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
+          var zf = tv(ov.zone && ov.zone.from) || bars[0][0], zt = tv(ov.zone && ov.zone.to) || bars[bars.length - 1][0];
+          if (ov.zone && has(ov.zone.hi) && has(ov.zone.lo) && (!d.blind || ov.zone.hi !== ov.zone.lo)) band(zf, zt, ov.zone.hi, ov.zone.lo, 'rgba(112,128,144,0.35)', 'rgba(112,128,144,0.8)');
+          if (ov.zone2 && has(ov.zone2.hi) && has(ov.zone2.lo) && ov.zone2.hi !== ov.zone2.lo) band(zf, zt, ov.zone2.hi, ov.zone2.lo, 'rgba(47,79,79,0.5)', 'rgba(47,79,79,0.9)');
           imbalances(bars).forEach(function (z) { band(z.t0, z.t1, z.hi, z.lo, z.state === 0 ? 'rgba(147,112,219,0.18)' : 'rgba(147,112,219,0.08)', 'rgba(147,112,219,0.5)'); });
-          if (d.strategy === 'DeepFib' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
-            cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: true, axisLabelColor: gp ? '#7a6400' : '#3a3f47', axisLabelTextColor: '#e6edf3', title: FIB_LT[i] }); });
+          if (d.strategy === 'DeepFib' && ov.leg && has(ov.leg.p0) && has(ov.leg.p1)) FIB_LV.forEach(function (lv, i) { var gp = lv >= 0.618 && lv <= 0.786;
+            cs.createPriceLine({ price: ov.leg.p1 + lv * (ov.leg.p0 - ov.leg.p1), color: gp ? '#ffd700' : '#808080', lineWidth: 1, lineStyle: gp ? 0 : 1, axisLabelVisible: true, axisLabelColor: gp ? '#7a6400' : '#3a3f47', axisLabelTextColor: '#e6edf3', title: (d.blind ? FIB_LT_BLIND : FIB_LT)[i] }); });
         });
-        if (tf === 'h4' && ov.leg && ov.leg.p0 > 0 && ov.leg.p1 > 0 && iso(ov.leg.t0) && iso(ov.leg.t1)) {
+        if (tf === 'h4' && ov.leg && has(ov.leg.p0) && has(ov.leg.p1) && tv(ov.leg.t0) && tv(ov.leg.t1)) {
           var lg = chart.addLineSeries({ color: '#ee82ee', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-          var t0 = iso(ov.leg.t0), t1 = iso(ov.leg.t1); if (t0 < t1) lg.setData([{ time: t0, value: ov.leg.p0 }, { time: t1, value: ov.leg.p1 }]);
+          var t0 = tv(ov.leg.t0), t1 = tv(ov.leg.t1); if (t0 < t1) lg.setData([{ time: t0, value: ov.leg.p0 }, { time: t1, value: ov.leg.p1 }]);
         }
-        (ov.aux || []).forEach(function (a) { if (a.price > 0 && tf === 'h4') cs.createPriceLine({ price: a.price, color: '#c0c0c0', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, axisLabelColor: '#3a3f47', axisLabelTextColor: '#e6edf3', title: a.label || '' }); });
+        (ov.aux || []).forEach(function (a) { if (has(a.price) && tf === 'h4') cs.createPriceLine({ price: a.price, color: '#c0c0c0', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, axisLabelColor: '#3a3f47', axisLabelTextColor: '#e6edf3', title: a.label || '' }); });
         var marks = [];
         if (tf === 'h4') {
           swings(bars).forEach(function (s) { marks.push({ time: s.t, position: s.kind === 'hi' ? 'aboveBar' : 'belowBar', color: '#8b949e', shape: s.kind === 'hi' ? 'arrowDown' : 'arrowUp', size: 0.5 }); });
-          (ov.swings_hi || []).forEach(function (s) { var t = iso(s.t); if (t) marks.push({ time: t, position: 'aboveBar', color: '#ffc878', shape: 'arrowDown', size: 0.9, text: 'swing hi' }); });
-          (ov.swings_lo || []).forEach(function (s) { var t = iso(s.t); if (t) marks.push({ time: t, position: 'belowBar', color: '#ffc878', shape: 'arrowUp', size: 0.9, text: 'swing lo' }); });
+          (ov.swings_hi || []).forEach(function (s) { var t = tv(s.t); if (t) marks.push({ time: t, position: 'aboveBar', color: '#ffc878', shape: 'arrowDown', size: 0.9, text: 'swing hi' }); });
+          (ov.swings_lo || []).forEach(function (s) { var t = tv(s.t); if (t) marks.push({ time: t, position: 'belowBar', color: '#ffc878', shape: 'arrowUp', size: 0.9, text: 'swing lo' }); });
         }
-        if (d.signal_t) marks.push({ time: tf === 'h4' ? d.signal_t : d.signal_t - (d.signal_t % 86400), position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 });
+        if (d.blind && bars.length) { var si = d['sig_' + tf] != null ? d['sig_' + tf] : bars.length - 1; marks.push({ time: bars[si][0], position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 }); }
+        else if (d.signal_t) marks.push({ time: tf === 'h4' ? d.signal_t : d.signal_t - (d.signal_t % 86400), position: 'belowBar', color: '#ffffff', shape: 'circle', text: 'signal', size: 1 });
         (d.marks || []).forEach(function (m) { marks.push({ time: m.t, position: 'aboveBar', color: '#ff8c00', shape: 'square', text: m.label, size: 1 }); });
         var set = {}; marks.forEach(function (m) { set[m.time] = m; }); marks = Object.values(set).sort(function (a, b) { return a.time - b.time; });
         guard('markers', function () { cs.setMarkers(marks); });
