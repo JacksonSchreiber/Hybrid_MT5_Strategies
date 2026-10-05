@@ -380,6 +380,33 @@ def generate(cfg: dict, log, requested_by: str = "web", consult=None) -> dict:
     return res
 
 
+# trader 2026-10-05: cleared recommendations (per review, per position key) - <root>/advisor/positions/cleared.json
+def _cleared_path(cfg) -> str: return os.path.join(review_dir(cfg), "cleared.json")
+
+def cleared(cfg: dict, ts: str) -> set:
+    return set((C.load_json(_cleared_path(cfg), {}) or {}).get(ts, []))
+
+def set_cleared(cfg: dict, ts: str, key: str | None, on: bool = True) -> None:
+    """clear (on) or restore one recommendation; key None with on=False restores every cleared one of that review."""
+    d = C.load_json(_cleared_path(cfg), {}) or {}
+    cur = set(d.get(ts, []))
+    if key is None and not on: cur = set()
+    elif on: cur.add(key)
+    else: cur.discard(key)
+    d[ts] = sorted(cur)
+    keep = set(list_reviews(cfg)[:10])                       # prune entries of reviews no longer kept
+    C.atomic_write_json(_cleared_path(cfg), {k: v for k, v in d.items() if k in keep and v})
+
+def visible_recs(cfg: dict, rv: dict, open_keys: set) -> tuple[list[dict], int, int]:
+    """the review's recommendations the trader still needs to see: positions still open and not cleared.
+    -> (recs, n_closed_hidden, n_cleared_hidden)."""
+    cl = cleared(cfg, rv.get("ts", "")); out = []; nc = ncl = 0
+    for r in rv.get("recs") or []:
+        if r.get("key") not in open_keys: nc += 1; continue
+        if r.get("key") in cl: ncl += 1; continue
+        out.append(r)
+    return out, nc, ncl
+
 def counts(res: dict) -> dict:
     recs = res.get("recs") or []
     ch = [r for r in recs if r.get("action") != "hold" and not r.get("missing")]

@@ -794,6 +794,7 @@ PR_CSS = """<style>
 .pr-item .why{margin-top:4px;font-size:14px;line-height:1.45;color:var(--txt)}.pr-sum p,.pr-sum li{font-size:14px;line-height:1.5}
 .pr-top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
 @media (max-width:600px){.pr-top .big{font-size:18px}}
+.pr-top .pr-clear{margin-left:auto} .pr-clear .btn{padding:2px 8px;font-size:12px;opacity:.8} .pr-clear .btn:hover{opacity:1}
 </style>"""
 
 def _pr_time(ts: str) -> str:
@@ -824,22 +825,29 @@ def _pr_button(running: bool, npos: int, back: str = "/") -> str:
             f'<button class="btn" {"disabled" if dis else ""} title="One advisor read of every open position: events, time in trade, giving back R, stops, correlation">'
             f'{"Reviewing…" if running else "Review my open positions"}</button></form>')
 
+def _pr_clear(ts: str, key: str, back: str) -> str:
+    """trader 2026-10-05: a small Clear button per recommendation (reviewed it - take it off the list)."""
+    return (f'<form method="post" action="/review_clear" class="inline pr-clear"><input type="hidden" name="r" value="{E(ts)}"><input type="hidden" name="key" value="{E(key)}">'
+            f'<input type="hidden" name="back" value="{E(back)}"><button class="btn" title="Reviewed - take it off the list">✕ Clear</button></form>')
+
 def positions_review_card(npos: int) -> str:
     """Home: the on-demand review button, its status, and the latest review's 'act now / today' items."""
     from live import positions_review as PR
     st = PR.status(CFG); rv = PR.load_review(CFG); running = st.get("state") in ("queued", "running")
     out = [PR_CSS, '<div class="card"><div class="row"><div style="min-width:0;flex:1"><div class="k">Advisor · open positions</div>'
            f'<div style="font-size:14px;margin-top:2px">{_pr_status_line(st, rv, npos)}</div></div>{_pr_button(running, npos)}</div>']
-    if rv and rv.get("ok") and rv.get("recs"):
-        cnt = PR.counts(rv); hold = sum(1 for r in rv["recs"] if r.get("action") == "hold")
+    open_keys = {f"{p.get('symbol')}-{p.get('posid')}" for p in C.list_positions(CFG)}
+    vis = PR.visible_recs(CFG, rv, open_keys)[0] if rv and rv.get("ok") else []
+    if rv and rv.get("ok") and vis:
+        cnt = PR.counts({"recs": vis}); hold = sum(1 for r in vis if r.get("action") == "hold")
         out.append(f'<div class="k" style="margin-top:8px"><b class="{"bad" if cnt["now"] else "k"}">{cnt["now"]} act now</b> · <b class="{"warn" if cnt["today"] else "k"}">{cnt["today"]} today</b>'
                    f' · {cnt["change"] - cnt["now"] - cnt["today"]} watch · {hold} hold — <a href="/review?r={E(rv["ts"])}">full review →</a></div>')
         snap = {x["key"]: x for x in rv.get("positions") or []}
-        top = [r for r in rv["recs"] if r.get("action") != "hold" and r.get("urgency") in ("now", "today") and not r.get("missing")]
+        top = [r for r in vis if r.get("action") != "hold" and r.get("urgency") in ("now", "today") and not r.get("missing")]
         for r in sorted(top, key=lambda r: (r["urgency"] != "now", r["key"]))[:6]:
             x = snap.get(r["key"], {})
-            out.append(f'<a href="/position/{E(r["key"])}"><div class="pr-item {E(r["urgency"])}"><div class="pr-top"><b>{E(x.get("symbol", r["key"]))} {E(str(x.get("direction", "")))}</b>{grp_pill(x.get("symbol", ""))}'
-                       f'{_pr_badge(r)}</div><div class="why">{E(r.get("reason", ""))}</div></div></a>')
+            out.append(f'<div class="pr-item {E(r["urgency"])}"><div class="pr-top"><a href="/position/{E(r["key"])}"><b>{E(x.get("symbol", r["key"]))} {E(str(x.get("direction", "")))}</b></a>{grp_pill(x.get("symbol", ""))}'
+                       f'{_pr_badge(r)}{_pr_clear(rv["ts"], r["key"], "/")}</div><div class="why">{E(r.get("reason", ""))}</div></div>')
     elif rv and not rv.get("ok"):
         out.append(f'<div class="k bad" style="margin-top:6px">last review failed: {E(str(rv.get("error") or ""))[:200]}</div>')
     out.append("</div>")
@@ -854,7 +862,8 @@ def positions_review_pills() -> dict:
         if not rv or not rv.get("ok"): return {}
         t = _dt.strptime(rv["ts"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
         if (C.now_utc() - t).total_seconds() > 12 * 3600: return {}
-        return {r["key"]: f' <span class="k">advisor:</span> {_pr_badge(r)}' for r in rv.get("recs") or [] if r.get("action") != "hold" and not r.get("missing")}
+        cl = PR.cleared(CFG, rv["ts"])
+        return {r["key"]: f' <span class="k">advisor:</span> {_pr_badge(r)}' for r in rv.get("recs") or [] if r.get("action") != "hold" and not r.get("missing") and r["key"] not in cl}
     except Exception: return {}
 
 def review_page(q: dict) -> str:
@@ -873,19 +882,26 @@ def review_page(q: dict) -> str:
     if not rv.get("ok"):
         out.append(f'<div class="card"><div class="bad">This review failed: {E(str(rv.get("error") or "?"))[:400]}</div><div class="k">{meta}</div></div>')
         return page("Positions review", "".join(out), "home", refresh=15 if running else None)
-    cnt = PR.counts(rv)
+    open_keys = {f"{p.get('symbol')}-{p.get('posid')}" for p in C.list_positions(CFG)}
+    vis, n_closed, n_cleared = PR.visible_recs(CFG, rv, open_keys)
+    cnt = PR.counts({"recs": vis})
+    hid = []
+    if n_closed: hid.append(f'{n_closed} closed position{"s" if n_closed != 1 else ""} hidden')
+    if n_cleared: hid.append(f'{n_cleared} cleared · <form method="post" action="/review_clear" class="inline"><input type="hidden" name="r" value="{E(rv["ts"])}">'
+                             f'<input type="hidden" name="restore" value="1"><input type="hidden" name="back" value="/review?r={E(rv["ts"])}"><button class="btn" style="padding:2px 8px;font-size:12px">show them again</button></form>')
     out.append(f'<div class="card pr-sum"><div class="row"><b class="{"bad" if cnt["now"] else "k"}">{cnt["now"]} act now</b><b class="{"warn" if cnt["today"] else "k"}">{cnt["today"]} today</b>'
-               f'<span class="k">{cnt["change"]} change(s) suggested of {rv.get("n_positions", 0)}</span></div>{md_html(rv.get("summary") or "")}'
+               f'<span class="k">{cnt["change"]} change(s) still to look at</span></div>' + (f'<div class="k">{" · ".join(hid)}</div>' if hid else "") + f'{md_html(rv.get("summary") or "")}'
                + (f'<p><b>Portfolio:</b> {E(rv.get("portfolio") or "")}</p>' if rv.get("portfolio") else "")
                + (f'<div class="k">notes: {E("; ".join(rv.get("warnings") or []))}</div>' if rv.get("warnings") else "") + f'<div class="k">{meta}</div></div>')
     snap = {x["key"]: x for x in rv.get("positions") or []}
     order = {"now": 0, "today": 1, "watch": 2}
-    for r in sorted(rv.get("recs") or [], key=lambda r: (r.get("action") == "hold", order.get(r.get("urgency"), 3), r["key"])):
-        x = snap.get(r["key"], {}); cur = C.position(CFG, r["key"]); u = "hold" if r.get("action") == "hold" else r.get("urgency", "watch")
-        now_txt = ("<span class='k'>closed since the review</span>" if (not cur or cur.get("_closed")) else f'<span class="k">now</span> <b class="v {"ok" if (cur.get("open_r") or 0) >= 0 else "bad"}">{C.r_fmt(cur.get("open_r"))}</b>')
+    if not vis: out.append('<div class="card k">Nothing left to look at in this review — every recommendation is cleared or its position has closed.</div>')
+    for r in sorted(vis, key=lambda r: (r.get("action") == "hold", order.get(r.get("urgency"), 3), r["key"])):
+        x = snap.get(r["key"], {}); cur = C.position(CFG, r["key"]) or {}; u = "hold" if r.get("action") == "hold" else r.get("urgency", "watch")
+        now_txt = f'<span class="k">now</span> <b class="v {"ok" if (cur.get("open_r") or 0) >= 0 else "bad"}">{C.r_fmt(cur.get("open_r"))}</b>'
         best = f' · best {x["best_r"]:+.2f}R' if x.get("best_r") is not None else ""
         out.append(f'<div class="pr-item {E(u)}"><div class="pr-top"><a href="/position/{E(r["key"])}"><b class="big">{E(x.get("symbol", r["key"]))}</b> {E(str(x.get("direction", "")))} <span class="k">{E(str(x.get("strategy", "")))}</span></a>'
-                   f'{grp_pill(x.get("symbol", ""))}{_pr_badge(r)}</div>'
+                   f'{grp_pill(x.get("symbol", ""))}{_pr_badge(r)}{_pr_clear(rv["ts"], r["key"], "/review?r=" + rv["ts"])}</div>'
                    f'<div class="k" style="margin-top:4px">at review {C.r_fmt(x.get("open_r"))}{best} · banked {C.r_fmt(x.get("banked_r"))} · {E(str(x.get("hours", "")))} · {now_txt}</div>'
                    f'<div class="why">{E(r.get("reason", ""))}</div></div>')
     if rv.get("raw"): out.append(f'<div class="card"><details><summary class="k">the advisor\'s full answer</summary><pre>{E(rv["raw"])}</pre></details></div>')
@@ -1676,6 +1692,17 @@ class H(BaseHTTPRequestHandler):
                 from live import brief_runner
                 brief_runner.request(CFG, "web"); C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|brief_requested|by=web")
                 return self._redirect("/context", "brief requested - the page refreshes itself while it generates", True)
+            if u.path == "/review_clear":                                     # trader 2026-10-05: clear (or restore) a review recommendation
+                from live import positions_review as PR
+                ts = form.get("r", ""); key = form.get("key") or None
+                back = form.get("back") or "/"
+                if not (back == "/" or back.startswith("/review")): back = "/"
+                if ts not in PR.list_reviews(CFG) or (key is not None and not re.fullmatch(r"[A-Za-z0-9._#-]{1,64}", key)):
+                    return self._redirect(back, "unknown review or position", False)
+                restore = form.get("restore") == "1"
+                PR.set_cleared(CFG, ts, None if restore else key, on=not restore)
+                C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|review_{'restore' if restore else 'clear'}|{ts}|{key or 'all'}|by=web")
+                return self._redirect(back, "restored the cleared recommendations" if restore else f"cleared {key}", True)
             if u.path == "/positions_review":                                 # trader 2026-10-04: on-demand open-positions review
                 from live import positions_review as PR
                 ok = PR.request(CFG, "web"); back = form.get("back") if form.get("back") in ("/", "/review") else "/"
