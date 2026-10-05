@@ -4,12 +4,12 @@
     "allow": [
       "Read",
       "Glob",
-      "Grep"
+      "Grep",
+      "WebSearch",
+      "WebFetch"
     ],
     "deny": [
       "Bash",
-      "WebFetch",
-      "WebSearch",
       "Task",
       "Agent",
       "NotebookEdit"

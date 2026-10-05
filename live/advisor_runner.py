@@ -28,7 +28,7 @@ from live import positions_review
 from live import verdict_fmt as VF
 
 SESSION_NS = uuid.UUID("5f0a3c1e-9b7d-4c1a-8f2e-2d3b4a5c6d7e")
-DISALLOWED = "Bash,WebFetch,WebSearch,Task,Agent,NotebookEdit"
+DISALLOWED = "Bash,Task,Agent,NotebookEdit"            # trader 2026-10-04: web allowed and encouraged for the live advisors
 
 
 # ----------------------------------------------------------------------------- bundle
@@ -290,7 +290,7 @@ def claude_env(cfg: dict) -> dict:
 def run_claude(cfg: dict, m: dict, prompt: str, *, sid: str, resume: bool, log) -> dict:
     a = cfg["advisor"]; cmd = a["claude_cmd"]; nf = notes_file(m["id"])
     others = [notes_file(x["id"]) for x in models(cfg) if x["id"] != m["id"]] + ["notes.live.md"]
-    allowed = f"Read,Glob,Grep,Write({nf}),Edit({nf})"                      # only THIS model's notes file (no concurrent writers)
+    allowed = f"Read,Glob,Grep,WebSearch,WebFetch,Write({nf}),Edit({nf})"                      # only THIS model's notes file (no concurrent writers)
     denied = DISALLOWED + "".join(f",Write({o}),Edit({o})" for o in others)
     args = [cmd, "-p", "--output-format", "json", "--model", m["model"], "--effort", m["effort"],
             "--allowedTools", allowed, "--disallowedTools", denied, "--max-turns", "40"]

@@ -7,8 +7,8 @@ position page where the existing manual buttons are (SL -> BE, SL -> TP1, Close 
 Same pattern as brief_runner: the web app drops a request file, the advisor runner's tick picks it up and runs ONE
 headless Claude Code consult in a thread (one review at a time). The consult runs in its OWN work folder next to the
 live advisor's (so it loads THIS role file, not the signal-scorecard CLAUDE.md), reads-only (Read/Glob/Grep), with the
-live advisor folder added read-only for the doctrine and library. No web access (the live advisor's permissions deny
-WebSearch/WebFetch and this does not add them): news comes only from the latest Context brief, attached when one exists.
+live advisor folder added read-only for the doctrine and library. Web allowed and encouraged (trader 2026-10-04): WebSearch /
+WebFetch for recent news on the currencies/indices in play, plus the latest Context brief, attached when one exists.
 
 Files: <root>/advisor/positions/<UTC>.json (the last KEEP reviews), status.json, reviews.log, requests/.
 Bundle: <advisor work parent>/positions/bundle/{review.md, market-brief.md, <posid>-h4.png, <posid>-d1.png}.
@@ -25,7 +25,7 @@ KEEP = 10
 ACTIONS = ("hold", "close", "raise_sl", "bank", "move_to_be", "other")
 URGENCY = ("now", "today", "watch")
 ACTION_TXT = {"hold": "HOLD", "close": "CLOSE", "raise_sl": "RAISE SL", "bank": "BANK", "move_to_be": "SL → BE", "other": "OTHER"}
-DENIED = "Bash,WebFetch,WebSearch,Write,Edit,Task,Agent,NotebookEdit"
+DENIED = "Bash,Write,Edit,Task,Agent,NotebookEdit"
 
 ROLE = """# Position reviewer (live, sighted, ADVISORY ONLY)
 
@@ -38,7 +38,8 @@ never execute anything - you can only read files. The trader decides and acts wi
   portfolio block (net currency exposure, measured correlations between the open positions, account headroom).
 - The charts it lists: `bundle/<posid>-h4.png` and `-d1.png` (current bars, entry/SL/TP lines; read the ones you need).
 - `bundle/market-brief.md` if present: the latest Context brief (web-researched, DATED - treat anything older than about a
-  day as stale). You have NO web access. If there is no brief, say news was not checked and rely on the calendar.
+  day as stale). You also have WebSearch/WebFetch and the trader encourages you to use them: check recent news, central-bank
+  comments and anything that could change a position (public sources only, never paywalled; name the source and its time).
 - The live doctrine: `{advisor}/CLAUDE.md` (the signal advisor's role file - read it ONLY for the management rules the EA
   enforces: bank at +1R, BE floor, ratchet, staged add, pyramid, the commodity-bloc rules; do NOT answer in its scorecard
   format) and `{advisor}/library/INDEX.md` for evidence-backed notes.
@@ -220,7 +221,7 @@ def build_bundle(cfg: dict, positions: list[dict]) -> tuple[str, list[dict]]:
         lines.append(f"News: `bundle/market-brief.md` = the Context brief generated {b['t'].strftime('%Y-%m-%d %H:%M UTC')} "
                      f"({(now - b['t']).total_seconds() / 3600:.0f} h ago){' — FLAGGED wording: ' + ', '.join(b['flags']) if b.get('flags') else ''}.")
     else:
-        lines.append("News: no Context brief from the last 2 days — news was NOT checked (no web access); rely on the calendar.")
+        lines.append("News: no Context brief from the last 2 days — check the web yourself for recent news on these positions.")
     C.atomic_write_text(os.path.join(bdir, "review.md"), "\n".join(lines) + "\n")
     return bdir, snap
 
@@ -273,7 +274,7 @@ def call_claude(cfg: dict, prompt: str, cwd: str, s: dict) -> dict:
     from live import advisor_runner as AR
     cmd = cfg["advisor"]["claude_cmd"]; sid = str(uuid.uuid4())
     args = [cmd, "-p", "--output-format", "json", "--model", s["model"], "--effort", s["effort"], "--session-id", sid,
-            "--allowedTools", "Read,Glob,Grep", "--disallowedTools", DENIED, "--max-turns", "60",
+            "--allowedTools", "Read,Glob,Grep,WebSearch,WebFetch", "--disallowedTools", DENIED, "--max-turns", "60",
             "--add-dir", os.path.abspath(cfg["advisor"]["live_dir"])]
     if os.name == "nt" and cmd.lower().endswith((".cmd", ".bat")): args = ["cmd", "/c"] + args
     t0 = time.time()
@@ -346,7 +347,7 @@ def generate(cfg: dict, log, requested_by: str = "web", consult=None) -> dict:
         else:
             wd = work_dir(cfg); os.makedirs(os.path.join(wd, ".claude"), exist_ok=True)
             C.atomic_write_text(os.path.join(wd, "CLAUDE.md"), ROLE.format(advisor=os.path.abspath(cfg["advisor"]["live_dir"]).replace("\\", "/")))
-            C.atomic_write_text(os.path.join(wd, ".claude", "settings.json"), json.dumps({"effortLevel": s["effort"], "permissions": {"allow": ["Read", "Glob", "Grep"], "deny": DENIED.split(",")}}))
+            C.atomic_write_text(os.path.join(wd, ".claude", "settings.json"), json.dumps({"effortLevel": s["effort"], "permissions": {"allow": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"], "deny": DENIED.split(",")}}))
             bdir, snap = build_bundle(cfg, positions)
             prompt = (f"Review all {len(positions)} open positions as of {C.now_iso()}. Read bundle/review.md, then the charts and the brief it lists, "
                       f"and the doctrine as CLAUDE.md says. Answer exactly in CLAUDE.md's format: the short summary, then ONE ```json block with every key.")
