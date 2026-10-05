@@ -15,7 +15,19 @@ neighbouring year (same direction + detector), research-locked trades never serv
 Review 2026-10-04: no two signals of ANY symbol in the group within GROUP_GAP_DAYS (the crosses share legs - a revealed path must not
 be a later card's chart), and cards without the event calendar or a regime tag are not served (they only happen early: they revealed
 2012). Cards file: cards_v2 (events as class + coarse timing only; v1 fingerprinted the symbol).
-Sizes (coach): commodity bloc 100, USD majors 35. Test mode (one pass ever, ledger, two-step advisor reveal) comes in a later phase.
+Sizes (coach): commodity bloc 100, USD majors 35.
+TEST MODE (phase 3, 2026-10-05): a draw from the group's TEST partition; every Test id ever drawn goes into the ledger
+(<root>/web/backtest/test_ledger.json) at once and is never drawn again ("one pass per signal ever"; a session cannot be restarted,
+only resumed). Nothing is revealed during a Test session - no per-card result, no tally, no CSV rows, the session list shows no R -
+until its last card is decided; then the full report. Every Test card takes TWO steps (coach): the trader commits a plan + take/skip
+(/bt/commit, immutable), only then the blind advisor's verdict + its v1 lever stack appear ("Advisor recommended", with its nearest
+preset; follow-up questions allowed - later versions count toward the combined result only), and the trader gives his final
+(/bt/decide). The advisor batch (live/backtest_advisor.py, run by the advisor runner) is queued when the session starts: one blind
+consult per served card, in session order. Test needs the preset menu FROZEN (menu_v1.json "frozen").
+GRADING (the session summary): the trader alone (his first commit), the advisor alone (its blind v1 verdict + stack) and both together
+(the final), each against Minimal (every signal taken with Minimal - the grading comparator) and the raw signal, at model cost and
++1 pip; the selection inputs (take rate on signals that reached +1R minus take rate on signals that went to the stop without reaching
+it, with a two-proportion z) and the settings input (R of the chosen plan minus Minimal on the taken signals, paired t).
 
 ADVISOR RECOMMENDATION (schema "advisor-levers/v1" - what the advisor emits, as a fenced block in its reply):
     ```levers
@@ -160,15 +172,47 @@ def save_session(cfg, s):
     tmp = _sp(cfg, s["sid"]) + ".tmp"; json.dump(s, open(tmp, "w")); os.replace(tmp, _sp(cfg, s["sid"]))
 
 
-def start(cfg: dict, group: str, mode: str, lock: dict) -> dict:
+def _ledger_path(cfg) -> str: return os.path.join(web_dir(cfg), "test_ledger.json")
+
+
+def load_ledger(cfg) -> dict:
+    """every Test id ever drawn (coach: one pass per signal ever) + the Test sessions."""
+    try: return json.load(open(_ledger_path(cfg)))
+    except FileNotFoundError: return {"ids": [], "sessions": []}
+
+
+def _save_ledger(cfg, led: dict) -> None:
+    tmp = _ledger_path(cfg) + ".tmp"; json.dump(led, open(tmp, "w")); os.replace(tmp, _ledger_path(cfg))
+
+
+def start(cfg: dict, group: str, mode: str, lock: dict, n_override=None) -> dict:
     if group not in SIZES: raise ValueError("unknown group")
-    if mode != "practice": raise ValueError("only Practice mode is built so far (Test mode comes in a later phase)")
-    S = store(cfg); seed = secrets.randbelow(10 ** 9)
-    r = sample_session(S["split"], group, "practice", SIZES[group], seed, lock, S["eligible"])
-    sid = secrets.token_hex(6)
-    s = {"sid": sid, "group": group, "mode": mode, "seed": seed, "n": len(r["ids"]), "n_target": SIZES[group], "shortfall": r["shortfall"],
-         "created": _now(), "menu": S["menu"]["version"], "ids": r["ids"], "pos": 0, "shown": {}, "decisions": [], "commits": {}, "adv_loaded": {}}
-    with _LOCK: save_session(cfg, s)
+    if mode not in ("practice", "test"): raise ValueError("mode must be practice or test")
+    S = store(cfg); seed = secrets.randbelow(10 ** 9); n = SIZES[group]; menu = S["menu"]
+    if n_override not in (None, ""):
+        if not settings(cfg)["dev"]: raise ValueError("a custom session size is a dev option")
+        n = max(1, min(n, int(n_override)))
+    frozen = menu.get("frozen") or {}
+    if mode == "test" and not frozen.get("at"): raise ValueError("the preset menu is not frozen - a Test session needs a frozen menu")
+    with _LOCK:
+        excl = set(load_ledger(cfg)["ids"]) if mode == "test" else set()
+        r = sample_session(S["split"], group, mode, n, seed, lock, S["eligible"], exclude=excl)
+        if not r["ids"]: raise ValueError("no signals left to draw for this group")
+        sid = secrets.token_hex(6)
+        s = {"sid": sid, "group": group, "mode": mode, "seed": seed, "n": len(r["ids"]), "n_target": n, "shortfall": r["shortfall"],
+             "created": _now(), "menu": menu["version"], "menu_frozen_at": frozen.get("at"), "ids": r["ids"], "pos": 0, "shown": {},
+             "decisions": [], "commits": {}, "adv_loaded": {}}
+        if mode == "test":                          # the ledger takes the ids at once: a drawn Test signal is spent even if never decided
+            led = load_ledger(cfg); led["ids"] += r["ids"]
+            led["sessions"].append({"sid": sid, "group": group, "n": len(r["ids"]), "at": _now(), "menu": menu["version"], "seed": seed})
+            _save_ledger(cfg, led)
+        save_session(cfg, s)
+    if mode == "test":                              # one blind consult per served card, in session order; never fatal - the ids are spent
+        try:
+            from live import backtest_advisor as BA
+            BA.queue_session(cfg, s, S)
+        except Exception as e:
+            with open(os.path.join(web_dir(cfg), "advisor_rejects.log"), "a") as f: f.write(f"{_now()}|{sid}|-|queue|advisor batch not queued: {e!r}\n")
     return {"sid": sid, "n": s["n"], "seed": seed, "group": group, "mode": mode, "shortfall": r["shortfall"]}
 
 
@@ -178,8 +222,9 @@ def list_sessions(cfg: dict) -> list:
         if not f.endswith(".json"): continue
         try: s = json.load(open(os.path.join(web_dir(cfg, "sessions"), f)))
         except (OSError, ValueError): continue
+        hide = s["mode"] == "test" and len(s["decisions"]) < s["n"]          # Test: nothing revealed until the last card is decided
         out.append({"sid": s["sid"], "group": s["group"], "mode": s["mode"], "created": s["created"], "n": s["n"], "done": len(s["decisions"]),
-                    "tally": tally(s)})
+                    "tally": None if hide else tally(s)})
     return sorted(out, key=lambda x: x["created"], reverse=True)[:50]
 
 
@@ -203,14 +248,49 @@ def card(cfg: dict, sid: str) -> dict:
     """the current card of a session (blind) - or the end-of-session summary."""
     with _LOCK:
         s = load_session(cfg, sid); i = s["pos"]
-        if i >= s["n"]: return {"done": True, "tally": tally(s), "n": s["n"], "sid": sid}
+        if i >= s["n"]:
+            out = {"done": True, "tally": tally(s), "n": s["n"], "sid": sid, "mode": s["mode"]}
+            if s["mode"] == "test":                 # refreshed: an advisor v1 that arrived after the trader's final still counts
+                write_report(cfg, s, store(cfg)); out["summary"] = load_summary(cfg, sid)
+            return out
         if str(i) not in s["shown"]: s["shown"][str(i)] = time.time(); save_session(cfg, s)
     S = store(cfg); hid = s["ids"][i]; c = dict(S["cards"][hid]); c.pop("hid", None)      # no id before the decision
-    g = s["group"]; info = S["info"]["groups"][g]
-    out = {"sid": sid, "i": i, "n": s["n"], "mode": s["mode"], "card": c, "info": info, "tally": tally(s),
-           "default": S["menu"]["defaults"][g], "advisor": None, "advisor_flag": settings(cfg)["advisor_slot"].get(s["mode"], "off")}
-    if advisor_visible(cfg, s, i): out["advisor"] = advisor_latest(cfg, sid, hid)
+    g = s["group"]; info = S["info"]["groups"][g]; test = s["mode"] == "test"
+    out = {"sid": sid, "i": i, "n": s["n"], "mode": s["mode"], "card": c, "info": info,
+           "tally": {"decided": len(s["decisions"])} if test else tally(s),
+           "default": S["menu"]["defaults"][g], "advisor": None, "advisor_flag": settings(cfg)["advisor_slot"].get(s["mode"], "off"),
+           "committed": s["commits"].get(str(i))}
+    if advisor_visible(cfg, s, i): out.update(_advisor_payload(cfg, s, i, hid))
     return out
+
+
+def _advisor_payload(cfg, s, i, hid) -> dict:
+    """what the page may see of the advisor for card i (only once the slot is visible): the latest valid stack, its verdict, the
+    consult state and the follow-up thread."""
+    from live import backtest_advisor as BA
+    st = BA.card_view(cfg, s["sid"], i, hid) if s["mode"] == "test" else {"state": "none"}
+    return {"advisor": advisor_latest(cfg, s["sid"], hid), "adv": st}
+
+
+def advisor_view(cfg: dict, sid: str, i: int) -> dict:
+    """GET /api/bt/advisor - polled by the page while the advisor works or answers a follow-up (current card, slot visible only)."""
+    s = load_session(cfg, sid)
+    if i != s["pos"] or i >= s["n"]: raise ValueError("this card is not the current one")
+    if not advisor_visible(cfg, s, i): raise ValueError("the advisor opens after your first commit")
+    return {"ok": True, "i": i, **_advisor_payload(cfg, s, i, s["ids"][i])}
+
+
+def ask(cfg: dict, sid: str, i: int, text: str) -> dict:
+    """POST /bt/ask - a follow-up question to the advisor about the current card, after the first commit (coach: allowed; later
+    versions count toward the combined result only)."""
+    text = (text or "").strip()[:2000]
+    if not text: raise ValueError("the question is empty")
+    s = load_session(cfg, sid)
+    if s["mode"] != "test": raise ValueError("follow-up questions are a Test-mode feature")
+    if i != s["pos"] or i >= s["n"]: raise ValueError("this card is not the current one")
+    if not advisor_visible(cfg, s, i): raise ValueError("the advisor opens after your first commit")
+    from live import backtest_advisor as BA
+    return BA.queue_followup(cfg, s, i, s["ids"][i], text)
 
 
 def _evaluate(S, hid, cfg_plan):
@@ -230,6 +310,7 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
     with _LOCK:
         s = load_session(cfg, sid)
         if i != s["pos"]: raise ValueError("this card is not the current one (already decided, or out of order)")
+        if s["mode"] == "test" and str(i) not in s["commits"]: raise ValueError("a Test card takes two steps: commit your first call first")
         hid = s["ids"][i]; R = S["results"][hid]; g = s["group"]
         plan_bad = None
         if decision == "take":
@@ -240,16 +321,8 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
             except Exception as e: plan_n, warn, plan_bad = None, [], str(e)[:200]
         ev = _evaluate(S, hid, plan_n) if plan_n else None
         dflt = R["default"]; mv = S["menu"]
-        adv = advisor_record(cfg, sid, hid)
-        a1 = next((v for v in adv["versions"] if v["valid"] and v.get("blind_v1")), None) if adv else None
-        al = next((v for v in reversed(adv["versions"]) if v["valid"]), None) if adv else None
-        adv_cols = {}
-        if a1 or al:
-            adv_cols = {"adv_v1_stack": json.dumps(a1["plan"], separators=(",", ":")) if a1 else "",
-                        "adv_nearest_preset": (a1 or al)["nearest_preset"], "R_adv_v1": round(_evaluate(S, hid, a1["plan"])["R"], 4) if a1 else "",
-                        "R_adv_nearest": R["R"].get((a1 or al)["nearest_preset"], ""), "R_adv_latest": round(_evaluate(S, hid, al["plan"])["R"], 4) if al else "",
-                        "adv_versions": len(adv["versions"]), "adv_loaded": bool(s["adv_loaded"].get(str(i))),
-                        "adv_final_unchanged": bool(al and plan_n and json.dumps(al["plan"], sort_keys=True) == json.dumps(plan_n, sort_keys=True))}
+        adv_avail = bool(advisor_visible(cfg, s, i) and advisor_latest(cfg, sid, hid))      # could the trader see a plan before his final?
+        adv_cols = _adv_cols(cfg, S, s, i, hid, plan_n)
         t_shown = s["shown"].get(str(i), time.time())
         sp = R.get("stop_pips"); gr = R.get("gross") or {}
         cost = (lambda units: round(PIP_COST * units / sp, 4)) if sp else (lambda units: 0.0)       # +1 pip round trip, in R
@@ -263,9 +336,11 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
                "loaded_preset": lp, "R_loaded": R["R"].get(lp, "") if lp and lp not in ("advisor",) else "",
                "R_choice_1pip": round((ev["R"] - cost(ev["gross"])) if (decision == "take" and ev) else 0.0, 4),
                "R_raw_1pip": round(R["R"]["raw"] - cost(gr.get("raw", 1.0)), 4), "R_default_1pip": round(R["R"][dflt] - cost(gr.get(dflt, 1.0)), 4),
-               "R_minimal": R["R"]["minimal"], **adv_cols}
+               "R_minimal": R["R"]["minimal"], "adv_available": adv_avail, **adv_cols}
         s["decisions"].append(rec); s["pos"] = i + 1
         save_session(cfg, s); write_report(cfg, s, S)
+    if s["mode"] == "test":                           # Test: nothing is revealed until the session ends (coach)
+        return {"ok": True, "decision": decision, "recorded": True, "warnings": warn, "decided": len(s["decisions"]), "next": s["pos"] < s["n"]}
     labels = {p["key"]: p["label"] for p in mv["presets"]}
     return {"ok": True, "decision": decision, "warnings": warn, "R_choice": rec["R_choice"], "R_plan": rec["R_plan"], "R_raw": rec["R_raw"],
             "R_default": rec["R_default"], "default_label": labels.get(dflt, dflt) + " (grading comparator)", "default_key": dflt,
@@ -285,8 +360,7 @@ def commit_first(cfg: dict, sid: str, i: int, decision: str, plan: dict | None) 
         if i != s["pos"]: raise ValueError("this card is not the current one")
         if str(i) in s["commits"]: raise ValueError("the first commit for this card is already recorded")
         s["commits"][str(i)] = {"decision": decision, "plan": plan_n, "t": _now()}; save_session(cfg, s)
-    S = store(cfg)
-    return {"ok": True, "advisor": advisor_latest(cfg, sid, s["ids"][i])}
+    return {"ok": True, "committed": s["commits"][str(i)], **_advisor_payload(cfg, s, i, s["ids"][i])}
 
 
 def mark_adv_loaded(cfg: dict, sid: str, i: int) -> dict:
@@ -297,19 +371,97 @@ def mark_adv_loaded(cfg: dict, sid: str, i: int) -> dict:
     return {"ok": True}
 
 
+def _adv_cols(cfg, S, s, i, hid, plan_final) -> dict:
+    """the advisor's columns for one decided card, computed from its records (fresh at every report write, so a v1 that arrived after
+    the trader's final still counts for the advisor-alone grade)."""
+    adv = advisor_record(cfg, s["sid"], hid)
+    a1 = next((v for v in adv["versions"] if v["valid"] and v.get("blind_v1")), None) if adv else None
+    al = next((v for v in reversed(adv["versions"]) if v["valid"]), None) if adv else None
+    if not (a1 or al): return {}
+    R = S["results"][hid]
+    return {"adv_v1_stack": json.dumps(a1["plan"], separators=(",", ":")) if a1 else "",
+            "adv_nearest_preset": (a1 or al)["nearest_preset"], "R_adv_v1": round(_evaluate(S, hid, a1["plan"])["R"], 4) if a1 else "",
+            "R_adv_nearest": R["R"].get((a1 or al)["nearest_preset"], ""), "R_adv_latest": round(_evaluate(S, hid, al["plan"])["R"], 4) if al else "",
+            "adv_versions": len(adv["versions"]), "adv_loaded": bool(s["adv_loaded"].get(str(i))),
+            "adv_final_unchanged": bool(al and plan_final and json.dumps(al["plan"], sort_keys=True) == json.dumps(plan_final, sort_keys=True))}
+
+
+def _grade_inputs(cfg, S, s, d) -> dict:
+    """per decided card: the trader alone (first commit; Practice has none -> the final), the advisor alone (blind v1 verdict + stack)
+    and the combined final, at model cost and +1 pip, + Minimal / raw and the selection classes."""
+    hid = d["hid"]; R = S["results"][hid]; sp = R.get("stop_pips"); gr = R.get("gross") or {}
+    cost = (lambda u: PIP_COST * u / sp) if sp else (lambda u: 0.0)
+    def plan_R(dec, plan):
+        if dec != "take" or not plan: return 0.0, 0.0, None
+        ev = _evaluate(S, hid, plan); return ev["R"], ev["R"] - cost(ev["gross"]), ev["R"]
+    fst = d.get("first") or {"decision": d["decision"], "plan": d["plan"]}
+    tR, tR1, tP = plan_R(fst.get("decision"), fst.get("plan"))
+    out = {"R_first": round(tR, 4), "R_first_1pip": round(tR1, 4), "first_taken": fst.get("decision") == "take", "R_first_plan": tP}
+    from live import backtest_advisor as BA
+    st = BA.get_status(cfg, s["sid"], hid) if s["mode"] == "test" else {}
+    adv = advisor_record(cfg, s["sid"], hid)
+    a1 = next((v for v in adv["versions"] if v["valid"] and v.get("blind_v1")), None) if adv else None
+    vd = st.get("verdict")
+    if a1 and vd in ("TAKE", "SKIP"):
+        aR, aR1, aP = plan_R("take" if vd == "TAKE" else "skip", a1["plan"])
+        out.update(adv_graded=True, R_adv_alone=round(aR, 4), R_adv_alone_1pip=round(aR1, 4), adv_taken=vd == "TAKE", R_adv_plan=aP)
+    else: out.update(adv_graded=False, R_adv_alone="", R_adv_alone_1pip="", adv_taken="", R_adv_plan=None)
+    out.update(adv_verdict=vd or "", adv_confidence=st.get("confidence", ""), adv_state=st.get("state", "") if s["mode"] == "test" else "",
+               R_minimal=R["R"]["minimal"], R_minimal_1pip=round(R["R"]["minimal"] - cost(gr.get("minimal", 1.0)), 4),
+               reached_1R=bool(R["banked_1R"]), went_to_stop=bool((not R["banked_1R"]) and R["R"]["raw"] <= -0.9))
+    return out
+
+
+def _grade(rows: list, actor: str) -> dict:
+    """one actor's grade over the session's cards. actor: trader / advisor / combined."""
+    if actor == "trader": rs = [(r["first_taken"], r["R_first"], r["R_first_1pip"], r["R_first_plan"], r) for r in rows]
+    elif actor == "advisor": rs = [(r["adv_taken"], r["R_adv_alone"], r["R_adv_alone_1pip"], r["R_adv_plan"], r) for r in rows if r["adv_graded"]]
+    else: rs = [(r["final_taken"], r["R_choice"], r["R_choice_1pip"], r["R_final_plan"], r) for r in rows]
+    n = len(rs)
+    if not n: return {"n": 0}
+    tot = sum(x[1] for x in rs); tot1 = sum(x[2] for x in rs)
+    mn = sum(x[4]["R_minimal"] for x in rs); mn1 = sum(x[4]["R_minimal_1pip"] for x in rs)
+    rw = sum(x[4]["R_raw"] for x in rs); rw1 = sum(x[4]["R_raw_1pip"] for x in rs)
+    a = [x for x in rs if x[4]["reached_1R"]]; b = [x for x in rs if x[4]["went_to_stop"]]
+    ta, tb = sum(1 for x in a if x[0]), sum(1 for x in b if x[0])
+    pa, pb = (ta / len(a) if a else None), (tb / len(b) if b else None)
+    z = None
+    if a and b:
+        p = (ta + tb) / (len(a) + len(b)); se = (p * (1 - p) * (1 / len(a) + 1 / len(b))) ** 0.5
+        z = round((pa - pb) / se, 2) if se > 0 else None
+    dd = [x[3] - x[4]["R_minimal"] for x in rs if x[0] and x[3] is not None]
+    t = None
+    if len(dd) >= 2:
+        m = sum(dd) / len(dd); sd = (sum((v - m) ** 2 for v in dd) / (len(dd) - 1)) ** 0.5
+        t = round(m / (sd / len(dd) ** 0.5), 2) if sd > 0 else None
+    return {"n": n, "taken": sum(1 for x in rs if x[0]), "take_rate": round(sum(1 for x in rs if x[0]) / n, 3),
+            "total_R": round(tot, 3), "vs_minimal": round(tot - mn, 3), "vs_raw": round(tot - rw, 3),
+            "at_1pip": {"total_R": round(tot1, 3), "vs_minimal": round(tot1 - mn1, 3), "vs_raw": round(tot1 - rw1, 3)},
+            "selection": {"take_rate_reached_1R": round(pa, 3) if pa is not None else None, "n_reached_1R": len(a),
+                          "take_rate_went_to_stop": round(pb, 3) if pb is not None else None, "n_went_to_stop": len(b),
+                          "spread_points": round(100 * (pa - pb), 1) if (pa is not None and pb is not None) else None, "z": z},
+            "settings_on_taken": {"n": len(dd), "mean_vs_minimal": round(sum(dd) / len(dd), 4) if dd else None, "t": t}}
+
+
 # ------------------------------------------------------------------------------------------------------------- report
 COLS = ["hid", "group", "detector", "direction", "mode", "seed", "menu_version", "decision", "decision_time_s", "chosen_config", "n_levers",
         "loaded_preset", "R_loaded_preset", "R_choice", "R_plan_if_taken", "R_raw", "R_default", "default"] + [f"R_{k}" for k in PRESET_KEYS] + \
        ["banked_1R", "hit_tp2", "first_decision", "first_config", "adv_v1_stack", "adv_nearest_preset", "R_adv_v1", "R_adv_nearest",
-        "R_adv_latest", "adv_versions", "adv_loaded", "adv_final_unchanged", "skip_plan_invalid", "R_choice_1pip", "R_raw_1pip", "R_default_1pip"]
+        "R_adv_latest", "adv_versions", "adv_loaded", "adv_final_unchanged", "skip_plan_invalid", "R_choice_1pip", "R_raw_1pip", "R_default_1pip",
+        "R_first", "R_first_1pip", "adv_verdict", "adv_confidence", "R_adv_alone", "R_adv_alone_1pip", "adv_state", "adv_available_at_final",
+        "R_minimal", "R_minimal_1pip", "reached_1R", "went_to_stop"]
 REPORT_HEADER = (f"# Backtest report - frames capped at {FRAME_CAP_DAYS} trading days after the entry (a trade still open then is closed at the "
                  f"last close); R at model cost (a lower bound - read the differences, not the levels); *_1pip columns = after +1 pip round "
                  f"trip (gross units x 1 pip / stop pips); comparison = the raw signal; grading comparator (R_default) = Minimal")
 
 
 def write_report(cfg: dict, s: dict, S: dict) -> None:
-    buf = io.StringIO(); buf.write(REPORT_HEADER + "\n"); w = csv.writer(buf); w.writerow(COLS)
+    buf = io.StringIO(); buf.write(REPORT_HEADER + "\n"); w = csv.writer(buf); w.writerow(COLS); rows = []
     for d in s["decisions"]:
+        d.update(_adv_cols(cfg, S, s, d["i"], d["hid"], d["plan"]))       # fresh: a late v1 still counts for the advisor-alone grade
+        gi = _grade_inputs(cfg, S, s, d)
+        rows.append({**gi, "final_taken": d["decision"] == "take", "R_choice": d["R_choice"], "R_choice_1pip": d.get("R_choice_1pip", d["R_choice"]),
+                     "R_final_plan": d["R_plan"] if d["decision"] == "take" else None, "R_raw": d["R_raw"], "R_raw_1pip": d.get("R_raw_1pip", d["R_raw"])})
         c = S["cards"][d["hid"]]; fst = d.get("first") or {}
         w.writerow([d["hid"], c["group"], c["detector"], c["direction"], s["mode"], s["seed"], s["menu"], d["decision"], d["decision_s"],
                     json.dumps(d["plan"], separators=(",", ":")) if d["plan"] else "", d.get("n_levers", ""), d.get("loaded_preset") or "",
@@ -317,7 +469,9 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
                     d["R_raw"], d["R_default"], d["default"]] + [d["R_presets"][k] for k in PRESET_KEYS] +
                    [d["banked_1R"], d["hit_tp2"], fst.get("decision", ""), json.dumps(fst.get("plan"), separators=(",", ":")) if fst.get("plan") else ""] +
                    [d.get(k, "") for k in ("adv_v1_stack", "adv_nearest_preset", "R_adv_v1", "R_adv_nearest", "R_adv_latest", "adv_versions", "adv_loaded", "adv_final_unchanged")]
-                   + [d.get("plan_invalid") or "", d.get("R_choice_1pip", ""), d.get("R_raw_1pip", ""), d.get("R_default_1pip", "")])
+                   + [d.get("plan_invalid") or "", d.get("R_choice_1pip", ""), d.get("R_raw_1pip", ""), d.get("R_default_1pip", "")]
+                   + [gi["R_first"], gi["R_first_1pip"], gi["adv_verdict"], gi["adv_confidence"], gi["R_adv_alone"], gi["R_adv_alone_1pip"],
+                      gi["adv_state"], d.get("adv_available", ""), gi["R_minimal"], gi["R_minimal_1pip"], gi["reached_1R"], gi["went_to_stop"]])
     rd = web_dir(cfg, "reports")
     tmp = os.path.join(rd, f"{s['sid']}.csv.tmp"); open(tmp, "w", newline="").write(buf.getvalue()); os.replace(tmp, os.path.join(rd, f"{s['sid']}.csv"))
     t = tally(s); n = max(1, t["decided"])
@@ -327,14 +481,33 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
             "at_1pip": {"R_choice": t["R_choice_1pip"], "R_raw": t["R_raw_1pip"], "R_default": t["R_default_1pip"],
                         "vs_raw": round(t["R_choice_1pip"] - t["R_raw_1pip"], 3), "vs_default": round(t["R_choice_1pip"] - t["R_default_1pip"], 3),
                         "R_choice_per_signal": round(t["R_choice_1pip"] / n, 4), "R_raw_per_signal": round(t["R_raw_1pip"] / n, 4)},
-            "frame_cap_days": FRAME_CAP_DAYS, "comparator": "minimal",
+            "frame_cap_days": FRAME_CAP_DAYS, "comparator": "minimal", "menu_frozen_at": s.get("menu_frozen_at"),
+            "grading": {"trader_alone": _grade(rows, "trader"), "advisor_alone": _grade(rows, "advisor"), "combined": _grade(rows, "combined"),
+                        "definitions": "trader alone = the first commit (Practice: the final); advisor alone = its blind v1 verdict + v1 stack (cards "
+                                       "without a v1 verdict are left out of its grade); combined = the final. total_R vs_minimal = against every "
+                                       "signal taken with Minimal (the grading comparator); selection = take rate on signals that reached +1R minus "
+                                       "take rate on signals that went to the -1R stop without reaching +1R (two-proportion z); settings_on_taken = "
+                                       "R of the plan minus Minimal on the signals the actor took (paired t). Model cost; at_1pip = after a +1 pip "
+                                       "round trip."},
             "note": "comparison = the raw signal (every signal taken raw); grading comparator (R_default) = Minimal; model cost - read the "
                     f"difference, not the level; at_1pip = after +1 pip round trip; frames capped at {FRAME_CAP_DAYS} trading days"}
     json.dump(summ, open(os.path.join(rd, f"{s['sid']}.summary.json"), "w"), indent=1)
+    save_session(cfg, s)                                # keeps the refreshed advisor columns on the decisions
+
+
+def load_summary(cfg: dict, sid: str) -> dict | None:
+    p = os.path.join(web_dir(cfg, "reports"), f"{sid}.summary.json")
+    return json.load(open(p)) if os.path.exists(p) else None
 
 
 def report_csv(cfg: dict, sid: str) -> bytes:
     if not _safe_sid(sid): raise ValueError("bad session id")
+    try: s = load_session(cfg, sid)
+    except ValueError: s = None
+    if s and s["mode"] == "test" and len(s["decisions"]) < s["n"]:     # Test: no outcome leaves the server before the session ends
+        return (REPORT_HEADER + "\n# Test session in progress - the report is available once its last card is decided\n" + ",".join(COLS) + "\n").encode()
+    if s and s["mode"] == "test":                       # refresh once at the end (a late advisor v1 still counts)
+        with _LOCK: write_report(cfg, s, store(cfg))
     p = os.path.join(web_dir(cfg, "reports"), f"{sid}.csv")
     return open(p, "rb").read() if os.path.exists(p) else (REPORT_HEADER + "\n" + ",".join(COLS) + "\n").encode()
 
@@ -413,7 +586,14 @@ def init_payload(cfg: dict) -> dict:
     S = store(cfg)
     return {"menu": S["menu"], "groups": [{"key": g, "name": S["info"]["groups"][g]["name"], "size": SIZES[g]} for g in SIZES],
             "sessions": list_sessions(cfg), "advisor_slot": settings(cfg)["advisor_slot"], "dev": bool(settings(cfg)["dev"]),
-            "comparison": "raw"}
+            "comparison": "raw", "menu_frozen": (S["menu"].get("frozen") or {}).get("at"),
+            "test_left": {g: _test_left(cfg, S, g) for g in SIZES}}
+
+
+def _test_left(cfg, S, g) -> int:
+    """Test signals of the group not yet drawn (served cards only, ledger excluded; the research lock is applied at draw time)."""
+    used = set(load_ledger(cfg)["ids"])
+    return sum(1 for h, t in S["split"]["trades"].items() if t["group"] == g and t["part"] == "test" and h in S["eligible"] and h not in used)
 
 
 def page_body(static_v: str) -> str:

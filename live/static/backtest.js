@@ -2,6 +2,8 @@
 // The plan (a stack of lever cards) serialises to the rule engine's "levers/v1" config (live/backtest_engine.py) and back; presets
 // load a stack (one undoable step); every change pushes a history snapshot (Undo / Redo, Ctrl+Z / Ctrl+Shift+Z, per card); the
 // server records the decision BEFORE anything is revealed. Self-hosted libs only: Alpine.js, SortableJS, Shoelace (live/static/vendor).
+// Test mode (2026-10-05): commit a first call -> the blind advisor's verdict + stack appear (polled while it works; follow-up questions)
+// -> the final call; nothing is revealed until the session's last card, then the grade (trader alone / advisor alone / combined).
 (function () {
   var CAP = 200;
   var uid = function () { return Math.random().toString(36).slice(2, 10); };
@@ -29,14 +31,15 @@
 
   window.btApp = function () {
     return {
-      groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', dev: false, devText: '', devBlind: true,
+      groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', startMode: 'practice', devN: '', menuFrozen: null, testLeft: {},
+      advTimer: null, askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
       sess: null, done: false, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '', basePreset: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null, wide: window.innerWidth > 640,
       init: function () {
         var self = this;
         get('/api/bt/init').then(function (j) { if (j.ok === false) { self.err = j.error; return; }
-          self.groups = j.groups; self.menu = j.menu; self.sessions = j.sessions; self.dev = j.dev;
+          self.groups = j.groups; self.menu = j.menu; self.sessions = j.sessions; self.dev = j.dev; self.menuFrozen = j.menu_frozen; self.testLeft = j.test_left || {};
           self.$nextTick(function () { self.syncGroupSelect(0); });
           self.devText = '```levers\n{"schema": "advisor-levers/v1", "nearest_preset": "ruthless", "rationale": "Weak follow-through on this group: cut fast, bank early.",\n "plan": {"entry": {"pct": 100}, "tp2": true, "levers": [{"type": "bank", "pct": 50, "at": 1.0, "tp1": true}, {"type": "move", "to": 0.25, "when": 1.0, "tp1": true, "legs": "all"}, {"type": "cut_avg", "at_h": 1, "below": 0}]}}\n```';
           var m = location.hash.match(/sid=([0-9a-f]{12})/); if (m) self.resume(m[1]); });
@@ -153,21 +156,26 @@
       // ---------------------------------------------------------------- session flow
       start: function () {
         var self = this; self.busy = true;
-        post('/bt/start', { group: self.startGroup, mode: 'practice' }).then(function (j) { self.busy = false;
+        if (self.startMode === 'test' && !confirm('Start a TEST session?\n\nEach signal can be tested only once, ever. Nothing is revealed until the last card. ' +
+            'Every card takes two steps: your first call, then the advisor\'s view, then your final call.')) { self.busy = false; return; }
+        post('/bt/start', { group: self.startGroup, mode: self.startMode, n: (self.dev && self.devN) ? self.devN : null }).then(function (j) { self.busy = false;
           if (j.ok === false) { self.err = j.error; return; } self.resume(j.sid); });
       },
       resume: function (sid) { this.sess = { sid: sid }; location.hash = 'sid=' + sid; this.load(); },
-      leave: function () { var self = this; this.sess = null; this.done = false; this.rev = null; location.hash = '';
+      leave: function () { var self = this; this.stopPoll(); this.sess = null; this.done = false; this.rev = null; this.summary = null; location.hash = '';
         get('/api/bt/sessions').then(function (j) { self.sessions = j; }); this.$nextTick(function () { self.syncGroupSelect(0); }); },
       load: function () {
         var self = this; self.busy = true;
+        self.stopPoll(); self.askText = ''; self.proceedNoAdv = false;
         get('/api/bt/card?sid=' + self.sess.sid).then(function (j) { self.busy = false;
           if (j.ok === false) { self.err = j.error; return; }
-          if (j.done) { self.done = true; self.C = { tally: j.tally, n: j.n }; return; }
+          if (j.done) { self.done = true; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null; return; }
           self.sess.group = j.card ? (self.groups.filter(function (g) { return g.name === j.card.group; })[0] || {}).key : self.sess.group;
           self.C = j; self.rev = null; self.done = false;
           self.hist = []; self.histBase = []; self.hpos = -1; self.loadPreset('default');     // per-card history starts at the preloaded plan
+          if (j.committed && j.committed.plan) self.fromConfig(j.committed.plan);           // Test, back after a reload: the committed plan
           self.hist = [self.snap()]; self.histBase = ['default']; self.hpos = 0; self.basePreset = 'default';
+          if (j.committed) self.maybePoll();
           self.$nextTick(function () { self.chart(false); self.bindSort(); });
         });
       },
@@ -190,10 +198,51 @@
         var self = this; if (d === 'take' && !self.v.ok) return; self.busy = true;
         post('/bt/decide', { sid: self.sess.sid, i: self.C.i, decision: d, plan: JSON.stringify(self.toConfig()), loaded_preset: self.basePreset }).then(function (j) {
           self.busy = false; if (j.ok === false) { self.err = j.error; return; }
+          if (self.isTest()) {                              // Test: nothing revealed - record and move on
+            self.stopPoll(); self.flash = 'Card ' + (self.C.i + 1) + ' recorded (' + d + ').'; setTimeout(function () { self.flash = ''; }, 2500);
+            self.load(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
           self.rev = j; self.C.tally = j.tally; self.$nextTick(function () { self.chart(true); });
         }).catch(function (e) { self.busy = false; self.err = String(e); });
       },
       next: function () { this.load(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+      // ---------------------------------------------------------------- Test mode: commit -> advisor -> final
+      isTest: function () { return this.C && this.C.mode === 'test'; },
+      advState: function () { return (this.C && this.C.adv && this.C.adv.state) || 'none'; },
+      advWorking: function () { var s = this.advState(); return s === 'queued' || s === 'running'; },
+      commitFirst: function (d) {
+        var self = this; if (d === 'take' && !self.v.ok) return; self.busy = true;
+        post('/bt/commit', { sid: self.sess.sid, i: self.C.i, decision: d, plan: JSON.stringify(self.toConfig()) }).then(function (j) {
+          self.busy = false; if (j.ok === false) { self.err = j.error; return; }
+          self.C.committed = j.committed; self.C.advisor = j.advisor; self.C.adv = j.adv; self.maybePoll();
+        }).catch(function (e) { self.busy = false; self.err = String(e); });
+      },
+      maybePoll: function () {
+        var self = this, a = self.C.adv || {};
+        if (self.advWorking() || (a.pending && a.pending.length)) { if (!self.advTimer) self.advTimer = setInterval(function () { self.pollAdvisor(); }, 4000); }
+        else self.stopPoll();
+      },
+      stopPoll: function () { if (this.advTimer) { clearInterval(this.advTimer); this.advTimer = null; } },
+      pollAdvisor: function () {
+        var self = this; if (!self.sess || !self.C || self.C.i === undefined) return self.stopPoll();
+        get('/api/bt/advisor?sid=' + self.sess.sid + '&i=' + self.C.i).then(function (j) {
+          if (j.ok === false) { self.stopPoll(); return; }
+          if (j.i !== self.C.i) return;
+          self.C.advisor = j.advisor; self.C.adv = j.adv; self.maybePoll();
+        }).catch(function () {});
+      },
+      askAdvisor: function () {
+        var self = this, t = (self.askText || '').trim(); if (!t) return;
+        post('/bt/ask', { sid: self.sess.sid, i: self.C.i, text: t }).then(function (j) {
+          if (j.ok === false) { self.err = j.error; return; }
+          self.askText = ''; self.C.adv = Object.assign({}, self.C.adv || {}, { pending: ((self.C.adv && self.C.adv.pending) || []).concat([t]) });
+          self.maybePoll();
+        });
+      },
+      gradeRows: function () {
+        var g = this.summary && this.summary.grading; if (!g) return [];
+        return [['Your first call (you alone)', g.trader_alone], ['The advisor alone (its blind first plan)', g.advisor_alone], ['Your final (together)', g.combined]];
+      },
+      pct: function (v) { return (v === null || v === undefined) ? '-' : Math.round(v * 100) + '%'; },
       devInject: function () {
         var self = this;
         post('/bt/dev/advisor', { sid: self.sess.sid, text: self.devText, blind: self.devBlind ? '1' : '0' }).then(function (j) {

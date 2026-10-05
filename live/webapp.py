@@ -1495,6 +1495,7 @@ class H(BaseHTTPRequestHandler):
                     if parts[2] == "init": return self._send(json.dumps(BT.init_payload(CFG), separators=(",", ":")), "application/json")
                     if parts[2] == "card": return self._send(json.dumps(BT.card(CFG, q.get("sid", "")), separators=(",", ":")), "application/json")
                     if parts[2] == "sessions": return self._send(json.dumps(BT.list_sessions(CFG)), "application/json")
+                    if parts[2] == "advisor": return self._send(json.dumps(BT.advisor_view(CFG, q.get("sid", ""), int(q.get("i", "-1") or -1)), separators=(",", ":")), "application/json")
                 except ValueError as e:
                     return self._send(json.dumps({"ok": False, "error": str(e)}), "application/json", 400)
                 except Exception as e:                                  # review 2026-10-04: always JSON, never a path or a trace
@@ -1607,10 +1608,11 @@ class H(BaseHTTPRequestHandler):
                 try:
                     sid = form.get("sid", ""); i = int(form.get("i", "-1") or -1)
                     plan = json.loads(form["plan"]) if form.get("plan") else None
-                    if u.path == "/bt/start": rep = BT.start(CFG, form.get("group", ""), form.get("mode", "practice"), research_lock())
+                    if u.path == "/bt/start": rep = BT.start(CFG, form.get("group", ""), form.get("mode", "practice"), research_lock(), form.get("n"))
                     elif u.path == "/bt/decide": rep = BT.decide(CFG, sid, i, form.get("decision", ""), plan, form.get("loaded_preset", ""))
                     elif u.path == "/bt/commit": rep = BT.commit_first(CFG, sid, i, form.get("decision", ""), plan)
                     elif u.path == "/bt/adv_loaded": rep = BT.mark_adv_loaded(CFG, sid, i)
+                    elif u.path == "/bt/ask": rep = BT.ask(CFG, sid, i, form.get("text", ""))
                     elif u.path == "/bt/dev/advisor": rep = BT.dev_inject(CFG, sid, form.get("text", ""), form.get("blind") == "1")
                     else: return self._send(json.dumps({"ok": False, "error": "unknown"}), "application/json", 404)
                     C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backtest|{u.path}|sid={sid}|i={i}|by=web")

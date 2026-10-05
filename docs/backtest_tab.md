@@ -126,3 +126,59 @@ The advisor emits a fenced block:
   - SELL cards label every R in profit terms (SL -1.00R), with a legend.
   - The group select is set once its options are upgraded.
   - The sessions table scrolls inside its card at phone width.
+
+## Test mode (phase 3, 2026-10-05; build only, nothing deployed)
+- **Menu v1 is FROZEN** (`data/backtest/menu_v1.json` "frozen": at / by / banker "L1 thirds"). Protective banker = 25% at +1R / +2R /
+  +3R, with the stop to entry / +1R / +2R. A Test session refuses to start without a frozen menu. A change is a new menu version and a
+  new Test round (rounds are not pooled).
+- **Sessions:**
+  - drawn from the group's Test partition (bloc 100, majors 35), with the same sampler rules (91-day per symbol, 15-day group gap,
+    neighbour-year fill);
+  - every drawn id goes into `<root>/web/backtest/test_ledger.json` AT ONCE and is never drawn again ("one pass per signal ever");
+  - a session cannot be restarted, only resumed.
+- **Nothing is revealed until the last card:** no per-card result, no tally, the session list shows "hidden", and the CSV holds the
+  header only. Then the full report and the grade.
+- **Two steps on every Test card:**
+  - `POST /bt/commit` records the first call (immutable). Only then the advisor's verdict, its v1 stack ("Advisor recommended", with
+    its nearest preset) and follow-up questions (`POST /bt/ask`) appear.
+  - The final goes through `POST /bt/decide`, which refuses a Test card without a commit.
+  - `GET /api/bt/advisor?sid=&i=` is polled while the advisor works or answers.
+  - If the advisor isn't ready, the page says so; the trader can wait or proceed, and the decision records `adv_available` = false.
+- **The advisor batch** (`live/backtest_advisor.py`, run from `advisor_runner.tick` - no new service):
+  - On Test start, one queue file per card goes in `<root>/web/backtest/advq/`. It holds the BLIND card only: no symbol, date,
+    outcome, results, combo data or commit.
+  - Initial consults run in session order, follow-ups first, `max_parallel` at a time (default 2). A failure gets one retry after
+    60 s, then the card is marked failed. A crash is recovered from the leftover `.running` files.
+  - Work dir: `<advisor live_dir>/../backtest/`, holding the role file CLAUDE.md, `.claude/settings.json` and
+    `bundles/<sid>/<i>/{card.md, h4.png, d1.png, h4_bars.csv}`. The charts are rendered with `live/charts.py` from the blind bars in
+    R, with the card's precomputed EMAs and no dates.
+  - Tools are Read/Glob/Grep ONLY. WebSearch, WebFetch, Bash, Write and Edit are explicitly disallowed: a search on a blind card
+    could reveal the date, the symbol or the outcome.
+  - The answer: VERDICT / CONFIDENCE / WHY plus a levers block. v1 is stored as blind_v1 (rejected stacks are logged with the
+    reason; the verdict still counts). Follow-ups resume the same consult session; a new levers block becomes v2, v3 ... and counts
+    toward the combined result only.
+  - Status: `<root>/web/backtest/advisor/<sid>/<hid>.status.json`.
+  - Config: `backtest.advisor = {model, effort, timeout_s, max_parallel, max_turns}`. The defaults are the advisor's first model,
+    medium effort, 600 s, 2 parallel and 30 turns.
+- **The grade** (the session summary and the end page):
+  - Three actors: the trader alone (his first commit), the advisor alone (its blind v1 verdict + v1 stack; cards without a v1
+    verdict are left out) and both together (the final).
+  - Each is reported against Minimal (every signal taken with Minimal) and against raw, at model cost and +1 pip.
+  - Selection = the take rate on signals that reached +1R minus the take rate on signals that went to the -1R stop without reaching
+    +1R, with a two-proportion z.
+  - Settings = the plan's R minus Minimal on the signals the actor took, with a paired t.
+  - The advisor columns are recomputed at every report write and at the end, so a v1 that arrived after the trader's final still
+    counts.
+- **New CSV columns:** R_first, R_first_1pip, adv_verdict, adv_confidence, R_adv_alone, R_adv_alone_1pip, adv_state,
+  adv_available_at_final, R_minimal, R_minimal_1pip, reached_1R, went_to_stop.
+- **Dev:** with `backtest.dev` true, `/bt/start` takes `n` (a smaller session, for testing).
+
+### Deploy notes (phase 3 additions)
+- **Code:** the new module `live/backtest_advisor.py` is covered by the `live/*.py` copy. `live/advisor_runner.py` gains the
+  three-line poll hook. `live/charts.py` gains an optional `emas_in=` (backward compatible).
+- **Static:** `backtest.html`, `.js` and `.css` changed. Icons: only vendored ones are used (shield-check for the locked first call).
+- **Data:** upload the updated `data/backtest/menu_v1.json` (frozen). The rest is unchanged from phase 2: cards_v2 (or v3 from the
+  overlay port), results_v1, info_v1, split_v1, salt.txt and frames_v1.
+- **Config:** `backtest.advisor_slot.test = "after_commit"` (the default), optionally a `backtest.advisor` block.
+- **Box:** the claude CLI must accept `--resume` (follow-ups). The advisor runner creates the work dir on its first poll.
+- **The ledger starts empty on the box.** The local test ledger lives only under the scratchpad root.

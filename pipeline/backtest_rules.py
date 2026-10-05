@@ -65,7 +65,7 @@ MENU = {
                                               "stop to +0.25R at +1R; Minimal's +2R add on top",
              "cfg": stack([dict(BANK1), dict(MOVE_BE, to=0.25), {"type": "add_bar", "pct": 75, "bar": 6, "early_at": 1.0, "hold_avg": 0.5, "stop": "trade"},
                            dict(ADD2)], entry=25)},
-    "banker": {"label": "Protective banker", "about": "PROVISIONAL ladder: bank 25% at +1R (stop entry), +2R (stop +1R), +3R (stop +2R); Minimal's +2R add",
+    "banker": {"label": "Protective banker", "about": "ladder (frozen for Test round 1): bank 25% at +1R (stop entry), +2R (stop +1R), +3R (stop +2R); Minimal's +2R add",
                "cfg": stack(ladder(BP.LADDERS[BP.BANKER_DEFAULT]))},
     "pyramid": {"label": "Pyramid", "about": "stop to -0.5R at +0.5R, entry at +1R; at TP1 add 50% (its stop +1R) on top of Minimal's add; trimmed to the 200% cap",
                 "cfg": stack([dict(BANK1), dict(MOVE_BE), {"type": "move", "to": -0.5, "when": 0.5, "tp1": False, "legs": "all", "src": "bid"},
@@ -108,7 +108,9 @@ def write_menu():
            "options": {k: E.validate(v)[0] for k, v in OPTIONS.items()},
            "raw": E.validate(RAW)[0],
            "defaults": {g: {kk: (E.validate(vv)[0] if kk == "cfg" else vv) for kk, vv in d.items()} for g, d in DEFAULTS.items()},
-           "note": "The comparison is always the raw signal (trader 2026-10-04). Menu frozen within a Test round; a change = a new version."}
+           "note": "The comparison is always the raw signal (trader 2026-10-04). Menu frozen within a Test round; a change = a new version.",
+           "frozen": {"at": "2026-10-05", "by": "trader 2026-10-05", "banker": "L1 thirds",
+                      "note": "menu v1 frozen for Test round 1; any change = a new menu version and a new Test round (rounds are not pooled)"}}
     json.dump(doc, open(os.path.join(OUT, "menu_v1.json"), "w"), indent=1)
     return doc
 

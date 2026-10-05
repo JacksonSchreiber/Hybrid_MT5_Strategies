@@ -555,6 +555,10 @@ class Runner:
 
     def tick(self) -> None:
         brief_runner.poll_requests(self.cfg, self.log)
+        try:                                                  # backtest tab, Test mode: the blind advisor batch + follow-ups (2026-10-05)
+            from live import backtest_advisor as BA
+            BA.poll(self.cfg, self.log)
+        except Exception as e: self.log(f"backtest advisor poll error: {e!r}")
         ms = models(self.cfg)
         for sig in C.list_signals(self.cfg, light=True):
             if sig.get("status") != "open": continue

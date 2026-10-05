@@ -70,3 +70,14 @@ main{max-width:1400px}
 /* review 2026-10-04 #13: the sessions table scrolls inside its card at phone width (no page-level horizontal scroll) */
 .bt-scroll{overflow-x:auto;max-width:100%}
 .bt-scroll .bt-tbl{min-width:520px}
+/* Test mode (2026-10-05) */
+.bt-flash{margin:8px 0;padding:8px 12px;border-radius:8px;background:rgba(63,185,80,.12);border:1px solid rgba(63,185,80,.35);font-size:14px}
+.bt-step2{margin-top:10px;border-top:1px solid var(--line,#30363d);padding-top:10px}
+.bt-commit{font-size:14px;margin-bottom:8px}
+.bt-advbox{background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.25);border-radius:10px;padding:10px 12px;margin:6px 0 10px;display:flex;flex-direction:column;gap:6px}
+.bt-advwait{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.bt-thread{display:flex;flex-direction:column;gap:6px}
+.bt-qa{border-left:2px solid rgba(88,166,255,.4);padding-left:8px;font-size:13px}
+.bt-q{color:#c9d1d9}.bt-a{white-space:pre-wrap}
+.bt-ask{display:flex;gap:6px;align-items:center}.bt-ask sl-input{flex:1;min-width:0}
+.bt-grade td,.bt-grade th{white-space:nowrap}

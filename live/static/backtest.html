@@ -6,34 +6,38 @@
 <template x-if="!sess">
   <div class="bt-start">
     <div class="bt-hero">
-      <h1>Backtest <span class="bt-mode">Practice</span></h1>
-      <p class="k">Blind historical signals, one at a time: decide <b>skip</b> or <b>take</b>, and build how you'd manage it. The result is revealed after each
-        decision. The comparison is always the <b>raw signal</b>. Model costs - read the differences, not the levels.</p>
+      <h1>Backtest</h1>
+      <p class="k">Blind historical signals, one at a time: decide <b>skip</b> or <b>take</b>, and build how you'd manage it. <b>Practice</b> reveals the
+        result after each decision. <b>Test</b> is graded: each signal can be tested only once, ever; every card takes two steps (your first call,
+        then the advisor's view, then your final call) and nothing is revealed until the session ends. The comparison is always the <b>raw signal</b>;
+        the grading comparator is <b>Minimal</b>. Model costs - read the differences, not the levels.</p>
     </div>
     <div class="card bt-startcard">
       <div class="bt-row">
         <sl-select label="Symbol group" @sl-change="startGroup = $event.target.value || startGroup" class="bt-w260">
           <template x-for="g in groups" :key="g.key"><sl-option :value="g.key" x-text="g.name + ' · ' + g.size + ' signals'"></sl-option></template>
         </sl-select>
-        <sl-radio-group label="Mode" value="practice" class="bt-mode-rg">
+        <sl-radio-group label="Mode" value="practice" class="bt-mode-rg" @sl-change="startMode = $event.target.value">
           <sl-radio-button value="practice">Practice</sl-radio-button>
-          <sl-radio-button value="test" disabled>Test (later)</sl-radio-button>
+          <sl-radio-button value="test" :disabled="!menuFrozen">Test</sl-radio-button>
         </sl-radio-group>
-        <sl-button variant="primary" size="large" @click="start()" :loading="busy"><sl-icon slot="prefix" name="lightning-charge"></sl-icon>Start a session</sl-button>
+        <template x-if="dev"><sl-input size="small" type="number" label="Dev: size" placeholder="full" class="bt-n" :value="devN" @sl-change="devN = $event.target.value"></sl-input></template>
+        <sl-button :variant="startMode === 'test' ? 'warning' : 'primary'" size="large" @click="start()" :loading="busy"><sl-icon slot="prefix" name="lightning-charge"></sl-icon><span x-text="startMode === 'test' ? 'Start a Test session' : 'Start a session'"></span></sl-button>
       </div>
-      <p class="k bt-small">Sessions are a stratified random draw from the group's Practice partition (years, directions and detectors in proportion), no two
-        signals of one symbol within six months, nothing research-locked.</p>
+      <p class="k bt-small">Sessions are a stratified random draw from the group's partition (years, directions and detectors in proportion), one symbol at most
+        once per three months, any two signals at least 15 days apart, nothing research-locked.
+        <span x-show="startMode === 'test'" x-text="'Test signals left: ' + groups.map(function (g) { return g.name + ' ' + (testLeft[g.key] === undefined ? '?' : testLeft[g.key]); }).join(' · ') + ' · menu v1 frozen'"></span></p>
     </div>
     <div class="card" x-show="sessions.length">
       <div class="bt-h3">Your sessions</div>
       <div class="bt-scroll"><table class="bt-tbl">
-        <thead><tr><th>Started</th><th>Group</th><th>Done</th><th>Your R</th><th>Raw</th><th>vs raw</th><th></th></tr></thead>
+        <thead><tr><th>Started</th><th>Group</th><th>Mode</th><th>Done</th><th>Your R</th><th>Raw</th><th>vs raw</th><th></th></tr></thead>
         <tbody><template x-for="s in sessions" :key="s.sid"><tr>
-          <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.done + ' / ' + s.n"></td>
-          <td :class="cls(s.tally.R_choice)" x-text="fmt(s.tally.R_choice)"></td><td :class="cls(s.tally.R_raw)" x-text="fmt(s.tally.R_raw)"></td>
-          <td :class="cls(s.tally.R_choice - s.tally.R_raw)" x-text="fmt(s.tally.R_choice - s.tally.R_raw)"></td>
+          <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.mode === 'test' ? 'Test' : 'Practice'"></td><td x-text="s.done + ' / ' + s.n"></td>
+          <td :class="s.tally ? cls(s.tally.R_choice) : ''" x-text="s.tally ? fmt(s.tally.R_choice) : 'hidden'"></td><td :class="s.tally ? cls(s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_raw) : '-'"></td>
+          <td :class="s.tally ? cls(s.tally.R_choice - s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_choice - s.tally.R_raw) : '-'"></td>
           <td class="bt-actions"><sl-button size="small" x-show="s.done < s.n" @click="resume(s.sid)">Resume</sl-button>
-            <sl-button size="small" variant="text" :href="'/bt/report/' + s.sid + '.csv'">CSV</sl-button></td>
+            <sl-button size="small" variant="text" x-show="s.mode !== 'test' || s.done >= s.n" :href="'/bt/report/' + s.sid + '.csv'">CSV</sl-button></td>
         </tr></template></tbody>
       </table></div>
     </div>
@@ -45,15 +49,17 @@
   <div>
     <div class="bt-top">
       <div class="bt-top-l"><span class="bt-gdot" :style="'background:' + (C.card ? '#3fb950' : '#888')"></span>
-        <b x-text="groupName(sess.group)"></b><span class="k" x-text="' · Practice · card ' + (C.i + 1) + ' of ' + C.n"></span></div>
+        <b x-text="groupName(sess.group)"></b><span class="k" x-text="' · ' + (isTest() ? 'TEST' : 'Practice') + ' · card ' + (C.i + 1) + ' of ' + C.n"></span></div>
       <div class="bt-tally">
-        <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
-        <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
-        <span class="bt-pill" title="the grading comparator">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
+        <span class="bt-pill" x-show="isTest()">results hidden until the last card</span>
+        <span class="bt-pill" x-show="!isTest()">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
+        <span class="bt-pill" x-show="!isTest()">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
+        <span class="bt-pill" x-show="!isTest()" title="the grading comparator">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
         <sl-button size="small" variant="text" @click="leave()">Leave</sl-button>
       </div>
     </div>
     <sl-progress-bar class="bt-prog" :value="C.n ? (100 * C.i / C.n) : 0"></sl-progress-bar>
+    <template x-if="flash"><div class="bt-flash" x-text="flash"></div></template>
 
     <div class="bt-grid">
       <!-- left: the card -->
@@ -105,7 +111,7 @@
             <sl-tooltip content="Redo (Ctrl+Shift+Z)"><sl-icon-button name="arrow-clockwise" label="Redo" @click="redo()" :disabled="!!rev || hpos >= hist.length - 1"></sl-icon-button></sl-tooltip>
           </div>
           <div class="k bt-small" x-show="presetAbout" x-text="presetAbout"></div>
-          <template x-if="C.advisor">
+          <template x-if="C.advisor && !isTest()">
             <div class="bt-adv"><sl-icon name="stars"></sl-icon> <b>Advisor</b> <span class="k" x-text="'(' + C.advisor.note + ', nearest preset: ' + labelOf(C.advisor.nearest_preset) + ')'"></span>
               <div x-text="C.advisor.rationale"></div></div>
           </template>
@@ -184,11 +190,46 @@
             <template x-for="m in v.msgs"><div class="bt-msg" :class="m.level" x-text="m.text"></div></template>
           </div>
 
-          <!-- decide -->
-          <div class="bt-decide" x-show="!rev">
+          <!-- decide: Practice = one step -->
+          <div class="bt-decide" x-show="!rev && !isTest()">
             <sl-button size="large" @click="decide('skip')" :loading="busy">Skip</sl-button>
             <sl-button size="large" variant="primary" @click="decide('take')" :disabled="!v.ok" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon>Take</sl-button>
           </div>
+          <!-- decide: Test = first call (locked), then the advisor, then the final -->
+          <template x-if="isTest() && !C.committed">
+            <div><div class="k bt-small">Step 1 of 2 - your first call. It is locked once sent; then the advisor's view opens.</div>
+              <div class="bt-decide">
+                <sl-button size="large" @click="commitFirst('skip')" :loading="busy">First call: Skip</sl-button>
+                <sl-button size="large" variant="primary" @click="commitFirst('take')" :disabled="!v.ok" :loading="busy"><sl-icon slot="prefix" name="shield-check"></sl-icon>First call: Take</sl-button>
+              </div></div>
+          </template>
+          <template x-if="isTest() && C.committed">
+            <div class="bt-step2">
+              <div class="bt-commit"><sl-icon name="shield-check"></sl-icon> Your first call: <b x-text="C.committed.decision.toUpperCase()"></b> <span class="k">(locked)</span></div>
+              <div class="bt-advbox">
+                <template x-if="advWorking()"><div class="bt-advwait"><sl-spinner></sl-spinner> <span>The advisor is still working on this card…</span>
+                  <span class="k" x-show="!proceedNoAdv">You can wait (it appears here) or give your final call without it.</span>
+                  <sl-button size="small" variant="text" x-show="!proceedNoAdv" @click="proceedNoAdv = true">Proceed without it</sl-button></div></template>
+                <template x-if="advState() === 'failed' || advState() === 'none'"><div class="k">The advisor has no view on this card<span x-text="C.adv && C.adv.error ? ' (' + C.adv.error + ')' : ''"></span>.</div></template>
+                <template x-if="advState() === 'done'"><div>
+                  <div><sl-icon name="stars"></sl-icon> <b>Advisor:</b> <span class="bt-tag" :class="(C.adv||{}).verdict === 'TAKE' ? 'up' : ((C.adv||{}).verdict === 'SKIP' ? 'dn' : 'dim')" x-text="(C.adv||{}).verdict || 'no verdict'"></span>
+                    <span class="k" x-show="(C.adv||{}).confidence !== null && (C.adv||{}).confidence !== undefined" x-text="'confidence ' + (C.adv||{}).confidence"></span></div>
+                  <div x-show="(C.adv||{}).why" x-text="(C.adv||{}).why"></div>
+                  <div class="k bt-small" x-show="C.advisor" x-text="C.advisor ? ('Its plan is in the preset list as “Advisor recommended” (' + C.advisor.note + ', nearest preset: ' + labelOf(C.advisor.nearest_preset) + ')') : ''"></div>
+                  <div class="k bt-small" x-show="!C.advisor">Its lever plan was not usable (rejected) - the verdict above still counts.</div></div></template>
+                <div class="bt-thread"><template x-for="t in (C.adv && C.adv.thread) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + t.q"></div>
+                  <div class="bt-a" x-text="'Advisor: ' + t.a"></div><div class="k bt-small" x-show="t.new_version" x-text="typeof t.new_version === 'number' ? ('new plan v' + t.new_version + ' - in the preset list') : t.new_version"></div></div></template>
+                  <template x-for="q in (C.adv && C.adv.pending) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + q"></div><div class="k"><sl-spinner></sl-spinner> the advisor is answering…</div></div></template></div>
+                <div class="bt-ask" x-show="advState() === 'done'"><sl-input size="small" placeholder="Ask the advisor about this card…" :value="askText" @sl-input="askText = $event.target.value" @keydown.enter="askAdvisor()"></sl-input>
+                  <sl-button size="small" @click="askAdvisor()">Ask</sl-button></div>
+              </div>
+              <div class="k bt-small">Step 2 of 2 - your final call (you can load the advisor's plan from the preset list; Undo goes back).</div>
+              <div class="bt-decide">
+                <sl-button size="large" @click="decide('skip')" :loading="busy">Final: Skip</sl-button>
+                <sl-button size="large" variant="primary" @click="decide('take')" :disabled="!v.ok" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon>Final: Take</sl-button>
+              </div>
+            </div>
+          </template>
         </div>
 
         <!-- reveal -->
@@ -227,7 +268,23 @@
 <!-- ============================================================ end of session -->
 <template x-if="sess && done">
   <div class="card bt-done">
-    <h2>Session finished</h2>
+    <h2 x-text="C.mode === 'test' ? 'Test session finished - the results' : 'Session finished'"></h2>
+    <template x-if="summary && summary.grading">
+      <div class="bt-scroll"><table class="bt-tbl bt-grade">
+        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
+        <tbody><template x-for="row in gradeRows()"><tr>
+          <td><b x-text="row[0]"></b></td>
+          <td x-text="row[1].n ? (row[1].taken + ' of ' + row[1].n) : 'n/a'"></td>
+          <td :class="cls(row[1].total_R)" x-text="row[1].n ? fmt(row[1].total_R) : '-'"></td>
+          <td :class="cls(row[1].vs_minimal)" x-text="row[1].n ? fmt(row[1].vs_minimal) : '-'"></td>
+          <td :class="cls(row[1].vs_raw)" x-text="row[1].n ? fmt(row[1].vs_raw) : '-'"></td>
+          <td :class="row[1].n ? cls(row[1].at_1pip.vs_minimal) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_minimal) : '-'"></td>
+          <td x-text="row[1].n ? (pct(row[1].selection.take_rate_reached_1R) + ' / ' + pct(row[1].selection.take_rate_went_to_stop) + (row[1].selection.spread_points !== null ? ' (' + (row[1].selection.spread_points > 0 ? '+' : '') + row[1].selection.spread_points + ' pts' + (row[1].selection.z !== null ? ', z ' + row[1].selection.z : '') + ')' : '')) : '-'"></td>
+          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_minimal) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
+        </tr></template></tbody></table>
+        <div class="k bt-small">Model cost. The advisor's grade leaves out cards where it gave no verdict. Bars (coach): selection spread of at least 15 points
+          at z/t >= 2 and total R at or above Minimal; presets/plans +0.05R vs Minimal on taken trades at t >= 2.</div></div>
+    </template>
     <div class="bt-row bt-tally">
       <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
       <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>

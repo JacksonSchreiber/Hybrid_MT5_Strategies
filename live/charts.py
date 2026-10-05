@@ -39,15 +39,17 @@ def _price_range(bars, extra: list[float]) -> tuple[float, float]:
 
 def render(bars: list[list], *, title: str, levels: dict | None, overlay: dict | None = None, n_show: int = H4_BARS,
            signal_t: int | None = None, size=(1000, 520), digits: int = 5, marks: list[tuple[int, str]] | None = None,
-           strategy: str = "", imbal: bool = False, hide_dates: bool = False) -> Image.Image:
-    """bars: [[t_epoch,o,h,l,c,v]] oldest->newest (all of them; EMAs are computed on the full series)."""
+           strategy: str = "", imbal: bool = False, hide_dates: bool = False, emas_in: dict | None = None) -> Image.Image:
+    """bars: [[t_epoch,o,h,l,c,v]] oldest->newest (all of them; EMAs are computed on the full series). emas_in: precomputed EMA series
+    aligned with bars ({20|"20": [...], ...}) - the blind backtest cards carry EMAs computed on the full history before truncation."""
     W, H = size; pad_l, pad_r, pad_t, pad_b = 12, 92, 30, 28
     img = Image.new("RGB", (W, H), BG); d = ImageDraw.Draw(img, "RGBA")
     f_small, f_title = _font(12), _font(14)
     if not bars or len(bars) < 5:
         d.text((pad_l, pad_t), title + "  (no bars)", fill=TXT, font=f_title); return img
     closes = [b[4] for b in bars]
-    emas = {n: ema(closes, n)[-n_show:] for n in (20, 50, 200)}
+    pre = lambda n: (emas_in.get(str(n)) or emas_in.get(n)) if emas_in else None
+    emas = {n: (pre(n) if pre(n) and len(pre(n)) == len(bars) else ema(closes, n))[-n_show:] for n in (20, 50, 200)}
     show = bars[-n_show:]; n = len(show); t_index = {b[0]: i for i, b in enumerate(show)}
     lv = levels or {}
     extra = [lv.get(k) for k in ("entry", "sl", "tp1", "tp2", "tp")]
