@@ -88,6 +88,7 @@ var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.que
 
 def page(title: str, body: str, active: str = "", refresh: int | None = None) -> str:
     tabs = [("/", "Home", "home"), ("/context", "Context", "context"), ("/journal", "Journal", "journal"), ("/equity", "Equity", "equity"), ("/paths", "Data visualizers", "paths"), ("/wiki", "Wiki", "wiki"), ("/events", "Events", "events"), ("/settings", "Settings", "settings")]
+    if CFG and (CFG.get("backtest") or {}).get("tab_visible"): tabs.insert(5, ("/backtest", "Backtest", "backtest"))   # hidden until the trader says go
     nav = "".join(f'<a href="{h}" class="{"on" if a == active else ""}">{t}</a>' for h, t, a in tabs) + '<span id="utc" class="k" style="margin-left:auto;align-self:center;white-space:nowrap;font-variant-numeric:tabular-nums"></span>'
     m = f'<meta name="autorefresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -1476,6 +1477,33 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlsplit(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}; parts = [p for p in u.path.split("/") if p]
         try:
             if not parts: return self._send(dashboard(q))
+            if parts[0] == "static" and len(parts) >= 2 and (parts[1] == "vendor" or parts[1] in ("backtest.js", "backtest.css")):   # backtest tab (self-hosted libs)
+                base = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static"))
+                fp = os.path.realpath(os.path.join(base, *parts[1:]))
+                if not fp.startswith(base + os.sep) or not os.path.isfile(fp) or (parts[1] == "vendor" and not fp.startswith(os.path.join(base, "vendor") + os.sep)):
+                    return self._send("not found", "text/plain", 404)
+                ct = {".js": "application/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".md": "text/plain"}.get(os.path.splitext(fp)[1], "application/octet-stream")
+                with open(fp, "rb") as f: data = f.read()
+                self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "public, max-age=86400"); self.end_headers(); self.wfile.write(data); return
+            if parts[0] == "backtest":
+                from live import backtest as BT
+                return self._send(page("Backtest", BT.page_body(STATIC_V), "backtest"))
+            if parts[0] == "api" and len(parts) == 3 and parts[1] == "bt":
+                from live import backtest as BT
+                try:
+                    if parts[2] == "init": return self._send(json.dumps(BT.init_payload(CFG), separators=(",", ":")), "application/json")
+                    if parts[2] == "card": return self._send(json.dumps(BT.card(CFG, q.get("sid", "")), separators=(",", ":")), "application/json")
+                    if parts[2] == "sessions": return self._send(json.dumps(BT.list_sessions(CFG)), "application/json")
+                except (ValueError, OSError, KeyError) as e:
+                    return self._send(json.dumps({"ok": False, "error": str(e)}), "application/json", 400)
+                return self._send(json.dumps({"ok": False, "error": "unknown"}), "application/json", 404)
+            if parts[0] == "bt" and len(parts) == 3 and parts[1] == "report" and parts[2].endswith(".csv"):
+                from live import backtest as BT
+                try: data = BT.report_csv(CFG, parts[2][:-4])
+                except ValueError: return self._send("bad request", "text/plain", 400)
+                self.send_response(200); self.send_header("Content-Type", "text/csv"); self.send_header("Content-Disposition", f'attachment; filename="backtest_{parts[2]}"')
+                self.send_header("Content-Length", str(len(data))); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(data); return
             if parts[0] == "static" and len(parts) == 2 and parts[1] in ("lw.js", "hybrid_chart.js", "rpaths.js"):
                 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", parts[1]), "rb") as f: return self._send(f.read(), "application/javascript")
             if parts[0] == "static" and len(parts) == 2 and parts[1] == "rpaths.json":    # the visualizers' data: historical + live, gzip
@@ -1568,6 +1596,21 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/telegram_test":
                 ok = C.telegram_send(CFG, f"Test from the web app ({C.now_iso()}). If you read this, alerts from the box reach you.", LOG)
                 return self._redirect("/", "Telegram test sent" if ok else "Telegram send FAILED - check token/chat id/network on the box", ok)
+            if u.path.startswith("/bt/"):                              # backtest tab: always JSON (the decision is recorded before any reveal)
+                from live import backtest as BT
+                try:
+                    sid = form.get("sid", ""); i = int(form.get("i", "-1") or -1)
+                    plan = json.loads(form["plan"]) if form.get("plan") else None
+                    if u.path == "/bt/start": rep = BT.start(CFG, form.get("group", ""), form.get("mode", "practice"), research_lock())
+                    elif u.path == "/bt/decide": rep = BT.decide(CFG, sid, i, form.get("decision", ""), plan)
+                    elif u.path == "/bt/commit": rep = BT.commit_first(CFG, sid, i, form.get("decision", ""), plan)
+                    elif u.path == "/bt/adv_loaded": rep = BT.mark_adv_loaded(CFG, sid, i)
+                    elif u.path == "/bt/dev/advisor": rep = BT.dev_inject(CFG, sid, form.get("text", ""), form.get("blind") == "1")
+                    else: return self._send(json.dumps({"ok": False, "error": "unknown"}), "application/json", 404)
+                    C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|backtest|{u.path}|sid={sid}|i={i}|by=web")
+                    return self._send(json.dumps(rep, separators=(",", ":")), "application/json")
+                except (ValueError, KeyError, OSError) as e:
+                    return self._send(json.dumps({"ok": False, "error": str(e)}), "application/json", 400)
             if u.path == "/research_lock":                         # trader 2026-10-04: the Data visualizers' lock, edited on the page; always JSON
                 try: ok, rep = research_lock_post(form)
                 except Exception as e:

@@ -4,7 +4,7 @@ for the two backtest groups (commodity bloc, USD majors) of data/backtest/split_
 
 MENU v1 (one module holds the definitions; a menu change = a new MENU_VERSION and a new Test round). Every preset inherits MINIMAL
 unless it overrides. Size cap: 200% of ruled size, counted as GROSS units entered (banking does not free room).
-  minimal   100% at the signal, the signal's stop, out at TP2. At the "+1R" trigger (= the live bank trigger: +1R, or TP1 when
+  minimal   100% at the signal, the signal's stop, out at TP2. At the "+1R" trigger (+1R, or TP1 when
             nearer, capped at TP2): bank 25% and every stop to entry. +75% when the bid first reaches +2R within the first 24h
             (by the bar-6 close); that add's stop is the entry.
   ruthless  + close everything at the 1-hour mark if the average R so far is negative (the EA's AvgRSince: mean of the M1 bid
@@ -310,15 +310,13 @@ def main():
     from multiprocessing import Pool
     with Pool(3) as pool: R = {hid: v for r in pool.map(do_symbol, syms) for hid, v in r}
     R = {h: v for h, v in R.items() if v is not None}
-    # combo slices: raw and the live stack ('Bloc symbols' semantics) + the parity slice (stage off, bank 0.25@1.0)
+    # combo slices: raw + the parity slice (stage off, bank 0.25@1.0). No live-stack numbers (trader 2026-10-04: the comparison is raw)
     cm = json.load(open(os.path.join(RUN, "combos_meta.json"))); nt = cm["n_trades"]; combos = CB.grid()
     def slc(ci):
         with open(os.path.join(RUN, "combos.bin"), "rb") as f:
             f.seek(ci * nt * CP.PK.itemsize); return np.frombuffer(f.read(nt * CP.PK.itemsize), dtype=CP.PK)
     pos = {(s, t, k): i for i, (s, t, k, _) in enumerate(cm["trades"])}
     s_raw = slc(CB.find(combos, "off", 0, "off", "off", "off", "off", "off"))
-    s_live = slc(CB.find(combos, "25@6", 0, "det@1.0", "0.5@1.5", "0.25", "off", "off"))
-    s_bloc = slc(CB.find(combos, "25@6", 0, "det@1.0", "0.5@1.5", "off", "off", "off", bloc="on"))
     s_par = slc(CB.find(combos, "off", 0, "0.25@1.0", "off", "off", "off", "off"))
     def say(c, msg):
         nonlocal ok_all; ok_all &= bool(c); print(("PASS " if c else "FAIL ") + msg, flush=True)
@@ -333,7 +331,6 @@ def main():
             n_chk += 1; mis += int(a_fire != m_fire or (a_fire and a_j != m_j))
         gmax = max(gmax, max(r[3] for r in v["res"].values()))
         v["raw_combo"] = s_raw["R"][i] / 1000
-        v["live"] = (s_bloc if t["group"] == "com" else s_live)["R"][i] / 1000
     say(d_par <= 0.0005 + 1e-9, f"Minimal without its add == combo slice (stage off, bank 0.25@1.0, no pyramid, no raise) on all {len(R)} trades: max |diff| {d_par:.5f}R (file rounding 0.0005)")
     say(d_raw <= 0.0005 + 1e-9, f"raw signal == the combo raw slice: max |diff| {d_raw:.5f}R")
     say(mis == 0, f"the 1-hour check fires on exactly the trades (and minute) where cbloc_timeraise_study --avgcheck 1 does: {n_chk} trades, mismatches {mis}"
@@ -351,7 +348,7 @@ def main():
         rows[h] = {"group": t["group"], "part": t["part"], "menu": MENU_VERSION,
                    "R": {k: round(rs[k][0], 4) for k in MENU + OPTIONS + ["com_trait"]},
                    "R_banker_ladders": {k: round(rs[f"banker:{k}"][0], 4) for k in LADDERS},
-                   "R_raw": round(rs["raw"][0], 4), "R_live": round(v["live"], 4),
+                   "R_raw": round(rs["raw"][0], 4),
                    "default": "minimal", "R_default": round(rs["minimal"][0], 4),
                    "banked_1R": rs["minimal"][4], "hit_tp2": bool(v["ps"]["tp2_raw"])}
     with gzip.open(os.path.join(OUT, "presets_v1.json.gz"), "wt") as f:
@@ -381,7 +378,7 @@ def main():
             line(k + (" (= default)" if k == "minimal" else ""), [R[h]["res"][k][0] for h in hs])
         for k in LADDERS:
             line(f"banker {k}", [R[h]["res"][f"banker:{k}"][0] for h in hs]); line(f"banker stops-only {k}", [R[h]["res"][f"banker_stops:{k}"][0] for h in hs])
-        line("raw signal", [R[h]["res"]["raw"][0] for h in hs]); line("live stack", [R[h]["live"] for h in hs])
+        line("raw signal", [R[h]["res"]["raw"][0] for h in hs])
         L.append("")
     L.append("Tags: 'tested' = the preset replayed on the Practice partition (in-sample - these numbers chose nothing yet but will be looked at);"
              " 'observed' = a descriptive distribution.\n")
