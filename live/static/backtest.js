@@ -12,7 +12,7 @@
   var PALETTE = [
     { name: 'Adds', items: [
       { type: 'add_reach', label: 'Add at a level', help: 'Add a share when the trade reaches +X R (optionally within N hours)', tpl: { pct: 75, at: 2.0, within_h: 24, stop: 0 } },
-      { type: 'add_bar', label: 'Add at a bar close', help: 'Add a share at the bar-N close (optionally early at +X R, held on a weak average)', tpl: { pct: 75, bar: 6, early_at: null, hold_avg: null, stop: 'trade' } },
+      { type: 'add_bar', label: 'Add at a bar close', help: 'Add a share at the bar-N close (optionally early at +X R; optionally wait at the bar close while the average R is weak)', tpl: { pct: 75, bar: 6, early_at: null, hold_avg: null, stop: 'trade', wait_avg: null } },
       { type: 'add_tp1', label: 'Add at TP1', help: 'Add a share when TP1 is reached', tpl: { pct: 50, min_R: 1.0, stop: 1.0 } }] },
     { name: 'Take profit', items: [
       { type: 'bank', label: 'Bank a share', help: 'Bank a % of what is open at +X R', tpl: { pct: 25, at: 1.0, tp1: false } }] },
@@ -120,6 +120,8 @@
       setStop: function (L, ev) { var v = ev.target.value; L.stop = v === 'trade' ? 'trade' : parseFloat(v); this.commit(); },
       toggleEarly: function (L, ev) { if (ev.target.checked) { L.early_at = 1.0; } else { L.early_at = null; L.hold_avg = null; } this.commit(); },
       toggleHold: function (L, ev) { L.hold_avg = ev.target.checked ? 0.5 : null; this.commit(); },
+      toggleWait: function (L, ev) { L.wait_avg = ev.target.checked ? 0.0 : null; this.commit(); },   // trader 2026-10-06: independent of the early add
+      flip: function (L, k) { if (L[k] === null || L[k] === undefined) return; L[k] = L[k] === 0 ? 0 : -L[k]; this.commit(); },   // the +/- button: some phone number pads have no minus key
       setEntry: function (ev) { var v = parseFloat(ev.target.value); if (isFinite(v)) { this.plan.entry = v; this.commit(); } else ev.target.value = this.plan.entry; },
       setTp2: function (ev) { this.plan.tp2 = !!ev.target.checked; this.commit(); },
       setTrim: function (ev) { this.plan.trim = !!ev.target.checked; this.commit(); },

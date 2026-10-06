@@ -211,6 +211,24 @@ def unit_tests() -> bool:
     F, c = frame([(0.0, 4.5, 4.4)]); r1 = E.evaluate(stack([{"type": "add_reach", "pct": 50, "at": 4.2, "within_h": None, "stop": 0}]), F, c)
     r0 = E.evaluate(stack([{"type": "add_reach", "pct": 50, "at": 4.2, "within_h": None, "stop": 0}]), F, c, strict_tp2=False)
     say(r1["adds"] == 0 and r0["adds"] == 1, "strict_tp2: an add above TP2 is skipped (fires only with strict_tp2 off)")
+    # wait_avg (trader 2026-10-06): the bar-6 close add waits while the average R is below it, independent of early_at
+    W = lambda wa, **k: stack([dict({"type": "add_bar", "pct": 75, "bar": 6, "early_at": None, "hold_avg": None, "stop": "trade", "wait_avg": wa}, **k)], entry=25)
+    F, c = frame([(-0.5, -0.1, -0.3)] * 3000)
+    r0, r1 = E.evaluate(W(None), F, c), E.evaluate(W(0.0), F, c)
+    say(r0["adds"] == 1 and r1["adds"] == 0 and abs(r1["R"] - 0.25 * -0.3) < 1e-12,
+        f"wait_avg: the average never recovers -> the add never goes in ({r1['R']:+.3f}R; without the wait it goes in at the bar close: {r0['R']:+.3f}R)")
+    F, c = frame([(-0.5, -0.1, -0.3)] * 1500 + [(0.9, 1.1, 1.0)] * 1000 + [(1.9, 2.1, 2.0)] * 500)
+    r1 = E.evaluate(W(0.0), F, c); exp = 0.25 * 2.0 + 0.75 * (2.0 - 1.0)     # avg reaches 0 at minute 1949 (close +1.0) -> in there
+    say(r1["adds"] == 1 and abs(r1["R"] - exp) < 1e-12, f"wait_avg: goes in the first minute after the bar that the average reaches it: R {r1['R']:+.3f} (expected {exp:+.3f})")
+    F, c = frame([(-0.1, 0.6, 0.5)] * 3000)
+    r0, r1 = E.evaluate(W(None), F, c), E.evaluate(W(0.25), F, c)
+    say(r0 == r1 and r1["adds"] == 1, "wait_avg: an average already at/above the level at the bar close -> the add goes in at the bar close as before")
+    F, c = frame([(-0.5, -0.1, -0.3)] * 1500 + [(0.9, 1.1, 1.0)] * 1000 + [(1.9, 2.1, 2.0)] * 500)
+    r1 = E.evaluate(W(0.0, early_at=2.0, hold_avg=1.0), F, c)
+    say(abs(r1["R"] - exp) < 1e-12, "wait_avg with early_at + hold_avg: the early add never fires before the bar, the bar-close add still waits")
+    try: E.validate(W(0.5)); okw = True
+    except ValueError: okw = False
+    say(okw and "wait_avg" not in E.validate(W(None))[0]["levers"][0], "validation: wait_avg needs no early add; unset, it is left out of the normalised plan")
     # validation
     try: E.validate(stack([dict(ADD2), dict(ADD2)])); bad = False
     except ValueError: bad = True

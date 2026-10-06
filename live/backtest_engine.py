@@ -15,9 +15,12 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
     add_reach   {pct, at, within_h, stop}   add pct% when +at R is reached (within within_h hours of the entry; null = any time);
                                             its stop: a number in R (0 = entry) or "trade" = the ORIGINAL leg's current stop at
                                             that moment (moves with legs "all" or "original" count; "adds"-only moves do not)
-    add_bar     {pct, bar, early_at, hold_avg, stop}   add pct% at the bar-N close; early_at: go in early at the first +early_at R
-                                            before that bar; hold_avg: hold the early add while the average R is below it and go in
-                                            the first minute the average reaches it (still before the bar)
+    add_bar     {pct, bar, early_at, hold_avg, stop[, wait_avg]}   add pct% at the bar-N close; early_at: go in early at the first
+                                            +early_at R before that bar; hold_avg: hold the early add while the average R is below it
+                                            and go in the first minute the average reaches it (still before the bar - at the bar close
+                                            it goes in regardless; needs early_at); wait_avg (optional, trader 2026-10-06, independent
+                                            of early_at): at the bar close, wait while the average R is below it and go in the first
+                                            minute after the bar that the average reaches it (no deadline: never, if it never does)
     add_tp1     {pct, min_R, stop}          add pct% when TP1 is reached (only if TP1 is above +min_R R and below TP2)
     cut_avg     {at_h, below}               close everything at at_h hours if the average R (the EA's AvgRSince: mean of the M1
                                             bid closes since the entry-bar open, against the card entry) is below `below`
@@ -28,10 +31,11 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
   Hours: H4 bar b = H // 4, then H % 4 hours into it, from the entry-bar open (24 h = the bar-6 close).
 PER MINUTE (the order of pipeline/backtest_presets.py's kernel, which this reproduces exactly - checked):
   per-leg stops (exit-side low) -> "reached" flags -> banks (exit-side high, in level order) -> stop moves -> adds that trigger on a
-  level (bid high) + early/held bar adds -> TP2 (exit-side high) -> cuts (at their minute's close) -> bar adds (at the bar close).
+  level (bid high) + early/held/waiting bar adds -> TP2 (exit-side high) -> cuts (at their minute's close) -> bar adds (at the bar
+  close; a wait_avg add whose average is still below its level starts waiting instead).
 KERNEL LIMITS: one M1 bar has no intrabar order - stops are checked first; an add and TP2 (or a bank) in the same minute both count;
 banks / TP2 fill exactly at the level; adds on a level fill at the level or the minute's open (whichever is worse) + model spread;
-stops fill at the stop or the open (whichever is worse); bar / held adds fill at the minute close; model spread only (no commission,
+stops fill at the stop or the open (whichever is worse); bar / held / waiting adds fill at the minute close; model spread only (no commission,
 swap or slippage); a trade still open at the frame end closes at the last close (box frames: 40 trading days).
 """
 from __future__ import annotations
@@ -51,7 +55,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
          bk_lvl, bk_pct, nbk,
          mv_when, mv_to, mv_legs, mv_src, nmv,
          ad_type, ad_lvl, ad_until, ad_k, ad_early, ad_hold, ad_pct, ad_stop, ad_trade, nad,
-         ct_type, ct_k, ct_thr, nct):
+         ct_type, ct_k, ct_thr, nct, ad_wait):
     """-> (R of the full ruled position, kind 0 stopped / 1 TP2 / 2 cut / 3 frame end / 4 banked out (everything open was banked:
     the trade ends that minute), exit minute, gross units entered, banks fired, adds fired, cut index or -1)."""
     nleg = 1 + nad
@@ -119,6 +123,12 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                             ls[nl] = sz; le[nl] = bc[j] + eo[j]
                             lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
                         ad_done[a] = True; ad_held[a] = False
+                elif (not ad_done[a]) and ad_held[a] and j > ad_k[a] and avg >= ad_wait[a]:     # waiting since the bar close (wait_avg)
+                    sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
+                    if sz > 1e-12:
+                        ls[nl] = sz; le[nl] = bc[j] + eo[j]
+                        lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
+                    ad_done[a] = True; ad_held[a] = False
             else:
                 if (not ad_done[a]) and j <= ad_until[a] and bh[j] >= ad_lvl[a]:
                     sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
@@ -143,6 +153,9 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                     return v, 2, j, gross, nbf, naf, c
         for a in range(nad):
             if ad_type[a] == 1 and (not ad_done[a]) and j == ad_k[a]:
+                if avg < ad_wait[a]:                   # wait_avg: the average is still below it - wait (unset: -NEVER, never waits)
+                    ad_held[a] = True
+                    continue
                 sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
                 if sz > 1e-12:
                     ls[nl] = sz; le[nl] = bc[j] + eo[j]
@@ -157,7 +170,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
 
 # ------------------------------------------------------------------------------------------------------------- config
 TYPES = {"bank": ("pct", "at", "tp1"), "move": ("to", "when", "tp1", "legs", "src"), "add_reach": ("pct", "at", "within_h", "stop"),
-         "add_bar": ("pct", "bar", "early_at", "hold_avg", "stop"), "add_tp1": ("pct", "min_R", "stop"),
+         "add_bar": ("pct", "bar", "early_at", "hold_avg", "stop", "wait_avg"), "add_tp1": ("pct", "min_R", "stop"),
          "cut_avg": ("at_h", "below"), "cut_unless": ("at_h", "reach")}
 
 
@@ -211,6 +224,8 @@ def validate(cfg: dict) -> tuple[dict, list[str]]:
                      early_at=None if ea in (None, "") else _num(ea, 0.05, 50, "the early add level"),
                      hold_avg=None if ha in (None, "") else _num(ha, -5, 50, "the hold average"), stop=_stop(c.get("stop", "trade"), i))
             if d["hold_avg"] is not None and d["early_at"] is None: raise ValueError(f"lever {i + 1}: the hold needs an early add level")
+            wa = c.get("wait_avg")                     # only written when set, so plans without it normalise exactly as before
+            if wa not in (None, ""): d["wait_avg"] = _num(wa, -5, 50, "the bar-close wait average")
         elif t == "add_tp1":
             d.update(pct=_num(c.get("pct"), 1, 200, "an add's %"), min_R=_num(c.get("min_R", 1.0), 0, 50, "the TP1 minimum"), stop=_stop(c.get("stop", 1.0), i))
         elif t == "cut_avg":
@@ -267,7 +282,7 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
     mv_src = np.array([0 if c["src"] == "exit" else 1 for c in moves], dtype=np.int64)
     na = len(adds)
     ad_type = np.zeros(na, dtype=np.int64); ad_lvl = np.full(na, NEVER); ad_until = np.full(na, BEYOND, dtype=np.int64)
-    ad_k = np.full(na, BEYOND, dtype=np.int64); ad_early = np.full(na, NEVER); ad_hold = np.full(na, -NEVER)
+    ad_k = np.full(na, BEYOND, dtype=np.int64); ad_early = np.full(na, NEVER); ad_hold = np.full(na, -NEVER); ad_wait = np.full(na, -NEVER)
     ad_pct = np.zeros(na); ad_stop = np.zeros(na); ad_trade = np.zeros(na, dtype=np.bool_)
     for i, c in enumerate(adds):
         ad_pct[i] = c["pct"] / 100.0
@@ -277,6 +292,7 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
             ad_type[i] = 1; ad_k[i] = mark(ctx, 4.0 * c["bar"])
             if c["early_at"] is not None: ad_early[i] = c["early_at"]
             if c["hold_avg"] is not None: ad_hold[i] = c["hold_avg"]
+            if c.get("wait_avg") is not None: ad_wait[i] = c["wait_avg"]
         elif c["type"] == "add_reach":
             ad_lvl[i] = c["at"]
             if c["within_h"] is not None: ad_until[i] = mark(ctx, c["within_h"])
@@ -289,7 +305,7 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
     return {"tp2_on": tp2_on, "tp2_R": tp2 if tp2 is not None else 0.0, "cap": cfg["cap_pct"] / 100.0, "F0": cfg["entry"]["pct"] / 100.0,
             "bk_lvl": bk_lvl, "bk_pct": bk_pct, "nbk": len(banks), "mv_when": mv_when, "mv_to": mv_to, "mv_legs": mv_legs, "mv_src": mv_src,
             "nmv": len(moves), "ad_type": ad_type, "ad_lvl": ad_lvl, "ad_until": ad_until, "ad_k": ad_k, "ad_early": ad_early,
-            "ad_hold": ad_hold, "ad_pct": ad_pct, "ad_stop": ad_stop, "ad_trade": ad_trade, "nad": na,
+            "ad_hold": ad_hold, "ad_wait": ad_wait, "ad_pct": ad_pct, "ad_stop": ad_stop, "ad_trade": ad_trade, "nad": na,
             "ct_type": ct_type, "ct_k": ct_k, "ct_thr": ct_thr, "nct": len(cuts)}
 
 
@@ -299,7 +315,7 @@ def run(fn, F: dict, ctx: dict, P: dict):
               P["tp2_on"], P["tp2_R"], P["cap"], P["F0"], P["bk_lvl"], P["bk_pct"], P["nbk"],
               P["mv_when"], P["mv_to"], P["mv_legs"], P["mv_src"], P["nmv"],
               P["ad_type"], P["ad_lvl"], P["ad_until"], P["ad_k"], P["ad_early"], P["ad_hold"], P["ad_pct"], P["ad_stop"], P["ad_trade"], P["nad"],
-              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"])
+              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"])
 
 
 # ------------------------------------------------------------------------------------------------------------- box frames

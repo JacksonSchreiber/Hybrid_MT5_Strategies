@@ -201,8 +201,10 @@ The levers block is required even when you say SKIP (it is the plan you would us
     legs: all / original / adds)
   - {{"type": "add_reach", "pct": 75, "at": 2.0, "within_h": 24, "stop": 0}}  add a % of full size when +X R is reached (within N hours or
     null = any time); its stop in R, or "trade" = the original leg's stop at that moment
-  - {{"type": "add_bar", "pct": 75, "bar": 6, "early_at": null, "hold_avg": null, "stop": "trade"}}  add at the bar-N close (optionally
-    early at +X R, held while the average R since entry is below hold_avg)
+  - {{"type": "add_bar", "pct": 75, "bar": 6, "early_at": null, "hold_avg": null, "stop": "trade", "wait_avg": null}}  add at the bar-N
+    close (optionally early at +X R; hold_avg holds THAT EARLY ADD while the average R since entry is below it - it needs early_at, and
+    at the bar close the add goes in regardless; wait_avg, independent: at the bar close, wait while the average R is below it and add
+    the first minute it gets there - never, if it never does)
   - {{"type": "add_tp1", "pct": 50, "min_R": 1.0, "stop": 1.0}}  add at TP1 (only if TP1 is above min_R)
   - {{"type": "cut_avg", "at_h": 1, "below": 0}}  close at N hours if the average R since the entry is below X
   - {{"type": "cut_unless", "at_h": 24, "reach": 1.5}}  close at N hours unless +X R was reached

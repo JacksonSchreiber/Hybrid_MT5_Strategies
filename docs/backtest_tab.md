@@ -40,6 +40,18 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
   - Undo/Redo, also Ctrl+Z / Ctrl+Shift+Z, with history per card.
   - A size meter vs the 200% cap with plain-words validation (Take is disabled when over the cap without trim).
   - The reveal: your plan vs raw vs default vs every preset, and the post-signal path with an exit marker.
+  - **Bar-close wait** (trader 2026-10-06, `add_bar.wait_avg`, optional): at the bar close, wait while the average R is below X
+    and add the first minute after the bar that it gets there. There's no deadline, so the add never goes in if the average never
+    recovers. It's independent of the early add.
+    - The older `hold_avg` only holds the EARLY add. It needs "go in early", and at the bar close the add goes in regardless; the UI
+      now says so.
+    - Why it was added: a Practice card (25% entry + 75% at bar 6, early at +2R, held below 1R) lost -0.70R. The early level was never
+      reached, so the bar-6 add went in at about -0.4R and the stop took both pieces.
+    - Unset, it is left out of the normalised plan. Every existing plan and the frozen menu v1 give identical results: old vs new
+      engine, 4,374 trades x 34 plans, 0 differences.
+    - It is a new lever option, not a menu change, and was added before any Test session.
+  - **+/- button** on the fields that can be negative (stop-move level and trigger, the hold / wait / cut averages), because some
+    phone number pads have no minus key.
 
 ## Advisor recommendation (`advisor-levers/v1`)
 The advisor emits a fenced block:
