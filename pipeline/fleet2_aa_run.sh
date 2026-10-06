@@ -37,6 +37,11 @@ run_stage(){   # stage args -> 0 when the stage completed; retries after a termi
     (( rc == 0 )) && return 0
     if tail -3 "$OUT/stage.log" | grep -q "terminal64 appeared\|terminal64.exe is running"; then
       prog "stage paused (terminal64 opened) - resuming when it closes"; (( ++tries > 48 )) && return 1; continue; fi
+    if (( rc == 4 )); then
+      prog "stage paused (C: short of space: $(tail -1 "$OUT/stage.log" | sed 's/^\[[^]]*\] //')) - retrying every 15 min"
+      (( ++tries > 96 )) && return 1; rm -f "$REPO/$YIELD"; sleep 900
+      if [[ -n "${WANT_YIELD:-}" ]]; then touch "$REPO/$YIELD"; while qdm_busy; do sleep 30; done; fi
+      continue; fi
     prog "stage stopped rc=$rc - see $OUT/stage.log; the driver stops (resumable: re-run this script)"; return 1
   done
 }
@@ -55,10 +60,12 @@ prog "downloads finished - phase B (export,h4,import,aa), one symbol at a time: 
 for s in $B; do
   if [[ ! -f "$OUT/state/$s.h4" ]]; then
     touch "$YIELD"; n=0; while qdm_busy; do (( n++ % 10 == 0 )) && prog "$s: QDM_YIELD set - waiting for the current qdmcli call to finish"; sleep 30; done
-    run_stage --steps export,h4 "$s"; rc=$?; rm -f "$YIELD"
+    WANT_YIELD=1 run_stage --steps export,h4 "$s"; rc=$?; rm -f "$YIELD"
     (( rc == 0 )) || { prog "phase B stopped at $s (export/h4)"; exit 1; }
   fi
   run_stage --steps import,aa "$s" || { prog "phase B stopped at $s (import/aa)"; exit 1; }
+  imp="/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/EE0304F13905552AE0B5EAEFB04866EB/MQL5/Files/import/$s.csv"
+  if [[ -f "$OUT/state/$s.imported" && -f "$imp" ]]; then rm -f "$imp"; prog "$s: leftover MT5 import copy deleted (import done)"; fi
 done
 for s in $C; do
   c="USD${s#EUR}"

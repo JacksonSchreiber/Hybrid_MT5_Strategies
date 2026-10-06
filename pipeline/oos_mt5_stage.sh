@@ -46,7 +46,7 @@
 # Time (estimates from this repo's logs): export 3-8 min, H4 1-3 min, staging copy + import 15-45 min, AA run 20-60 min
 # (EURUSD 2016-26, 276M ticks: 11-19 min at default settings; new FX 2012-26 ~1.2-2.2x the ticks) => ~45-110 min per symbol,
 # ~8-14 h for the nine, + ~20 min parity. Disk: each tick CSV is ~12-25 GB (on /home) and is copied once more to C: while it
-# imports; C: needs ~CSV x 1.1 + 30 GB free (checked).
+# imports; C: needs ~CSV x 1.1 + 20 GB free (checked).
 #
 # ONE-LOOK: the tester also writes an HTML report (profit, drawdown) and the journals carry r_multiple / pnl / terminal / mfe_r /
 # rt_* columns - that is the EA's BASE outcome. Do not open them or sum them before the look.
@@ -57,7 +57,12 @@ REPO="/home/jack/hybrid_project"
 cd "$REPO" || exit 1
 QDM_DIR="/home/jack/QDM"; QDMCLI="$QDM_DIR/qdmcli"
 MT5_DATA="/mnt/c/Users/jacks/AppData/Roaming/MetaQuotes/Terminal/EE0304F13905552AE0B5EAEFB04866EB"
-STATUS_FILE="$MT5_DATA/MQL5/Files/import/import_status.txt"
+STATUS_FILE="$MT5_DATA/MQL5/Files/import/import_status.txt"; MT5_IMPORT_DIR="$MT5_DATA/MQL5/Files/import"
+# disk (coordinator 2026-10-04): the export writes the tick CSV inside WSL (the vhdx on C: grows) and mt5_import.sh copies it again
+# into MQL5/Files/import on C:. Before an export C: needs EXPECT_CSV_GB x 1.1 + EXPORT_MARGIN_GB (20) GB free; a stop for disk exits 4 (resumable).
+EXPECT_CSV_GB="${EXPECT_CSV_GB:-20}"
+EXPORT_MARGIN_GB="${EXPORT_MARGIN_GB:-20}"   # was 30; 2026-10-05 measurements: the export CSV lands in space freed inside the WSL disk (C: did
+                                             # not drop on export), each import costs C: ~2 GB of MT5 history + the transient import copy (<=18 GB)
 EX5="$MT5_DATA/MQL5/Experts/HybridForwardTest.ex5"
 OUT="$REPO/data/study/oos_aa"; STATE="$OUT/state"; LOGS="$OUT/logs"
 READY="$REPO/data/mt5_ready"; FLEET="$REPO/data/qdm_csv/fleet"
@@ -77,7 +82,7 @@ FREG=("CADJPY CADJPY 2012.01.01" "CHFJPY CHFJPY 2012.01.01" "EURCHF EURCHF 2012.
       "EURHUF EURHUF 2012.01.01" "EURPLN EURPLN 2012.01.01" "USDZAR USDZAR 2020.01.01"
       "AUDJPY AUDJPY 2012.01.01" "NZDJPY NZDJPY 2012.01.01" "AUDCHF AUDCHF 2012.01.01" "CADCHF CADCHF 2012.01.01" "EURAUD EURAUD 2012.01.01"
       "GBPAUD GBPAUD 2012.01.01" "USDSGD USDSGD 2012.01.01" "EURNOK EURNOK 2012.01.01" "USDSEK USDSEK 2012.01.01" "USDNOK USDNOK 2012.01.01"
-      "USDHUF USDHUF 2012.01.01" "USDPLN USDPLN 2012.01.01" "USDCZK USDCZK 2012.01.01")
+      "USDHUF USDHUF 2012.01.01" "USDPLN USDPLN 2012.01.01" "USDCZK USDCZK 2016.01.01")   # USDCZK: Dukascopy ticks start 2016-01-03 (2026-10-05)
 ORIG="EURUSD GBPUSD US100 US500 USDJPY USOIL XAUUSD BTCUSD"
 # every knob mt5_verify.sh turns into an EA input - unset so the EA runs on its input defaults
 KNOBS=(STAGED PYR TC_BANK SHORT_RAISE ADD_GATE SHORT_CUT IMPR_ADD EARLY INVERSE V2_EXIT EMA_STRETCH STOP_FLOOR_ATR STOP_FLOOR_SYM
@@ -174,6 +179,8 @@ for row in "${REG[@]}"; do
   # 1 export ----------------------------------------------------------
   if want export && ! done_ "$BASE" imported && { ! done_ "$BASE" exported || [[ ! -f "$CSV" ]]; }; then
     while qdm_running; do log "$BASE: qdmcli busy - waiting"; sleep 60; done
+    need=$(( EXPECT_CSV_GB + EXPECT_CSV_GB / 10 + EXPORT_MARGIN_GB ))
+    if (( $(free_gb /mnt/c) < need )); then log "$BASE: C: has $(free_gb /mnt/c) GB free, an export needs ~$need GB (expected CSV ${EXPECT_CSV_GB} GB) - stopping (disk)"; exit 4; fi
     log "$BASE: exportToMT5 TICK $START..$EXPORT_TO ..."
     ( cd "$QDM_DIR" && "$QDMCLI" -data action=exportToMT5 "symbol=$DUK" timeframe=TICK "datefrom=$START" "dateto=$EXPORT_TO" \
         "outputdir=$READY" "filename=$BASE" ) > "$LOGS/${BASE}_export.log" 2>&1
@@ -204,8 +211,8 @@ for row in "${REG[@]}"; do
   # 3 import -----------------------------------------------------------
   if want import && ! done_ "$BASE" imported; then
     done_ "$BASE" h4 || { log "$BASE: import refused - H4 not built yet (the import deletes the tick CSV H4 is built from)"; FAILED+=("$BASE(import: no H4)"); continue; }
-    sz=$(( $(stat -c %s "$CSV") / 1073741824 + 1 )); need=$(( sz + sz / 10 + 30 ))
-    if (( $(free_gb /mnt/c) < need )); then log "$BASE: C: has $(free_gb /mnt/c) GB free, need ~$need GB - stopping"; exit 1; fi
+    sz=$(( $(stat -c %s "$CSV") / 1073741824 + 1 )); need=$(( sz + sz / 10 + EXPORT_MARGIN_GB ))   # same margin as the export check
+    if (( $(free_gb /mnt/c) < need )); then log "$BASE: C: has $(free_gb /mnt/c) GB free, need ~$need GB - stopping (disk)"; exit 4; fi
     mt5_running && { log "terminal64 appeared - stopping (resumable)"; exit 1; }
     log "$BASE: importing ($sz GB CSV) ..."; prog "$BASE: MT5 import start (mt5_import.sh --clean, $sz GB tick CSV; C: $(free_gb /mnt/c) GB free)"
     if ! bash "$REPO/pipeline/mt5_import.sh" --clean --timeout "$IMPORT_TIMEOUT" "$BASE" > "$LOGS/${BASE}_import.log" 2>&1; then
@@ -217,7 +224,8 @@ for row in "${REG[@]}"; do
       log "$BASE: import status implausible: '$line'"; FAILED+=("$BASE(import-check)"); continue; fi
     log "$BASE: imported $ticks ticks $ifirst .. $ilast"; prog "$BASE: MT5 import end - $ticks ticks $ifirst .. $ilast as $SYM (C: $(free_gb /mnt/c) GB free)"
     mark "$BASE" imported
-    (( KEEP_CSV )) || { rm -f "$CSV"; log "$BASE: source CSV deleted"; }
+    (( KEEP_CSV )) || { rm -f "$CSV"; rm -f "$MT5_IMPORT_DIR/$BASE.csv"
+      log "$BASE: source CSV and the MT5 import copy ($MT5_IMPORT_DIR/$BASE.csv) deleted (C: $(free_gb /mnt/c) GB free)"; }
   fi
 
   # 4 AA tester run ----------------------------------------------------
