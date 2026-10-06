@@ -100,7 +100,8 @@ The advisor emits a fenced block:
   the group at least 15 days apart (>= the 60-bar reveal - the crosses share legs). A thin stratum fills from the neighbouring year
   (same direction + detector, nearest year first).
   - Planned Test sessions drawn back to back: bloc 2 x 100 = 200, majors 3 x 35 = 105.
-  - A card holds at most 264 H4 / 44 D1 bars, and the chart pins both edges, so panning cannot reach further back than the window.
+  - A card holds at most 264 H4 / 44 D1 bars, and the chart pins the left edge, so panning cannot reach further back than the window.
+  - To the right of the signal the chart pans into empty space (trader 2026-10-06), so the price-line labels need not cover the signal bar. A card opens with about 140 px of that space. Nothing is drawn there, because the server sends nothing after the signal.
 - **Engine:**
   - A plan whose banks take out everything ends the trade that minute (kind 4 "banked out").
   - An add's stop "trade" = the ORIGINAL leg's current stop (moves on "all" or "original" legs count).

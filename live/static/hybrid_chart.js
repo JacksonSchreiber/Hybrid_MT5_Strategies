@@ -3,8 +3,9 @@
 //                        signal_t (epoch), digits, marks:[{t,label}], title}
 // BLIND mode (backtest tab, coach 2026-10-04): data.blind = true, bars carry synthetic contiguous times and prices in R from the entry,
 // ema_h4 / ema_d1 = precomputed {20,50,200} arrays aligned with the bars (right from the first bar), sig_h4 / sig_d1 = the index of the
-// signal bar. Axis labels are relative to the signal ("-2d", "signal"); prices print as R; nothing is fetched; zoom/pan only over the
-// bars given (the server sends nothing after the signal and nothing older than ~2 months).
+// signal bar. Axis labels are relative to the signal ("-2d", "signal"); prices print as R; nothing is fetched. The left edge is pinned to
+// the first bar; to the right the chart pans into empty space (trader 2026-10-06: so the price-line labels need not sit on the signal
+// bar) - the server sends nothing after the signal, so nothing is drawn there.
 (function () {
   function ema(vals, n) { var k = 2 / (n + 1), out = [], p = vals[0]; for (var i = 0; i < vals.length; i++) { p = i ? p + k * (vals[i] - p) : vals[0]; out.push(p); } return out; }
   function iso(s) { return s ? Math.floor(new Date(s).getTime() / 1000) : null; }
@@ -75,7 +76,7 @@
         chart = LightweightCharts.createChart(box, { height: h, layout: { background: { color: '#0d1117' }, textColor: '#c9d1d9' },
           grid: { vertLines: { color: '#1e242e' }, horzLines: { color: '#1e242e' } }, crosshair: { mode: 0 },
           rightPriceScale: { borderColor: '#30363d', scaleMargins: { top: 0.08, bottom: 0.08 } },
-          timeScale: d.blind ? { borderColor: '#30363d', timeVisible: true, secondsVisible: false, rightOffset: 6, fixRightEdge: true, fixLeftEdge: true,
+          timeScale: d.blind ? { borderColor: '#30363d', timeVisible: true, secondsVisible: false, rightOffset: 6, fixRightEdge: false, fixLeftEdge: true,
                                   tickMarkFormatter: function (t) { return relLabel(t, false); } }
                              : { borderColor: '#30363d', timeVisible: tf === 'h4', secondsVisible: false, rightOffset: 6 },
           localization: d.blind ? { priceFormatter: function (p) { var v = (d.rsign === -1 ? -p : p); return (v >= 0 ? '+' : '') + v.toFixed(2) + 'R'; },   // SELL cards: labels in profit R (review #7)
@@ -136,8 +137,10 @@
         (d.marks || []).forEach(function (m) { marks.push({ time: m.t, position: 'aboveBar', color: '#ff8c00', shape: 'square', text: m.label, size: 1 }); });
         var set = {}; marks.forEach(function (m) { set[m.time] = m; }); marks = Object.values(set).sort(function (a, b) { return a.time - b.time; });
         guard('markers', function () { cs.setMarkers(marks); });
-        var n = bars.length, from = Math.max(0, n - (tf === 'h4' ? 90 : 130));
-        chart.timeScale().setVisibleLogicalRange({ from: from, to: n + 5 });
+        var n = bars.length, from = Math.max(0, n - (tf === 'h4' ? 90 : 130)), pad = 5;
+        if (d.blind) {   // open with ~140px of empty space right of the last bar so the price-line labels clear it (capped at half the bars shown)
+          var vis = n - from, w = Math.max(100, box.clientWidth - 75); pad = Math.min(Math.ceil(vis / 2), Math.max(5, Math.ceil(140 * vis / Math.max(60, w - 140)))); }
+        chart.timeScale().setVisibleLogicalRange({ from: from, to: n + pad });
         new ResizeObserver(function () { chart.applyOptions({ width: box.clientWidth }); }).observe(box);
       }
       bar.querySelectorAll('button').forEach(function (b) { b.onclick = function () { tf = b.dataset.tf; bar.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); }); start(); }; });
