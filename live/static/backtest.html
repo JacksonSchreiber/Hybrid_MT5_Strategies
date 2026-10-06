@@ -15,7 +15,7 @@
     <div class="card bt-startcard">
       <div class="bt-row">
         <sl-select label="Symbol group" @sl-change="startGroup = $event.target.value || startGroup" class="bt-w260">
-          <template x-for="g in groups" :key="g.key"><sl-option :value="g.key" x-text="g.name + ' · ' + g.size + ' signals'"></sl-option></template>
+          <template x-for="g in groups" :key="g.key"><sl-option :value="g.key" x-text="g.name + ' · ' + sizeOf(g) + ' signals' + (startMode === 'test' ? ' (blocks of ' + g.block + ')' : '')"></sl-option></template>
         </sl-select>
         <sl-radio-group label="Mode" value="practice" class="bt-mode-rg" @sl-change="startMode = $event.target.value">
           <sl-radio-button value="practice">Practice</sl-radio-button>
@@ -47,11 +47,23 @@
 </template>
 
 <!-- ============================================================ session -->
-<template x-if="sess && !done">
+<template x-if="sess && brk">
+  <div class="card bt-block">
+    <h2 x-text="'Block ' + brk.blocks_done + ' of ' + brk.blocks + ' done'"></h2>
+    <p x-text="groupName(sess.group) + ' · TEST · ' + brk.i + ' of ' + brk.n + ' cards decided. Nothing is revealed until the last card.'"></p>
+    <p class="k">You can start the next block now, or leave and resume this session later from the sessions list - it waits here.</p>
+    <div class="bt-row">
+      <sl-button variant="warning" @click="nextBlock()" :loading="busy"><sl-icon slot="prefix" name="chevron-right"></sl-icon><span x-text="'Start block ' + (brk.blocks_done + 1)"></span></sl-button>
+      <sl-button variant="text" @click="leave()">Leave for now</sl-button>
+    </div>
+  </div>
+</template>
+
+<template x-if="sess && !done && !brk">
   <div>
     <div class="bt-top">
       <div class="bt-top-l"><span class="bt-gdot" :style="'background:' + (C.card ? '#3fb950' : '#888')"></span>
-        <b x-text="groupName(sess.group)"></b><span class="k" x-text="' · ' + (isTest() ? 'TEST' : 'Practice') + ' · card ' + (C.i + 1) + ' of ' + C.n"></span></div>
+        <b x-text="groupName(sess.group)"></b><span class="k" x-text="' · ' + (isTest() ? 'TEST' : 'Practice') + ' · card ' + (C.i + 1) + ' of ' + C.n + blockOf()"></span></div>
       <div class="bt-tally">
         <span class="bt-pill" x-show="isTest()">results hidden until the last card</span>
         <span class="bt-pill" x-show="!isTest()">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>

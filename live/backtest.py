@@ -15,7 +15,9 @@ neighbouring year (same direction + detector), research-locked trades never serv
 Review 2026-10-04: no two signals of ANY symbol in the group within GROUP_GAP_DAYS (the crosses share legs - a revealed path must not
 be a later card's chart), and cards without the event calendar or a regime tag are not served (they only happen early: they revealed
 2012). Cards file: cards_v2 (events as class + coarse timing only; v1 fingerprinted the symbol).
-Sizes (coach): commodity bloc 100, USD majors 35.
+Sizes: Practice 25 signals (coach 2026-10-06; was the Test sizes); Test commodity bloc 100, USD majors 35 (trader 2026-10-06: majors
+stay 35), taken in BLOCKS of 20 (coach 2026-10-06): after each block the session stops at a checkpoint (/bt/next_block starts the
+next one; leaving there and resuming later is fine) - nothing is revealed at a checkpoint either.
 TEST MODE (phase 3, 2026-10-05): a draw from the group's TEST partition; every Test id ever drawn goes into the ledger
 (<root>/web/backtest/test_ledger.json) at once and is never drawn again ("one pass per signal ever"; a session cannot be restarted,
 only resumed). Nothing is revealed during a Test session - no per-card result, no tally, no CSV rows, the session list shows no R -
@@ -50,7 +52,10 @@ from live import backtest_engine as E
 GAP_DAYS = 91                # coach 2026-10-04: one symbol at most once per THREE months (the longest history a card shows + a month)
 GROUP_GAP_DAYS = 15          # >= the reveal horizon (60 H4 bars ~ 10 trading days)
 MAX_BODY = 64 * 1024
-SIZES = {"com": 100, "maj": 35}
+PRACTICE_SIZE = 25           # coach 2026-10-06: a Practice session is 25 signals (same stratified draw, same three-month rule)
+TEST_SIZES = {"com": 100, "maj": 35}
+BLOCK = 20                   # coach 2026-10-06: a Test session is taken in blocks of 20, nothing revealed until the end
+SIZES = TEST_SIZES           # the groups
 DEFAULTS = {"tab_visible": False, "data_dir": None, "advisor_slot": {"practice": "off", "test": "after_commit"}, "dev": False}
 _LOCK = threading.RLock()       # review 2 #1: reentrant (store() reloads under it; card()/report_csv() also call store() before locking)
 _STORE: dict = {}
@@ -196,7 +201,7 @@ def _save_ledger(cfg, led: dict) -> None:
 def start(cfg: dict, group: str, mode: str, lock: dict, n_override=None) -> dict:
     if group not in SIZES: raise ValueError("unknown group")
     if mode not in ("practice", "test"): raise ValueError("mode must be practice or test")
-    S = store(cfg); seed = secrets.randbelow(10 ** 9); n = SIZES[group]; menu = S["menu"]
+    S = store(cfg); seed = secrets.randbelow(10 ** 9); n = TEST_SIZES[group] if mode == "test" else PRACTICE_SIZE; menu = S["menu"]
     if n_override not in (None, ""):
         if not settings(cfg)["dev"]: raise ValueError("a custom session size is a dev option")
         if not re.fullmatch(r"[0-9]{1,4}", str(n_override).strip()) or int(n_override) < 1:      # review 2 #13e
@@ -214,7 +219,7 @@ def start(cfg: dict, group: str, mode: str, lock: dict, n_override=None) -> dict
         sid = secrets.token_hex(6)
         s = {"sid": sid, "group": group, "mode": mode, "seed": seed, "n": len(r["ids"]), "n_target": n, "shortfall": r["shortfall"],
              "created": _now(), "menu": menu["version"], "menu_frozen_at": frozen.get("at"), "ids": r["ids"], "pos": 0, "shown": {},
-             "decisions": [], "commits": {}, "adv_loaded": {}}
+             "decisions": [], "commits": {}, "adv_loaded": {}, "block": BLOCK if mode == "test" else None, "block_ok": {}}
         if mode == "test":                          # the ledger takes the ids at once: a drawn Test signal is spent even if never decided
             led = load_ledger(cfg); led["ids"] += r["ids"]
             led["sessions"].append({"sid": sid, "group": group, "n": len(r["ids"]), "at": _now(), "menu": menu["version"], "seed": seed})
@@ -296,7 +301,7 @@ def list_sessions(cfg: dict) -> list:
         try: s = json.load(open(os.path.join(web_dir(cfg, "sessions"), f)))
         except (OSError, ValueError): continue
         hide = s["mode"] == "test" and len(s["decisions"]) < s["n"]          # Test: nothing revealed until the last card is decided
-        out.append({"sid": s["sid"], "group": s["group"], "mode": s["mode"], "created": s["created"], "n": s["n"], "done": len(s["decisions"]),
+        out.append({"sid": s["sid"], "group": s["group"], "mode": s["mode"], "created": s["created"], "n": s["n"], "done": len(s["decisions"]), "block": s.get("block"),
                     "tally": None if hide else tally(s)})
     return sorted(out, key=lambda x: x["created"], reverse=True)[:50]
 
@@ -327,16 +332,36 @@ def card(cfg: dict, sid: str) -> dict:
             if s["mode"] == "test":                 # refreshed: an advisor v1 that arrived after the trader's final still counts
                 write_report(cfg, s, S); out["summary"] = load_summary(cfg, sid)
             return out
+        b = s.get("block")                          # Test blocks (coach 2026-10-06): a checkpoint before cards 21, 41, ... - no card, nothing revealed
+        if b and i and i % b == 0 and str(i) not in s.get("block_ok", {}):
+            return {"block_break": True, "sid": sid, "mode": s["mode"], "group": s["group"], "i": i, "n": s["n"], "block": b, "blocks_done": i // b,
+                    "blocks": -(-s["n"] // b), "tally": {"decided": len(s["decisions"])}}
         if str(i) not in s["shown"]: s["shown"][str(i)] = time.time(); save_session(cfg, s)
     if s["mode"] == "test": _top_up_advisor(cfg, s, S)     # review 2 #9: the batch runs ~10 cards ahead of the trader
     hid = s["ids"][i]; c = dict(S["cards"][hid]); c.pop("hid", None)      # no id before the decision
     g = s["group"]; info = S["info"]["groups"][g]; test = s["mode"] == "test"
-    out = {"sid": sid, "i": i, "n": s["n"], "mode": s["mode"], "card": c, "info": info,
+    out = {"sid": sid, "i": i, "n": s["n"], "mode": s["mode"], "card": c, "info": info, "block": s.get("block"),
            "tally": {"decided": len(s["decisions"])} if test else tally(s),
            "default": S["menu"]["defaults"][g], "advisor": None, "advisor_flag": settings(cfg)["advisor_slot"].get(s["mode"], "off"),
            "committed": s["commits"].get(str(i))}
     if advisor_visible(cfg, s, i): out.update(_advisor_payload(cfg, s, i, hid))
     return out
+
+
+def _gate(s: dict) -> None:
+    """Test blocks: no card of the next block can be committed, decided or consulted before the trader starts that block."""
+    b = s.get("block"); i = s["pos"]
+    if b and i and i % b == 0 and i < s["n"] and str(i) not in s.get("block_ok", {}): raise ValueError("start the next block first")
+
+
+def next_block(cfg: dict, sid: str) -> dict:
+    """the trader starts the next block of a Test session (only at a checkpoint)."""
+    with _LOCK:
+        s = load_session(cfg, sid); i = s["pos"]; b = s.get("block")
+        if s["mode"] != "test" or not b or not i or i % b or i >= s["n"]: raise ValueError("not at a block checkpoint")
+        if str(i) in s.get("block_ok", {}): raise ValueError("this block has already started")
+        s.setdefault("block_ok", {})[str(i)] = _now(); save_session(cfg, s)
+    return {"ok": True, "sid": sid, "i": i, "block": i // b + 1}
 
 
 def _advisor_payload(cfg, s, i, hid) -> dict:
@@ -355,6 +380,7 @@ def advisor_view(cfg: dict, sid: str, i: int) -> dict:
     """GET /api/bt/advisor - polled by the page while the advisor works or answers a follow-up (current card, slot visible only)."""
     s = load_session(cfg, sid)
     if i != s["pos"] or i >= s["n"]: raise ValueError("this card is not the current one")
+    _gate(s)
     if not advisor_visible(cfg, s, i): raise ValueError("the advisor opens after your first commit")
     return {"ok": True, "i": i, **_advisor_payload(cfg, s, i, s["ids"][i])}
 
@@ -367,6 +393,7 @@ def ask(cfg: dict, sid: str, i: int, text: str) -> dict:
     s = load_session(cfg, sid)
     if s["mode"] != "test": raise ValueError("follow-up questions are a Test-mode feature")
     if i != s["pos"] or i >= s["n"]: raise ValueError("this card is not the current one")
+    _gate(s)
     if not advisor_visible(cfg, s, i): raise ValueError("the advisor opens after your first commit")
     from live import backtest_advisor as BA
     if BA.get_status(cfg, sid, s["ids"][i]).get("state") != "done":          # review 2 #4: v1 must be the blind answer, never a reply
@@ -401,6 +428,7 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
     with _LOCK:
         s = load_session(cfg, sid)
         if i != s["pos"]: raise ValueError("this card is not the current one (already decided, or out of order)")
+        _gate(s)
         if s["mode"] == "test" and str(i) not in s["commits"]: raise ValueError("a Test card takes two steps: commit your first call first")
         hid = s["ids"][i]; R = S["results"][hid]; g = s["group"]
         plan_bad = None
@@ -456,6 +484,7 @@ def commit_first(cfg: dict, sid: str, i: int, decision: str, plan: dict | None) 
     with _LOCK:
         s = load_session(cfg, sid)
         if i != s["pos"]: raise ValueError("this card is not the current one")
+        _gate(s)
         if str(i) in s["commits"]: raise ValueError("the first commit for this card is already recorded")
         s["commits"][str(i)] = {"decision": decision, "plan": plan_n, "t": _now(), "plan_invalid": plan_bad}; save_session(cfg, s)
     return {"ok": True, "committed": s["commits"][str(i)], **_advisor_payload(cfg, s, i, s["ids"][i])}
@@ -465,6 +494,7 @@ def mark_adv_loaded(cfg: dict, sid: str, i: int) -> dict:
     with _LOCK:
         s = load_session(cfg, sid)
         if i != s["pos"] or i >= s["n"]: raise ValueError("this card is not the current one")
+        _gate(s)
         s["adv_loaded"][str(i)] = _now(); save_session(cfg, s)
     return {"ok": True}
 
@@ -690,7 +720,8 @@ def dev_inject(cfg: dict, sid: str, text: str, blind: bool) -> dict:
 
 def init_payload(cfg: dict) -> dict:
     S = store(cfg)
-    return {"menu": S["menu"], "groups": [{"key": g, "name": S["info"]["groups"][g]["name"], "size": SIZES[g]} for g in SIZES],
+    return {"menu": S["menu"], "groups": [{"key": g, "name": S["info"]["groups"][g]["name"], "practice": PRACTICE_SIZE, "test": TEST_SIZES[g],
+                                           "block": BLOCK} for g in SIZES],
             "sessions": list_sessions(cfg), "advisor_slot": settings(cfg)["advisor_slot"], "dev": bool(settings(cfg)["dev"]),
             "comparison": "raw", "menu_frozen": (S["menu"].get("frozen") or {}).get("at"),
             "test_left": {g: _test_left(cfg, S, g) for g in SIZES}}

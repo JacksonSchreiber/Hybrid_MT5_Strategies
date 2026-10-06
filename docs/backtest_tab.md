@@ -26,7 +26,9 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
 - **Info window** (`data/backtest/info_v1.json`): per group, Practice-only lines, each tagged `tested` or `observed`. Locked
   trades are excluded.
 - **Server** (`live/backtest.py`):
-  - sessions (stratified draw, the six-month rule, nothing locked, sizes bloc 100 / majors 35);
+  - sessions (stratified draw, the three-month rule, nothing locked). Sizes changed on 2026-10-06 (coach):
+    - Practice is 25 signals for both groups;
+    - Test is bloc 100 and majors 35 (the trader kept majors at 35), taken in blocks of 20;
   - blind card serving;
   - the decision is recorded BEFORE the reveal;
   - the per-signal CSV + session summary (`<root>/web/backtest/reports/`);
@@ -134,6 +136,11 @@ The advisor emits a fenced block:
 - **Sessions:**
   - drawn from the group's Test partition (bloc 100, majors 35), with the same sampler rules (91-day per symbol, 15-day group gap,
     neighbour-year fill);
+  - taken in **blocks of 20** (coach 2026-10-06). After cards 20, 40, ... the session stops at a checkpoint (`/bt/next_block`
+    starts the next block; leaving there and resuming later is fine):
+    - nothing is revealed at a checkpoint;
+    - until the next block is started, the server refuses commits, decisions and advisor views for its first card;
+    - bloc sessions are 5 blocks, majors sessions are 20 + 15;
   - every drawn id goes into `<root>/web/backtest/test_ledger.json` AT ONCE and is never drawn again ("one pass per signal ever");
   - a session cannot be restarted, only resumed.
 - **Nothing is revealed until the last card:** no per-card result, no tally, the session list shows "hidden", and the CSV holds the

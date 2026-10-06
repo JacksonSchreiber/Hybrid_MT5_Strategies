@@ -81,3 +81,4 @@ main{max-width:1400px}
 .bt-q{color:#c9d1d9}.bt-a{white-space:pre-wrap}
 .bt-ask{display:flex;gap:6px;align-items:center}.bt-ask sl-input{flex:1;min-width:0}
 .bt-grade td,.bt-grade th{white-space:nowrap}
+.bt-block{max-width:640px;margin:24px auto;padding:20px}.bt-block h2{margin:0 0 8px}.bt-block .bt-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}

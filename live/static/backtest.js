@@ -33,7 +33,7 @@
     return {
       groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', startMode: 'practice', devN: '', menuFrozen: null, testLeft: {},
       advTimer: null, askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
-      sess: null, done: false, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
+      sess: null, done: false, brk: null, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '', basePreset: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null, wide: window.innerWidth > 640,
       init: function () {
@@ -44,7 +44,7 @@
           self.devText = '```levers\n{"schema": "advisor-levers/v1", "nearest_preset": "ruthless", "rationale": "Weak follow-through on this group: cut fast, bank early.",\n "plan": {"entry": {"pct": 100}, "tp2": true, "levers": [{"type": "bank", "pct": 50, "at": 1.0, "tp1": true}, {"type": "move", "to": 0.25, "when": 1.0, "tp1": true, "legs": "all"}, {"type": "cut_avg", "at_h": 1, "below": 0}]}}\n```';
           var m = location.hash.match(/sid=([0-9a-f]{12})/); if (m) self.resume(m[1]); });
         document.addEventListener('keydown', function (e) {     // ONE listener (Alpine calls init() itself - no x-init; review #4)
-          if (!self.sess || self.done || self.rev) return;
+          if (!self.sess || self.done || self.rev || self.brk) return;
           var path = e.composedPath ? e.composedPath() : [e.target];   // typing in a field: the browser's own undo, not the plan's
           for (var q = 0; q < path.length; q++) { var tg = path[q] && path[q].tagName; if (tg && /^(INPUT|TEXTAREA|SELECT|SL-INPUT|SL-TEXTAREA)$/.test(tg)) return; }
           var z = (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z'), y = (e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y');
@@ -164,14 +164,23 @@
           if (j.ok === false) { self.err = j.error; return; } self.resume(j.sid); });
       },
       resume: function (sid) { this.sess = { sid: sid }; location.hash = 'sid=' + sid; this.load(); },
-      leave: function () { var self = this; this.stopPoll(); this.sess = null; this.done = false; this.rev = null; this.summary = null; location.hash = '';
+      nextBlock: function () {           // Test (coach 2026-10-06): start the next block of 20
+        var self = this; self.busy = true;
+        post('/bt/next_block', { sid: self.sess.sid }).then(function (j) { self.busy = false; if (j.ok === false) { self.err = j.error; return; } self.load(); })
+          .catch(function (e) { self.busy = false; self.err = String(e); });
+      },
+      blockOf: function () { var b = this.C && this.C.block; return b ? ' · block ' + (Math.floor(this.C.i / b) + 1) + ' of ' + Math.ceil(this.C.n / b) : ''; },
+      sizeOf: function (g) { return this.startMode === 'test' ? g.test : g.practice; },
+      leave: function () { var self = this; this.stopPoll(); this.sess = null; this.done = false; this.rev = null; this.summary = null; this.brk = null; location.hash = '';
         get('/api/bt/sessions').then(function (j) { self.sessions = j; }); this.$nextTick(function () { self.syncGroupSelect(0); }); },
       load: function () {
         var self = this; self.busy = true;
         self.stopPoll(); self.askText = ''; self.proceedNoAdv = false;
         get('/api/bt/card?sid=' + self.sess.sid).then(function (j) { self.busy = false;
           if (j.ok === false) { self.err = j.error; return; }
-          if (j.done) { self.done = true; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null; return; }
+          if (j.done) { self.done = true; self.brk = null; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null; return; }
+          if (j.block_break) { self.brk = j; self.sess.group = j.group; self.C = { i: j.i, n: j.n, mode: j.mode, tally: j.tally }; self.rev = null; return; }   // Test: between blocks
+          self.brk = null;
           self.sess.group = j.card ? (self.groups.filter(function (g) { return g.name === j.card.group; })[0] || {}).key : self.sess.group;
           self.C = j; self.rev = null; self.done = false;
           self.hist = []; self.histBase = []; self.hpos = -1; self.loadPreset('default');     // per-card history starts at the preloaded plan
