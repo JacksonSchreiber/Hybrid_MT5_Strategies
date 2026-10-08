@@ -74,6 +74,18 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
   <= 100% (else graded as raw, flagged) and the plan-wide `risk_cap` 1.0. The role states the group's PRACTICE base rates only.
 - Caveat for the coach: E1's role was written after the trader saw these cards' outcomes (the advisor is still blind) - a good
   result is a hint to confirm on fresh Test signals.
+- **Raw only (trader 2026-10-08):** "Minimal is shaped and should not ever be compared" - experiments compare with the raw signal only
+  (E1's view was rebuilt without Minimal).
+- **E2 "take or skip raw"** (Sonnet 5.5): one decision - TAKE or SKIP the raw signal, take by default, skip only the ones that look
+  horrible. No rates, success numbers or presets in the card: only the group's own behaviour line ("How this group tends to behave").
+- **E3 "take everything, managed"** (Sonnet 5.5): the advisor chooses the entry (1-200%, its stop, standing orders, TP2 on/off), then
+  reviews the trade 1, 2, 3, 4 trading hours after the entry and every 12 hours after that until it ends. Each review is a fresh consult
+  that sees only the bars up to that moment (`since_entry.png/.csv`, M5-H4 by length) and `state.md` (pieces, stops, banked / open R,
+  orders, its earlier reviews). Tools: close now (any %), stop now (from -1R to below the price, looser or tighter), add now, standing
+  close/stop/add orders, TP2 on/off. The only limit: the open position never above 200%. Simulated minute by minute by `Sim` with the
+  rule engine's fills (5,832 trade x plan checks against the engine, 0 differences). The stored frames end at the first -1R touch (no
+  stop can be lower, so every managed trade is complete) or at 40 days; reviews stop after the card's ~60 H4 bars of time.
+- Run: `python -X utf8 -m live.backtest_experiment --sid <sid> --name e2 --kind e2 --parallel 4` (and `--name e3 --kind e3`).
 - Engine: a plan-level `risk_cap` (levers/v1) applies the add_bar risk cap to every add; only written when set (old plans
   unchanged: 157,464-run parity, 0 differences).
 

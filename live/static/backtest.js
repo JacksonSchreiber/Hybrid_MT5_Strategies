@@ -181,9 +181,6 @@
         post('/bt/advisor_only', { sid: self.sess.sid }).then(function (j) { self.busy = false; if (j.ok === false) { self.err = j.error; return; } self.brk = null; self.load(); })
           .catch(function (e) { self.busy = false; self.err = String(e); });
       },
-      expRows: function (X) {           // E1: decision 1 (raw take/skip), decision 2 (its plan on the trades it took), per part
-        return (X.parts || []).map(function (p) { return p; });
-      },
       aoRows: function (A) { return A && A.grade ? [['The advisor alone (its blind first plan)', A.grade]] : []; },
       nextBlock: function () {           // Test (coach 2026-10-06): start the next block of 20
         var self = this; self.busy = true;

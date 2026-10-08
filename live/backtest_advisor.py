@@ -352,6 +352,11 @@ def write_bundle(cfg: dict, job: dict, role: str | None = None) -> str:
              f"- At the signal bar - H4: {em('h4')}; D1: {em('d1')}",
              "- The H4 chart ends at the signal bar's close; the D1 chart's last bar is partial (up to the signal).", ""]
     if c.get("overlay"): lines += overlay_lines(c) + [""]
+    if job.get("plain_notes") is not None:            # experiments (trader 2026-10-08): broad group behaviour only - no rates, no presets
+        lines += ["## How this group tends to behave"] + [f"- {t}" for t in job["plain_notes"]]
+        open(os.path.join(d, "card.md"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
+        _bars_csv_and_charts(d, c, lv)
+        return d
     lines += ["## Group notes (Practice partition only; 'tested' = measured, 'observed' = descriptive)" +
               ("" if v2 else " - they describe the group's AVERAGE signal, not this one")]
     lines += [f"- [{l['tag']}] {l['text']}" for l in job.get("info_lines") or []]
@@ -367,6 +372,11 @@ def write_bundle(cfg: dict, job: dict, role: str | None = None) -> str:
         for p in job.get("presets") or []:
             lines += [f"- `{p['key']}` - {p['label']}: {p['about']}"] + ([f"  - its levers: `{lv_js(p['cfg'])}`"] if p.get("cfg") else [])
     open(os.path.join(d, "card.md"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    _bars_csv_and_charts(d, c, lv)
+    return d
+
+
+def _bars_csv_and_charts(d: str, c: dict, lv: dict) -> None:
     with open(os.path.join(d, "h4_bars.csv"), "w") as f:
         f.write("bars_ago,open,high,low,close\n")
         bars = c["h4"]["bars"]; n = len(bars)
@@ -381,7 +391,6 @@ def write_bundle(cfg: dict, job: dict, role: str | None = None) -> str:
             img.save(os.path.join(d, name + ".tmp"), "PNG"); os.replace(os.path.join(d, name + ".tmp"), os.path.join(d, name))
     except Exception as e:                             # the text + CSV still carry the card
         open(os.path.join(d, "charts_unavailable.txt"), "w").write(f"chart rendering failed: {e!r}\n")
-    return d
 
 
 # ------------------------------------------------------------------------------------------------------------- the consult
