@@ -196,6 +196,18 @@ def write_summary(cfg: dict, sid: str, name: str, br: dict | None = None) -> dic
     return summ
 
 
+def research_lock(cfg: dict) -> dict:
+    """the same reader as webapp.research_lock (the trader's <root>/web/research_lock.json, else symbol_groups.RESEARCH_LOCK)."""
+    from live import symbol_groups as SG
+    d = SG.RESEARCH_LOCK; known = {x for g in SG.GROUPS for x in g[3]}
+    try: j = json.load(open(os.path.join(cfg["root"], "web", "research_lock.json")))
+    except (OSError, ValueError): j = None
+    if isinstance(j, dict) and isinstance(j.get("locked"), list) and isinstance(j.get("exposed"), list):
+        lk = [x for x in j["locked"] if x in known]
+        return {"locked": lk, "period_from": d["period_from"], "exposed": [x for x in j["exposed"] if x in known and x not in lk]}
+    return {"locked": list(d["locked"]), "period_from": d["period_from"], "exposed": list(d["exposed"])}
+
+
 def list_summaries(cfg: dict, sid: str) -> list:
     root = BT.web_dir(cfg, "experiments", sid); out = []
     for nm in sorted(os.listdir(root)) if os.path.isdir(root) else []:
@@ -332,7 +344,10 @@ def summary_e2(cfg, sid, name) -> dict:
 
 # ============================================================================================ E3: take everything, reviewed while it runs
 E3_VERSION = "experiment E3 take-all + reviews 1/2/3/4 h then every 12 h, Sonnet (2026-10-08)"
-REVIEW_H = [1, 2, 3, 4] + [4 + 12 * k for k in range(1, 400)]       # trading hours after the entry-bar open (as the engine's cuts)
+REVIEW_H = [1, 2, 3, 4] + [4 + 12 * k for k in range(1, 400)]       # trading hours after the entry-bar open (as the engine's cuts) - E3 (first run)
+REVIEW_H_B = [4, 8, 12] + [12 + 12 * k for k in range(1, 400)]      # trader 2026-10-08, second run: 4, 8, 12, 24, 36, 48 ... h
+SCHEDULES = {"h1234": REVIEW_H, "h4812": REVIEW_H_B}
+SCHED_TEXT = {"h1234": "1, 2, 3 and 4 hours after the entry and every 12 hours after that", "h4812": "4, 8 and 12 hours after the entry and every 12 hours after that"}
 _FRAMES_LOCK = threading.Lock()
 MAX_OPEN = 2.0                                                      # the only limit: the open position never above 200% of the ruled size
 TRADE_FENCE = re.compile(r"```trade\s*(\{.*?\})\s*```", re.S)
@@ -483,8 +498,12 @@ def since_entry(F: dict, ctx: dict, j: int, sell: bool) -> tuple[list, int]:
     return bars, size
 
 
-def role_e3() -> str:
-    return f"""# Blind backtest advisor ({E3_VERSION})
+def e3_version(sched: str) -> str:
+    return E3_VERSION if sched == "h1234" else "experiment E3b take-all + reviews 4/8/12 h then every 12 h, Sonnet (2026-10-08)"
+
+
+def role_e3(sched: str = "h1234") -> str:
+    return f"""# Blind backtest advisor ({e3_version(sched)})
 
 {BLIND_HEAD}
 
@@ -493,7 +512,7 @@ once the trade is running also `since_entry.png` / `since_entry.csv` (the bars s
 `state.md` (where the trade stands now, in PROFIT-R, and your earlier reviews).
 
 - At the entry you choose the size (1-200% of the ruled size), its stop, the standing orders and the TP2 exit.
-- Then you review it 1, 2, 3 and 4 hours after the entry and every 12 hours after that, until it ends. At each review you may change
+- Then you review it {SCHED_TEXT[sched]}, until it ends. At each review you may change
   anything, or nothing.
 - The only limit: the open position never goes above 200% of the ruled size. A stop can sit anywhere from the signal stop (-1R) up to just
   below the current price. You are graded on the trade's final R.
@@ -531,7 +550,7 @@ def parse_trade(text: str) -> tuple[str | None, str | None, dict, str]:
     return (m.group(1).upper() if m else None), why, a, err
 
 
-def manage_e3(cfg, S, s, i, d, role, consult=None) -> dict:
+def manage_e3(cfg, S, s, i, d, role, consult=None, sched: str = "h1234") -> dict:
     hid = s["ids"][i]
     with _FRAMES_LOCK: F, ctx = S["frames"].get(hid)           # the frame reader shares file handles: one reader at a time
     card = S["cards"][hid]; sell = card.get("direction") == "SELL"
@@ -560,7 +579,7 @@ def manage_e3(cfg, S, s, i, d, role, consult=None) -> dict:
     reviews.append({"k": 0, "H": 0, "decision": dec or "ENTER", "why": why, "block": a, "notes": notes + ([err] if err else []), "elapsed_s": r.get("elapsed_s")})
     hist.append(f"entry: {sim.open_size() * 100:.0f}% in, stop {stp if stp == 'trade' else f'{stp:+.2f}R'}" + (f"; {a.get('note')}" if a.get("note") else ""))
     last_j = -1
-    for k, H in enumerate(REVIEW_H, 1):
+    for k, H in enumerate(SCHEDULES[sched], 1):
         jr = E.mark(ctx, H)
         if jr >= F["n"] - 1 or jr >= E.BEYOND: break
         if jr <= last_j: continue
@@ -587,7 +606,7 @@ def manage_e3(cfg, S, s, i, d, role, consult=None) -> dict:
         hist.append(f"review {k} ({H:g} h): {dec or '?'}" + (f" - {a.get('note')}" if a.get("note") else "") + (f" [refused: {'; '.join(notes)}]" if notes else ""))
         if sim.end: break
     if not sim.end: sim.run_to(F["n"] - 1)
-    rec = {"i": i, "hid": hid, "state": "done", "role": E3_VERSION, "model": SONNET, "at": BT._now(), "R": round(sim.locked, 6),
+    rec = {"i": i, "hid": hid, "state": "done", "role": e3_version(sched), "model": SONNET, "schedule": sched, "at": BT._now(), "R": round(sim.locked, 6),
            "end": list(sim.end) if sim.end else None, "entry_pct": reviews[0]["block"].get("entry", {}).get("pct", 100) if isinstance(reviews[0]["block"].get("entry"), dict) else 100,
            "peak_open": round(sim.peak_open, 4), "gross": round(sim.gross, 4), "reviews": reviews}
     BA._write(os.path.join(d, f"{hid}.json"), rec); return rec
@@ -632,7 +651,8 @@ def summary_e3(cfg, sid, name) -> dict:
     ends = {}
     for r in rows: ends[r["end"]] = ends.get(r["end"], 0) + 1
     nrev = sum(r["n_rev"] for r in rows); nchg = sum(r["n_chg"] for r in rows)
-    summ = {"name": name, "kind": "e3", "title": "Experiment E3 - every signal taken, managed by the advisor (its own entry plan, reviews at 1/2/3/4 h then every 12 h), Sonnet",
+    sched = next((json.load(open(os.path.join(d, f"{s['ids'][i]}.json"))).get("schedule") for i in range(s["n"]) if os.path.exists(os.path.join(d, f"{s['ids'][i]}.json"))), None) or "h1234"
+    summ = {"name": name, "kind": "e3", "title": f"Experiment {name.upper()} - every signal taken, managed by the advisor (its own entry plan; reviews {SCHED_TEXT[sched]}), Sonnet",
             "version": E3_VERSION, "sid": sid, "at": BT._now(), "answered": len(rows), "total": s["n"], "failed": failed,
             "notes": "Compared with taking every signal raw (in at the signal, out at TP2 or the stop). The only limit was a 200% open position. "
                      "Model cost. These cards were revealed before - a hint to confirm on fresh Test signals.",
@@ -645,10 +665,11 @@ def summary_e3(cfg, sid, name) -> dict:
     BA._write(os.path.join(d, "summary.json"), summ); return summ
 
 
-def run_kind(cfg: dict, sid: str, name: str, kind: str, parallel: int, consult=None, log=print) -> None:
+def run_kind(cfg: dict, sid: str, name: str, kind: str, parallel: int, consult=None, log=print, sched: str = "h1234") -> None:
     if kind == "e1": return run(cfg, sid, name, parallel, consult, log)
     S = BT.store(cfg); s = BT.load_session(cfg, sid); d = exp_dir(cfg, sid, name)
-    role, fn, summ = (role_e2(), consult_e2, summary_e2) if kind == "e2" else (role_e3(), manage_e3, summary_e3)
+    if kind == "e2": role, fn, summ = role_e2(), consult_e2, summary_e2
+    else: role, summ = role_e3(sched), summary_e3; fn = lambda *a: manage_e3(*a, sched=sched)
     todo = []
     for i in range(s["n"]):
         try: ok = json.load(open(os.path.join(d, f"{s['ids'][i]}.json"))).get("state") == "done"
@@ -668,9 +689,16 @@ def run_kind(cfg: dict, sid: str, name: str, kind: str, parallel: int, consult=N
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--config", default=r"C:\ProgramData\hybrid\live\live_config.json")
-    ap.add_argument("--sid", required=True); ap.add_argument("--name", default="e1"); ap.add_argument("--parallel", type=int, default=8)
-    ap.add_argument("--kind", default="e1", choices=("e1", "e2", "e3")); ap.add_argument("--summary-only", action="store_true"); a = ap.parse_args()
+    ap.add_argument("--sid", default=""); ap.add_argument("--fresh", default="", help="draw a fresh experiment-only Test session of this group")
+    ap.add_argument("--n", type=int, default=0); ap.add_argument("--name", default="e1"); ap.add_argument("--parallel", type=int, default=8)
+    ap.add_argument("--kind", default="e1", choices=("e1", "e2", "e3")); ap.add_argument("--sched", default="h1234", choices=tuple(SCHEDULES))
+    ap.add_argument("--summary-only", action="store_true"); a = ap.parse_args()
     cfg = json.load(open(a.config))
     if not re.fullmatch(r"[a-z0-9_]{1,24}", a.name): sys.exit("bad experiment name")
-    if a.summary_only: {"e1": write_summary, "e2": summary_e2, "e3": summary_e3}[a.kind](cfg, a.sid, a.name)
-    else: run_kind(cfg, a.sid, a.name, a.kind, a.parallel, log=lambda m: print(m, flush=True))
+    sid = a.sid
+    if a.fresh:
+        r = BT.experiment_session(cfg, a.fresh, research_lock(cfg), a.n or None); sid = r["sid"]
+        print(f"fresh experiment session {sid}: {r['n']} {a.fresh} Test cards (shortfall {r['shortfall']})", flush=True)
+    if not sid: sys.exit("--sid or --fresh")
+    if a.summary_only: {"e1": write_summary, "e2": summary_e2, "e3": summary_e3}[a.kind](cfg, sid, a.name)
+    else: run_kind(cfg, sid, a.name, a.kind, a.parallel, log=lambda m: print(m, flush=True), sched=a.sched)

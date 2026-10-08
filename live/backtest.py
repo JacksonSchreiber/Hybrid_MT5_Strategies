@@ -237,6 +237,27 @@ def start(cfg: dict, group: str, mode: str, lock: dict, n_override=None) -> dict
     return {"sid": sid, "n": s["n"], "seed": seed, "group": group, "mode": mode, "shortfall": r["shortfall"]}
 
 
+def experiment_session(cfg: dict, group: str, lock: dict, n=None) -> dict:
+    """trader 2026-10-08: a FRESH Test draw for an advisor experiment - the same sampler and exclusions as a Test session, the ids go
+    into the Test ledger at once (spent: one pass per signal ever), the trader never plays it (advisor_only_from 0, experiment_only) and
+    no Test advisor batch is queued; its experiments (live/backtest_experiment.py) show on its end page."""
+    if group not in SIZES: raise ValueError("unknown group")
+    S = store(cfg); seed = secrets.randbelow(10 ** 9); n = int(n or TEST_SIZES[group]); menu = S["menu"]; frozen = menu.get("frozen") or {}
+    with _LOCK:
+        excl = set(load_ledger(cfg)["ids"]) | practice_shadow(cfg, S, group)
+        r = sample_session(S["split"], group, "test", n, seed, lock, S["eligible"], exclude=excl)
+        if not r["ids"]: raise ValueError("no signals left to draw for this group")
+        sid = secrets.token_hex(6)
+        s = {"sid": sid, "group": group, "mode": "test", "seed": seed, "n": len(r["ids"]), "n_target": n, "shortfall": r["shortfall"],
+             "created": _now(), "menu": menu["version"], "menu_frozen_at": frozen.get("at"), "ids": r["ids"], "pos": 0, "shown": {},
+             "decisions": [], "commits": {}, "adv_loaded": {}, "block": BLOCK, "block_ok": {}, "advisor_only_from": 0, "advisor_only_at": _now(),
+             "experiment_only": True}
+        led = load_ledger(cfg); led["ids"] += r["ids"]
+        led["sessions"].append({"sid": sid, "group": group, "n": len(r["ids"]), "at": _now(), "menu": menu["version"], "seed": seed, "experiment": True})
+        _save_ledger(cfg, led); save_session(cfg, s)
+    return {"sid": sid, "n": s["n"], "group": group, "shortfall": r["shortfall"]}
+
+
 def _top_up_advisor(cfg, s, S) -> None:
     """keep the blind batch about ADVISOR_AHEAD cards ahead of the trader's position (never fatal - the ids are spent)."""
     try:
@@ -310,7 +331,7 @@ def list_sessions(cfg: dict) -> list:
         except (OSError, ValueError): continue
         hide = s["mode"] == "test" and not trader_done(s)                    # Test: nothing revealed until the trader's last card
         out.append({"sid": s["sid"], "group": s["group"], "mode": s["mode"], "created": s["created"], "n": s["n"], "done": len(s["decisions"]), "block": s.get("block"),
-                    "tally": None if hide else tally(s), "advisor_only": s.get("advisor_only_from")})
+                    "tally": None if hide else tally(s), "advisor_only": s.get("advisor_only_from"), "experiment": bool(s.get("experiment_only"))})
     return sorted(out, key=lambda x: x["created"], reverse=True)[:50]
 
 
@@ -401,7 +422,7 @@ def _advisor_only(cfg, S, s) -> dict | None:
     """the advisor alone on the cards the trader handed over: its blind verdict + v1 plan, graded like the advisor-alone column
     (a TAKE whose stack was rejected = Minimal), overall, per block and card by card."""
     a0 = s.get("advisor_only_from")
-    if a0 is None: return None
+    if a0 is None or s.get("experiment_only"): return None          # an experiment-only draw has no Test advisor batch
     from live import backtest_advisor as BA
     b = s.get("block") or 10 ** 9; rows, cards, failed = [], [], 0
     for i in range(a0, s["n"]):

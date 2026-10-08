@@ -35,7 +35,7 @@
       <div class="bt-scroll"><table class="bt-tbl">
         <thead><tr><th>Started</th><th>Group</th><th>Mode</th><th>Done</th><th>Your R</th><th>Raw</th><th>vs raw</th><th></th></tr></thead>
         <tbody><template x-for="s in sessions" :key="s.sid"><tr>
-          <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.mode === 'test' ? 'Test' : 'Practice'"></td><td x-text="s.done + ' / ' + s.n + (s.advisor_only !== null && s.advisor_only !== undefined ? ' + advisor' : '')"></td>
+          <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.mode === 'test' ? 'Test' : 'Practice'"></td><td x-text="s.experiment ? ('experiment · ' + s.n + ' cards') : (s.done + ' / ' + s.n + (s.advisor_only !== null && s.advisor_only !== undefined ? ' + advisor' : ''))"></td>
           <td :class="s.tally ? cls(s.tally.R_choice) : ''" x-text="s.tally ? fmt(s.tally.R_choice) : 'hidden'"></td><td :class="s.tally ? cls(s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_raw) : '-'"></td>
           <td :class="s.tally ? cls(s.tally.R_choice - s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_choice - s.tally.R_raw) : '-'"></td>
           <td class="bt-actions"><sl-button size="small" x-show="s.done < s.n" @click="resume(s.sid)" x-text="s.advisor_only != null ? 'Results' : 'Resume'"></sl-button>
@@ -323,7 +323,7 @@
   <div class="card bt-done">
     <h2 x-text="C.mode === 'test' ? 'Test session finished - the results' : 'Session finished'"></h2>
     <h3 class="bt-gh" x-show="summary && summary.advisor_only" x-text="'You (cards 1-' + (summary && summary.advisor_only ? summary.advisor_only.from : '') + ')'"></h3>
-    <template x-if="summary && summary.grading">
+    <template x-if="summary && summary.grading && summary.grading.trader_alone && summary.grading.trader_alone.n">
       <div class="bt-scroll"><table class="bt-tbl bt-grade">
         <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
         <tbody><template x-for="row in gradeRows()"><tr>
@@ -405,7 +405,7 @@
             <td :class="(X.card_table.cols[ci].r ? cls(v) : '') + (X.card_table.cols[ci].w ? ' bt-why' : '')" x-text="X.card_table.cols[ci].r ? (v === null || v === '' ? '-' : fmt(v)) : (v === null ? '' : v)"></td></template></tr></template></tbody></table></div></template>
       </div>
     </template>
-    <div class="bt-row bt-tally">
+    <div class="bt-row bt-tally" x-show="C.tally && C.tally.decided">
       <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
       <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
       <span class="bt-pill">vs raw <b :class="cls(C.tally.R_choice - C.tally.R_raw)" x-text="fmt(C.tally.R_choice - C.tally.R_raw)"></b></span>
