@@ -15,7 +15,7 @@ RUN (on the box, from C:/ProgramData/hybrid/live; NOT during a deploy - a deploy
 PARALLEL: each card is its own fresh consult (its own claude process + bundle folder); 8 at a time because the box has 8 GB and runs MT5.
 """
 from __future__ import annotations
-import argparse, concurrent.futures as cf, json, os, re, sys, threading, time, uuid
+import argparse, collections, concurrent.futures as cf, json, gzip, os, random, re, secrets, sys, threading, time, uuid
 from live import backtest as BT, backtest_advisor as BA, backtest_engine as E
 
 E1_VERSION = "experiment E1 take-raw + 1R plan (2026-10-08)"
@@ -78,7 +78,9 @@ Keep it short. Do not write files.
 
 def _job(S: dict, s: dict, i: int) -> dict:
     """the same blind job the Test batch writes (backtest_advisor.queue_session) - the card only, a fresh random bundle folder."""
-    g = s["group"]; info = S["info"]["groups"][g]; menu = S["menu"]; dfl = menu["defaults"][g]; hid = s["ids"][i]
+    hid = s["ids"][i]; g = (s.get("groups") or {}).get(hid) or s["group"]
+    info = S["info"]["groups"].get(g) or {"name": GROUP_NAME.get(g, g), "lines": []}; menu = S["menu"]
+    dfl = menu["defaults"].get(g) or {"label": "-", "about": "-", "cfg": None}
     c = dict(S["cards"][hid]); c.pop("hid", None)
     return {"i": i, "hid": hid, "bundle": uuid.uuid4().hex[:16], "group_name": info["name"], "card": c, "info_lines": info["lines"],
             "preload": {"label": dfl["label"], "about": dfl["about"], "cfg": dfl["cfg"]},
@@ -218,6 +220,98 @@ def list_summaries(cfg: dict, sid: str) -> list:
 
 
 
+# ============================================================================================ the experiment pool + mixed draws
+# trader 2026-10-08: "out of all the symbols possible to trade, pick 100 random ones" - the tab's two groups (Test partition) plus the
+# experiment-only pool (pipeline/backtest_exp_pool.py: US100, US500, XAUUSD, USOIL, USDJPY), drawn symbol by symbol (each draw picks a
+# symbol at random, then one of its unused signals), the advisor told only the group and common-knowledge notes about it.
+GROUP_NAME = {g[0]: g[1] for g in __import__("live.symbol_groups", fromlist=["GROUPS"]).GROUPS}
+GENERIC_NOTES = {       # common market knowledge, written 2026-10-08 - nothing measured on our data, no rates, no symbols
+    "com": ["Currencies of commodity-exporting economies (Australia, New Zealand, Canada), against each other and against the US dollar.",
+            "Moved by commodity prices, demand from China, global risk appetite, their own central banks and big US data releases."],
+    "maj": ["The most heavily traded currency pairs against the US dollar; very deep liquidity.",
+            "Moved by central-bank policy and the big US and European data releases; they tend to move in broad multi-week swings around those."],
+    "idx": ["US stock indices. They have risen over the long run, with occasional sharp sell-offs; volatility jumps when they fall.",
+            "Moved by US data, the Federal Reserve and earnings seasons; most active in the US session."],
+    "met": ["Precious metals priced in US dollars. Safe-haven and inflation-hedge demand.",
+            "Moved by real interest rates, the dollar and risk sentiment; they can trend for long stretches and spike on news."],
+    "jpy": ["The Japanese yen against other currencies - a funding and safe-haven currency.",
+            "It tends to weaken in calm, risk-on markets and strengthen sharply in risk-off moves; moved by the Bank of Japan, interest-rate gaps and intervention risk."],
+    "one": ["Instruments that belong to no group (crude oil, bitcoin); each moves on its own drivers.",
+            "Supply news, inventories and producer decisions for oil; flows and sentiment for crypto. Both can move fast."]}
+MIN_FREE_GB = 1.5       # 32 consults at once on an 8 GB box that runs MT5: a new consult waits while free memory is below this
+
+
+def _free_gb() -> float:
+    try:
+        if os.name == "nt":
+            import ctypes
+            class MS(ctypes.Structure):
+                _fields_ = [("l", ctypes.c_ulong), ("load", ctypes.c_ulong), ("tot", ctypes.c_ulonglong), ("avail", ctypes.c_ulonglong),
+                            ("tp", ctypes.c_ulonglong), ("ap", ctypes.c_ulonglong), ("tv", ctypes.c_ulonglong), ("av", ctypes.c_ulonglong), ("x", ctypes.c_ulonglong)]
+            m = MS(); m.l = ctypes.sizeof(MS); ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)); return m.avail / 2 ** 30
+        for ln in open("/proc/meminfo"):
+            if ln.startswith("MemAvailable:"): return int(ln.split()[1]) / 2 ** 20
+    except Exception: pass
+    return 99.0
+
+
+def wait_for_memory() -> None:
+    while _free_gb() < MIN_FREE_GB: time.sleep(5)
+
+
+class _Multi:
+    def __init__(self, *frs): self.frs = [f for f in frs if f is not None]
+    def get(self, hid):
+        for f in self.frs:
+            if hid in f.idx: return f.get(hid)
+        raise KeyError(hid)
+
+
+_XS: dict = {}
+def store_x(cfg: dict) -> dict:
+    """the tab's store + the experiment pool (when uploaded): cards, results and frames for every id an experiment session can hold."""
+    S = BT.store(cfg); d = os.path.join(os.path.dirname(os.path.abspath(BT.data_dir(cfg))), "backtest_pool"); pj = os.path.join(d, "pool.json")
+    if not os.path.exists(pj): return dict(S, pool={}, S=S)
+    key = (id(S), os.path.getmtime(pj))
+    if _XS.get("key") != key:
+        pc = json.load(gzip.open(os.path.join(d, "cards.json.gz")))["cards"]; pr = json.load(gzip.open(os.path.join(d, "results.json.gz")))["trades"]
+        _XS.clear(); _XS.update(key=key, val=dict(S, cards=collections.ChainMap(pc, S["cards"]), results=collections.ChainMap(pr, S["results"]),
+                                                  frames=_Multi(E.Frames(os.path.join(d, "frames")), S["frames"]), pool=json.load(open(pj))["trades"], S=S))
+    return _XS["val"]
+
+
+def sym_of(XS: dict, hid: str) -> str:
+    t = XS["S"]["split"]["trades"].get(hid)
+    return t["key"][0].split(".")[0] if t else XS["pool"][hid]["sym"]
+
+
+def mixed_session(cfg: dict, lock: dict, n: int = 100) -> dict:
+    XS = store_x(cfg); S = XS["S"]; led = BT.load_ledger(cfg); used = set(led["ids"]); by = collections.defaultdict(list)
+    for g in ("com", "maj"):                                    # the tab's groups: unspent Test ids (the same exclusions as a Test draw)
+        shadow = BT.practice_shadow(cfg, S, g)
+        for h, t in S["split"]["trades"].items():
+            if t["group"] == g and t["part"] == "test" and h in S["eligible"] and not BT.locked(t, lock) and h not in used and h not in shadow:
+                by[t["key"][0].split(".")[0]].append((h, g))
+    for h, m in XS["pool"].items():                            # the pool: the research lock re-checked here, never an id used before
+        if m["sym"] in lock["locked"] or (m["year"] >= lock["period_from"] and m["sym"] not in lock["exposed"]) or h in used: continue
+        by[m["sym"]].append((h, m["group"]))
+    rng = random.Random(secrets.randbits(64)); ids, groups = [], {}
+    while len(ids) < n and by:
+        sym = rng.choice(sorted(by)); lst = by[sym]; h, g = lst.pop(rng.randrange(len(lst))); ids.append(h); groups[h] = g
+        if not lst: del by[sym]
+    with BT._LOCK:
+        sid = secrets.token_hex(6); menu = S["menu"]
+        s = {"sid": sid, "group": "mixed", "groups": groups, "notes": "generic", "mode": "test", "seed": None, "n": len(ids), "n_target": n,
+             "shortfall": {}, "created": BT._now(), "menu": menu["version"], "menu_frozen_at": (menu.get("frozen") or {}).get("at"), "ids": ids,
+             "pos": 0, "shown": {}, "decisions": [], "commits": {}, "adv_loaded": {}, "block": BT.BLOCK, "block_ok": {}, "advisor_only_from": 0,
+             "advisor_only_at": BT._now(), "experiment_only": True}
+        led = BT.load_ledger(cfg); led["ids"] += ids
+        led["sessions"].append({"sid": sid, "group": "mixed", "n": len(ids), "at": BT._now(), "menu": menu["version"], "experiment": True})
+        BT._save_ledger(cfg, led); BT.save_session(cfg, s)
+    per = collections.Counter(sym_of(XS, h) for h in ids)
+    return {"sid": sid, "n": len(ids), "per_symbol": dict(sorted(per.items()))}
+
+
 # ============================================================================================ display (all experiments, raw only)
 def _tbl(cols, rows): return {"cols": cols, "rows": rows}
 
@@ -254,7 +348,8 @@ def plain_notes(S: dict, group: str) -> list:
 
 
 def _plain_job(S, s, i, token=None) -> dict:
-    j = _job(S, s, i); j["plain_notes"] = plain_notes(S, s["group"])
+    j = _job(S, s, i); g = (s.get("groups") or {}).get(j["hid"]) or s["group"]
+    j["plain_notes"] = GENERIC_NOTES[g] if s.get("notes") == "generic" else plain_notes(S, g)
     if token: j["bundle"] = token
     return j
 
@@ -298,6 +393,7 @@ def consult_e2(cfg, S, s, i, d, role, consult=None) -> dict:
     job = _plain_job(S, s, i); bd = BA.write_bundle(cfg, job, role); last = None
     prompt = role + "\n\n---\n\nRead the blind card in your working folder and answer exactly in the shape above."
     for att in range(3):
+        wait_for_memory()
         r = (consult or BA.call_claude)(cfg, prompt, _sonnet(cfg), None, bd)
         if r.get("ok"): break
         last = r.get("error"); time.sleep(20 * (att + 1))
@@ -561,6 +657,7 @@ def manage_e3(cfg, S, s, i, d, role, consult=None, sched: str = "h1234") -> dict
     def ask(prompt):
         last = None
         for att in range(3):
+            wait_for_memory()
             r = (consult or BA.call_claude)(cfg, prompt, st, None, bd)
             if r.get("ok"): return r
             last = r.get("error"); time.sleep(15 * (att + 1))
@@ -633,7 +730,7 @@ Sim.apply_entry = _apply_entry
 
 
 def summary_e3(cfg, sid, name) -> dict:
-    S = BT.store(cfg); s = BT.load_session(cfg, sid); d = exp_dir(cfg, sid, name); b = s.get("block") or 20
+    S = store_x(cfg); s = BT.load_session(cfg, sid); d = exp_dir(cfg, sid, name); b = s.get("block") or 20; mixed = bool(s.get("groups"))
     rows, failed = [], 0
     for i in range(s["n"]):
         hid = s["ids"][i]
@@ -642,32 +739,39 @@ def summary_e3(cfg, sid, name) -> dict:
         if rec.get("state") != "done": failed += 1; continue
         c = S["cards"][hid]; R = S["results"][hid]; rv = rec["reviews"]
         rows.append({"i": i, "card": i + 1, "sig": f"{c.get('detector')} · {c.get('direction')}", "entry": rec.get("entry_pct", 100), "R": rec["R"],
+                     "group": c.get("group"), "sym": sym_of(S, hid) if mixed else "",
                      "R_raw": R["R"]["raw"], "n_rev": len(rv) - 1, "n_chg": sum(1 for x in rv[1:] if x.get("changed")), "end": (rec.get("end") or ["?"])[0],
                      "peak": rec.get("peak_open"), "note": next((x["block"].get("note") for x in reversed(rv) if x.get("block", {}).get("note")), "") or (rv[-1].get("why") or "")})
-    def part(lo, hi):
-        xs = [r for r in rows if lo <= r["i"] < hi]; dd = [r["R"] - r["R_raw"] for r in xs]
-        return [f"{lo + 1}-{hi}", len(xs), round(sum(r["R_raw"] for r in xs), 3), round(sum(r["R"] for r in xs), 3), round(sum(dd), 3), _t(dd),
+    def part(lo, hi, label=None, pick=None):
+        xs = [r for r in rows if (pick(r) if pick else lo <= r["i"] < hi)]; dd = [r["R"] - r["R_raw"] for r in xs]
+        return [label or f"{lo + 1}-{hi}", len(xs), round(sum(r["R_raw"] for r in xs), 3), round(sum(r["R"] for r in xs), 3), round(sum(dd), 3), _t(dd),
                 round(sum(r["entry"] for r in xs) / len(xs), 0) if xs else None]
+    if mixed:                                            # a draw across groups: by group and by symbol instead of by block
+        spans_rows = [part(0, s["n"], "All")] + [part(0, 0, g, (lambda r, g=g: r["group"] == g)) for g in sorted({r["group"] for r in rows})] \
+                     + [part(0, 0, y, (lambda r, y=y: r["sym"] == y)) for y in sorted({r["sym"] for r in rows})]
+    else: spans_rows = [part(lo, hi) for lo, hi in _spans(s["n"], b)]
     ends = {}
     for r in rows: ends[r["end"]] = ends.get(r["end"], 0) + 1
     nrev = sum(r["n_rev"] for r in rows); nchg = sum(r["n_chg"] for r in rows)
     sched = next((json.load(open(os.path.join(d, f"{s['ids'][i]}.json"))).get("schedule") for i in range(s["n"]) if os.path.exists(os.path.join(d, f"{s['ids'][i]}.json"))), None) or "h1234"
-    summ = {"name": name, "kind": "e3", "title": f"Experiment {name.upper()} - every signal taken, managed by the advisor (its own entry plan; reviews {SCHED_TEXT[sched]}), Sonnet",
+    summ = {"name": name, "kind": "e3", "title": f"Experiment {name.upper()} - every signal taken, managed by the advisor (its own entry plan; reviews {SCHED_TEXT[sched]}), Sonnet"
+                     + (" - 100 random signals across all tradable groups (common-knowledge group notes only)" if mixed else ""),
             "version": E3_VERSION, "sid": sid, "at": BT._now(), "answered": len(rows), "total": s["n"], "failed": failed,
             "notes": "Compared with taking every signal raw (in at the signal, out at TP2 or the stop). The only limit was a 200% open position. "
                      "Model cost. These cards were revealed before - a hint to confirm on fresh Test signals.",
             "lines": [f"Reviews: {nrev} in all, {nchg} changed something. Exits: " + ", ".join(f"{k} {v}" for k, v in sorted(ends.items(), key=lambda x: -x[1])) + "."],
-            "table": _tbl([{"h": "Cards"}, {"h": "Trades"}, {"h": "Every signal raw", "r": 1}, {"h": "Managed by the advisor", "r": 1},
-                           {"h": "Difference", "r": 1}, {"h": "t"}, {"h": "Average entry size %"}], [part(lo, hi) for lo, hi in _spans(s["n"], b)]),
-            "card_table": _tbl([{"h": "Card"}, {"h": "Signal"}, {"h": "Entry %"}, {"h": "Reviews (changed)"}, {"h": "Raw R", "r": 1}, {"h": "Managed R", "r": 1},
-                                {"h": "How it ended"}, {"h": "Its last note", "w": 1}],
-                               [[r["card"], r["sig"], r["entry"], f"{r['n_rev']} ({r['n_chg']})", r["R_raw"], round(r["R"], 4), r["end"], r["note"]] for r in rows])}
+            "table": _tbl([{"h": "Group / symbol" if mixed else "Cards"}, {"h": "Trades"}, {"h": "Every signal raw", "r": 1}, {"h": "Managed by the advisor", "r": 1},
+                           {"h": "Difference", "r": 1}, {"h": "t"}, {"h": "Average entry size %"}], spans_rows),
+            "card_table": _tbl(([{"h": "Card"}, {"h": "Group"}, {"h": "Symbol"}] if mixed else [{"h": "Card"}]) + [{"h": "Signal"}, {"h": "Entry %"}, {"h": "Reviews (changed)"},
+                                {"h": "Raw R", "r": 1}, {"h": "Managed R", "r": 1}, {"h": "How it ended"}, {"h": "Its last note", "w": 1}],
+                               [([r["card"], r["group"], r["sym"]] if mixed else [r["card"]]) + [r["sig"], r["entry"], f"{r['n_rev']} ({r['n_chg']})", r["R_raw"],
+                                 round(r["R"], 4), r["end"], r["note"]] for r in rows])}
     BA._write(os.path.join(d, "summary.json"), summ); return summ
 
 
 def run_kind(cfg: dict, sid: str, name: str, kind: str, parallel: int, consult=None, log=print, sched: str = "h1234") -> None:
     if kind == "e1": return run(cfg, sid, name, parallel, consult, log)
-    S = BT.store(cfg); s = BT.load_session(cfg, sid); d = exp_dir(cfg, sid, name)
+    S = store_x(cfg); s = BT.load_session(cfg, sid); d = exp_dir(cfg, sid, name)
     if kind == "e2": role, fn, summ = role_e2(), consult_e2, summary_e2
     else: role, summ = role_e3(sched), summary_e3; fn = lambda *a: manage_e3(*a, sched=sched)
     todo = []
@@ -696,7 +800,10 @@ if __name__ == "__main__":
     cfg = json.load(open(a.config))
     if not re.fullmatch(r"[a-z0-9_]{1,24}", a.name): sys.exit("bad experiment name")
     sid = a.sid
-    if a.fresh:
+    if a.fresh == "mixed":
+        r = mixed_session(cfg, research_lock(cfg), a.n or 100); sid = r["sid"]
+        print(f"fresh mixed experiment session {sid}: {r['n']} signals, per symbol {r['per_symbol']}", flush=True)
+    elif a.fresh:
         r = BT.experiment_session(cfg, a.fresh, research_lock(cfg), a.n or None); sid = r["sid"]
         print(f"fresh experiment session {sid}: {r['n']} {a.fresh} Test cards (shortfall {r['shortfall']})", flush=True)
     if not sid: sys.exit("--sid or --fresh")
