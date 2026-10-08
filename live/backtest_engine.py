@@ -15,12 +15,17 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
     add_reach   {pct, at, within_h, stop}   add pct% when +at R is reached (within within_h hours of the entry; null = any time);
                                             its stop: a number in R (0 = entry) or "trade" = the ORIGINAL leg's current stop at
                                             that moment (moves with legs "all" or "original" count; "adds"-only moves do not)
-    add_bar     {pct, bar, early_at, hold_avg, stop[, wait_avg]}   add pct% at the bar-N close; early_at: go in early at the first
+    add_bar     {pct, bar, early_at, hold_avg, stop[, wait_avg]   add pct% at the bar-N close; early_at: go in early at the first
                                             +early_at R before that bar; hold_avg: hold the early add while the average R is below it
                                             and go in the first minute the average reaches it (still before the bar - at the bar close
                                             it goes in regardless; needs early_at); wait_avg (optional, trader 2026-10-06, independent
                                             of early_at): at the bar close, wait while the average R is below it and go in the first
                                             minute after the bar that the average reaches it (no deadline: never, if it never does)
+                [, risk_cap]                risk_cap (optional, trader 2026-10-07): when this card's add goes in (any of its fills), keep
+                                            the OPEN risk at or below risk_cap R - sum of size x (price in - stop) over the open legs, at
+                                            bid prices (no spread: a full entry at the signal stop = 1R); over it, every open leg's stop is
+                                            raised to one level S that brings it back to exactly risk_cap (tighten only); if S would be at
+                                            or above the price, the add is skipped
     add_tp1     {pct, min_R, stop}          add pct% when TP1 is reached (only if TP1 is above +min_R R and below TP2)
     cut_avg     {at_h, below}               close everything at at_h hours if the average R (the EA's AvgRSince: mean of the M1
                                             bid closes since the entry-bar open, against the card entry) is below `below`
@@ -35,8 +40,9 @@ PER MINUTE (the order of pipeline/backtest_presets.py's kernel, which this repro
   close; a wait_avg add whose average is still below its level starts waiting instead).
 KERNEL LIMITS: one M1 bar has no intrabar order - stops are checked first; an add and TP2 (or a bank) in the same minute both count;
 banks / TP2 fill exactly at the level; adds on a level fill at the level or the minute's open (whichever is worse) + model spread;
-stops fill at the stop or the open (whichever is worse); bar / held / waiting adds fill at the minute close; model spread only (no commission,
-swap or slippage); a trade still open at the frame end closes at the last close (box frames: 40 trading days).
+stops fill at the stop or the open (whichever is worse); bar / held / waiting adds fill at the minute close; a risk_cap raise takes effect
+from the next minute (stops are checked first); model spread only (no commission, swap or slippage); a trade still open at the frame end
+closes at the last close (box frames: 40 trading days).
 """
 from __future__ import annotations
 import json, math, zlib
@@ -55,12 +61,13 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
          bk_lvl, bk_pct, nbk,
          mv_when, mv_to, mv_legs, mv_src, nmv,
          ad_type, ad_lvl, ad_until, ad_k, ad_early, ad_hold, ad_pct, ad_stop, ad_trade, nad,
-         ct_type, ct_k, ct_thr, nct, ad_wait):
+         ct_type, ct_k, ct_thr, nct, ad_wait, ad_cap):
     """-> (R of the full ruled position, kind 0 stopped / 1 TP2 / 2 cut / 3 frame end / 4 banked out (everything open was banked:
     the trade ends that minute), exit minute, gross units entered, banks fired, adds fired, cut index or -1)."""
     nleg = 1 + nad
     ls = np.zeros(nleg); le = np.zeros(nleg); lst = np.zeros(nleg); alive = np.zeros(nleg, dtype=np.bool_)
-    ls[0] = F0; le[0] = e0; lst[0] = -1.0; alive[0] = True; nl = 1
+    lp = np.zeros(nleg); fxd = np.zeros(nleg, dtype=np.bool_)          # lp: each leg's price in without the spread (risk_cap)
+    ls[0] = F0; le[0] = e0; lst[0] = -1.0; alive[0] = True; nl = 1; lp[0] = e0 - eo[0]
     gross = F0; locked = 0.0; tstop = -1.0; cs = 0.0
     bk_done = np.zeros(max(nbk, 1), dtype=np.bool_); mv_done = np.zeros(max(nmv, 1), dtype=np.bool_)
     ad_done = np.zeros(max(nad, 1), dtype=np.bool_); ad_held = np.zeros(max(nad, 1), dtype=np.bool_)
@@ -107,33 +114,58 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                         tstop = v
         for a in range(nad):
             if ad_type[a] == 1:
+                px = -1e18                             # the price this bar add goes in at this minute (-1e18: it does not)
                 if (not ad_done[a]) and j < ad_k[a]:
                     if (not ad_held[a]) and bh[j] >= ad_early[a]:
                         if avg < ad_hold[a]:
                             ad_held[a] = True
                         else:
-                            sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
-                            if sz > 1e-12:
-                                ls[nl] = sz; le[nl] = (ad_early[a] if ad_early[a] > bo[j] else bo[j]) + eo[j]
-                                lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
-                            ad_done[a] = True
+                            px = ad_early[a] if ad_early[a] > bo[j] else bo[j]
                     elif ad_held[a] and avg >= ad_hold[a]:
-                        sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
-                        if sz > 1e-12:
-                            ls[nl] = sz; le[nl] = bc[j] + eo[j]
-                            lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
-                        ad_done[a] = True; ad_held[a] = False
+                        px = bc[j]
                 elif (not ad_done[a]) and ad_held[a] and j > ad_k[a] and avg >= ad_wait[a]:     # waiting since the bar close (wait_avg)
+                    px = bc[j]
+                if px > -1e17:                         # early / held / waiting
                     sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
                     if sz > 1e-12:
-                        ls[nl] = sz; le[nl] = bc[j] + eo[j]
-                        lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
+                        ls[nl] = sz; lp[nl] = px; le[nl] = px + eo[j]
+                        lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True
+                        ok = True
+                        if ad_cap[a] < 1e17:           # risk_cap: open risk over it -> one stop level S for every open leg
+                            rk = 0.0
+                            for q in range(nl + 1):
+                                if alive[q]: rk += ls[q] * (lp[q] - lst[q])
+                            if rk > ad_cap[a] + 1e-9:
+                                S = -1.0
+                                for q in range(nl + 1): fxd[q] = False
+                                for it in range(nl + 1):       # legs already at or above S stay put; solve again without them
+                                    nm = -ad_cap[a]; sw = 0.0
+                                    for q in range(nl + 1):
+                                        if alive[q]:
+                                            if fxd[q]: nm += ls[q] * (lp[q] - lst[q])
+                                            else: nm += ls[q] * lp[q]; sw += ls[q]
+                                    if sw <= 1e-12: break
+                                    S = nm / sw; ch = False
+                                    for q in range(nl + 1):
+                                        if alive[q] and (not fxd[q]) and lst[q] >= S: fxd[q] = True; ch = True
+                                    if not ch: break
+                                if S >= xc[j]:
+                                    ok = False             # the stop would have to sit at or above the price: no add
+                                else:
+                                    for q in range(nl + 1):
+                                        if alive[q] and S > lst[q]: lst[q] = S
+                                    if S > tstop: tstop = S
+                        if ok:
+                            nl += 1; gross += sz; naf += 1
+                        else:
+                            alive[nl] = False
                     ad_done[a] = True; ad_held[a] = False
             else:
                 if (not ad_done[a]) and j <= ad_until[a] and bh[j] >= ad_lvl[a]:
                     sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
                     if sz > 1e-12:
-                        ls[nl] = sz; le[nl] = (ad_lvl[a] if ad_lvl[a] > bo[j] else bo[j]) + eo[j]
+                        px = ad_lvl[a] if ad_lvl[a] > bo[j] else bo[j]
+                        ls[nl] = sz; lp[nl] = px; le[nl] = px + eo[j]
                         lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
                     ad_done[a] = True
         if tp2_on and xh[j] >= tp2_R:
@@ -158,8 +190,37 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                     continue
                 sz = ad_pct[a] if ad_pct[a] < cap - gross else cap - gross
                 if sz > 1e-12:
-                    ls[nl] = sz; le[nl] = bc[j] + eo[j]
-                    lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
+                    ls[nl] = sz; lp[nl] = bc[j]; le[nl] = bc[j] + eo[j]
+                    lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True
+                    ok = True
+                    if ad_cap[a] < 1e17:           # risk_cap: open risk over it -> one stop level S for every open leg
+                        rk = 0.0
+                        for q in range(nl + 1):
+                            if alive[q]: rk += ls[q] * (lp[q] - lst[q])
+                        if rk > ad_cap[a] + 1e-9:
+                            S = -1.0
+                            for q in range(nl + 1): fxd[q] = False
+                            for it in range(nl + 1):       # legs already at or above S stay put; solve again without them
+                                nm = -ad_cap[a]; sw = 0.0
+                                for q in range(nl + 1):
+                                    if alive[q]:
+                                        if fxd[q]: nm += ls[q] * (lp[q] - lst[q])
+                                        else: nm += ls[q] * lp[q]; sw += ls[q]
+                                if sw <= 1e-12: break
+                                S = nm / sw; ch = False
+                                for q in range(nl + 1):
+                                    if alive[q] and (not fxd[q]) and lst[q] >= S: fxd[q] = True; ch = True
+                                if not ch: break
+                            if S >= xc[j]:
+                                ok = False             # the stop would have to sit at or above the price: no add
+                            else:
+                                for q in range(nl + 1):
+                                    if alive[q] and S > lst[q]: lst[q] = S
+                                if S > tstop: tstop = S
+                    if ok:
+                        nl += 1; gross += sz; naf += 1
+                    else:
+                        alive[nl] = False
                 ad_done[a] = True; ad_held[a] = False
     v = locked
     for q in range(nl):
@@ -170,7 +231,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
 
 # ------------------------------------------------------------------------------------------------------------- config
 TYPES = {"bank": ("pct", "at", "tp1"), "move": ("to", "when", "tp1", "legs", "src"), "add_reach": ("pct", "at", "within_h", "stop"),
-         "add_bar": ("pct", "bar", "early_at", "hold_avg", "stop", "wait_avg"), "add_tp1": ("pct", "min_R", "stop"),
+         "add_bar": ("pct", "bar", "early_at", "hold_avg", "stop", "wait_avg", "risk_cap"), "add_tp1": ("pct", "min_R", "stop"),
          "cut_avg": ("at_h", "below"), "cut_unless": ("at_h", "reach")}
 
 
@@ -226,6 +287,8 @@ def validate(cfg: dict) -> tuple[dict, list[str]]:
             if d["hold_avg"] is not None and d["early_at"] is None: raise ValueError(f"lever {i + 1}: the hold needs an early add level")
             wa = c.get("wait_avg")                     # only written when set, so plans without it normalise exactly as before
             if wa not in (None, ""): d["wait_avg"] = _num(wa, -5, 50, "the bar-close wait average")
+            rc = c.get("risk_cap")                     # the same: only written when set
+            if rc not in (None, ""): d["risk_cap"] = _num(rc, 0.1, 10, "the risk cap")
         elif t == "add_tp1":
             d.update(pct=_num(c.get("pct"), 1, 200, "an add's %"), min_R=_num(c.get("min_R", 1.0), 0, 50, "the TP1 minimum"), stop=_stop(c.get("stop", 1.0), i))
         elif t == "cut_avg":
@@ -283,6 +346,7 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
     na = len(adds)
     ad_type = np.zeros(na, dtype=np.int64); ad_lvl = np.full(na, NEVER); ad_until = np.full(na, BEYOND, dtype=np.int64)
     ad_k = np.full(na, BEYOND, dtype=np.int64); ad_early = np.full(na, NEVER); ad_hold = np.full(na, -NEVER); ad_wait = np.full(na, -NEVER)
+    ad_cap = np.full(na, NEVER)
     ad_pct = np.zeros(na); ad_stop = np.zeros(na); ad_trade = np.zeros(na, dtype=np.bool_)
     for i, c in enumerate(adds):
         ad_pct[i] = c["pct"] / 100.0
@@ -293,6 +357,7 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
             if c["early_at"] is not None: ad_early[i] = c["early_at"]
             if c["hold_avg"] is not None: ad_hold[i] = c["hold_avg"]
             if c.get("wait_avg") is not None: ad_wait[i] = c["wait_avg"]
+            if c.get("risk_cap") is not None: ad_cap[i] = c["risk_cap"]
         elif c["type"] == "add_reach":
             ad_lvl[i] = c["at"]
             if c["within_h"] is not None: ad_until[i] = mark(ctx, c["within_h"])
@@ -305,7 +370,7 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
     return {"tp2_on": tp2_on, "tp2_R": tp2 if tp2 is not None else 0.0, "cap": cfg["cap_pct"] / 100.0, "F0": cfg["entry"]["pct"] / 100.0,
             "bk_lvl": bk_lvl, "bk_pct": bk_pct, "nbk": len(banks), "mv_when": mv_when, "mv_to": mv_to, "mv_legs": mv_legs, "mv_src": mv_src,
             "nmv": len(moves), "ad_type": ad_type, "ad_lvl": ad_lvl, "ad_until": ad_until, "ad_k": ad_k, "ad_early": ad_early,
-            "ad_hold": ad_hold, "ad_wait": ad_wait, "ad_pct": ad_pct, "ad_stop": ad_stop, "ad_trade": ad_trade, "nad": na,
+            "ad_hold": ad_hold, "ad_wait": ad_wait, "ad_cap": ad_cap, "ad_pct": ad_pct, "ad_stop": ad_stop, "ad_trade": ad_trade, "nad": na,
             "ct_type": ct_type, "ct_k": ct_k, "ct_thr": ct_thr, "nct": len(cuts)}
 
 
@@ -315,7 +380,7 @@ def run(fn, F: dict, ctx: dict, P: dict):
               P["tp2_on"], P["tp2_R"], P["cap"], P["F0"], P["bk_lvl"], P["bk_pct"], P["nbk"],
               P["mv_when"], P["mv_to"], P["mv_legs"], P["mv_src"], P["nmv"],
               P["ad_type"], P["ad_lvl"], P["ad_until"], P["ad_k"], P["ad_early"], P["ad_hold"], P["ad_pct"], P["ad_stop"], P["ad_trade"], P["nad"],
-              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"])
+              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"], P["ad_cap"])
 
 
 # ------------------------------------------------------------------------------------------------------------- box frames

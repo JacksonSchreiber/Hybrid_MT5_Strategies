@@ -12,7 +12,7 @@
   var PALETTE = [
     { name: 'Adds', items: [
       { type: 'add_reach', label: 'Add at a level', help: 'Add a share when the trade reaches +X R (optionally within N hours)', tpl: { pct: 75, at: 2.0, within_h: 24, stop: 0 } },
-      { type: 'add_bar', label: 'Add at a bar close', help: 'Add a share at the bar-N close (optionally early at +X R; optionally wait at the bar close while the average R is weak)', tpl: { pct: 75, bar: 6, early_at: null, hold_avg: null, stop: 'trade', wait_avg: null } },
+      { type: 'add_bar', label: 'Add at a bar close', help: 'Add a share at the bar-N close (optionally early at +X R; optionally wait at the bar close while the average R is weak; the total risk kept at or below 1R by default)', tpl: { pct: 75, bar: 6, early_at: null, hold_avg: null, stop: 'trade', wait_avg: null, risk_cap: 1.0 } },
       { type: 'add_tp1', label: 'Add at TP1', help: 'Add a share when TP1 is reached', tpl: { pct: 50, min_R: 1.0, stop: 1.0 } }] },
     { name: 'Take profit', items: [
       { type: 'bank', label: 'Bank a share', help: 'Bank a % of what is open at +X R', tpl: { pct: 25, at: 1.0, tp1: false } }] },
@@ -102,6 +102,11 @@
         else if (key === 'advisor_v1') { cfg = this.C.advisor_v1.plan; about = 'Advisor (its blind first plan): ' + this.C.advisor_v1.rationale;   // review 2 #13d
           post('/bt/adv_loaded', { sid: this.sess.sid, i: this.C.i }); }
         else { var p = this.menu.presets.filter(function (x) { return x.key === key; })[0]; cfg = p.cfg; about = p.about; }
+        if (key !== 'advisor' && key !== 'advisor_v1') {     // trader 2026-10-07: the 1R risk cap starts ticked on a menu plan's bar add too
+          cfg = clone(cfg); var capped = 0;
+          (cfg.levers || []).forEach(function (l) { if (l.type === 'add_bar' && !('risk_cap' in l)) { l.risk_cap = 1.0; capped++; } });
+          if (capped) about += ' · the 1R risk cap is ticked on its bar add (not part of the frozen preset - untick it for the preset as it was)';
+        }
         this.fromConfig(cfg); this.commit(); this.presetSel = key; this.presetAbout = about;   // ONE undoable step
         this.basePreset = key; this.histBase[this.hpos] = key;          // coach 2026-10-04: the preset the plan was loaded from (kept through later edits) = "loaded_preset"
         this.$nextTick(this.bindSort.bind(this));
@@ -121,6 +126,7 @@
       toggleEarly: function (L, ev) { if (ev.target.checked) { L.early_at = 1.0; } else { L.early_at = null; L.hold_avg = null; } this.commit(); },
       toggleHold: function (L, ev) { L.hold_avg = ev.target.checked ? 0.5 : null; this.commit(); },
       toggleWait: function (L, ev) { L.wait_avg = ev.target.checked ? 0.0 : null; this.commit(); },   // trader 2026-10-06: independent of the early add
+      toggleCap: function (L, ev) { L.risk_cap = ev.target.checked ? 1.0 : null; this.commit(); },    // trader 2026-10-07: on by default
       flip: function (L, k) { if (L[k] === null || L[k] === undefined) return; L[k] = L[k] === 0 ? 0 : -L[k]; this.commit(); },   // the +/- button: some phone number pads have no minus key
       setEntry: function (ev) { var v = parseFloat(ev.target.value); if (isFinite(v)) { this.plan.entry = v; this.commit(); } else ev.target.value = this.plan.entry; },
       setTp2: function (ev) { this.plan.tp2 = !!ev.target.checked; this.commit(); },
@@ -150,6 +156,7 @@
           if (l.type === 'move') { if (!(l.to >= -1)) { msgs.push({ level: 'dn', text: 'Lever ' + n + ': a stop can never go below -1R.' }); ok = false; }
             else if (l.to >= l.when) msgs.push({ level: 'warn', text: 'Lever ' + n + ': the new stop is at or above its trigger - it would close the trade at once.' }); }
           if ((l.type === 'add_reach' || l.type === 'add_bar' || l.type === 'add_tp1') && l.stop !== 'trade' && !(l.stop >= -1)) { msgs.push({ level: 'dn', text: 'Lever ' + n + ': a stop can never go below -1R.' }); ok = false; }
+          if (l.type === 'add_bar' && l.risk_cap != null && !(l.risk_cap >= 0.1 && l.risk_cap <= 10)) { msgs.push({ level: 'dn', text: 'Lever ' + n + ': the risk cap must be 0.1-10R.' }); ok = false; }
           if ((l.type === 'cut_avg' || l.type === 'cut_unless') && !(l.at_h >= 0.25)) { msgs.push({ level: 'dn', text: 'Lever ' + n + ': the cut time must be at least 15 minutes.' }); ok = false; }
         });
         var worst = Math.round((e + adds) * 100) / 100, over = worst > CAP + 1e-9;

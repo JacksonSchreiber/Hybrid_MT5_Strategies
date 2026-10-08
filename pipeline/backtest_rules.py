@@ -229,6 +229,30 @@ def unit_tests() -> bool:
     try: E.validate(W(0.5)); okw = True
     except ValueError: okw = False
     say(okw and "wait_avg" not in E.validate(W(None))[0]["levers"][0], "validation: wait_avg needs no early add; unset, it is left out of the normalised plan")
+    # risk_cap (trader 2026-10-07): when the bar add goes in, the open risk stays at or below the cap (every open leg's stop raised to one level)
+    K = lambda rc, stop="trade", pre=(), post=(): stack(list(pre) + [{"type": "add_bar", "pct": 75, "bar": 6, "early_at": None, "hold_avg": None,
+                                                                      "stop": stop, "risk_cap": rc}] + list(post), entry=25)
+    F, c = frame([(0.3, 0.6, 0.5)] * 1440 + [(-0.7, 0.5, -0.6), (-1.1, -0.6, -1.0)])     # in at +0.5R: 0.25 x 1 + 0.75 x 1.5 = 1.375R open
+    r0, r1 = E.evaluate(K(None), F, c), E.evaluate(K(1.0), F, c)
+    say(abs(r1["R"] + 1.0) < 1e-12 and r1["exit_j"] == 1440 and abs(r0["R"] + 1.375) < 1e-12,
+        f"risk_cap 1R: the add at +0.5R raises the stop to -0.625R, a stop-out loses {r1['R']:+.3f}R (without the cap {r0['R']:+.3f}R)")
+    F, c = frame([(-0.5, -0.1, -0.3)] * 1440 + [(-1.1, -0.2, -1.0)])
+    say(E.evaluate(K(None), F, c) == E.evaluate(K(1.0), F, c), "risk_cap: an add below entry (open risk under 1R) leaves the stop alone")
+    F, c = frame([(0.3, 0.6, 0.5)] * 1440 + [(0.4, 2.1, 2.0), (-0.7, 1.0, -0.6)])
+    r1 = E.evaluate(K(1.0, post=[{"type": "add_reach", "pct": 50, "at": 2.0, "within_h": None, "stop": "trade"}]), F, c)
+    exp = 0.25 * -0.625 + 0.75 * (-0.625 - 0.5) + 0.5 * (-0.625 - 2.0)
+    say(abs(r1["R"] - exp) < 1e-12, f"risk_cap: a later add with the trade's stop takes the raised stop: R {r1['R']:+.4f} (expected {exp:+.4f})")
+    F, c = frame([(-0.2, 0.5, 0.3)] * 100 + [(0.3, 1.1, 1.0)] + [(0.6, 1.6, 1.5)] * 1339 + [(-0.1, 1.5, 0.0)])
+    r1 = E.evaluate(K(1.0, stop=-1, pre=[{"type": "move", "to": 0.5, "when": 1.0, "tp1": False, "legs": "original", "src": "exit"}]), F, c)
+    say(abs(r1["R"] + 1.0) < 1e-12, f"risk_cap: a leg already above the level keeps its stop, the rest go to entry so the total is 1R: {r1['R']:+.3f}R")
+    F, c = frame([(-0.2, 0.5, 0.3)] * 100 + [(0.3, 3.1, 3.0)] + [(0.9, 1.5, 1.0)] * 1400)
+    pre = [{"type": "add_reach", "pct": 75, "at": 3.0, "within_h": None, "stop": 0}]
+    r0, r1 = E.evaluate(K(None, pre=pre), F, c), E.evaluate(K(1.0, pre=pre), F, c)
+    say(r0["adds"] == 2 and r1["adds"] == 1, "risk_cap: when the stop would have to sit above the price, the add is skipped")
+    try: E.validate(K(0.05)); bad = False
+    except ValueError: bad = True
+    say(bad and "risk_cap" not in E.validate(K(None))[0]["levers"][0] and E.validate(K(1))[0]["levers"][0]["risk_cap"] == 1.0,
+        "validation: risk_cap 0.1-10R; unset, it is left out of the normalised plan")
     # validation
     try: E.validate(stack([dict(ADD2), dict(ADD2)])); bad = False
     except ValueError: bad = True

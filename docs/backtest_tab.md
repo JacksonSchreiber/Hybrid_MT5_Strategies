@@ -52,6 +52,18 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
     - It is a new lever option, not a menu change, and was added before any Test session.
   - **+/- button** on the fields that can be negative (stop-move level and trigger, the hold / wait / cut averages), because some
     phone number pads have no minus key.
+  - **Risk cap on the bar add** (trader 2026-10-07, `add_bar.risk_cap`, R): when the add goes in (any of its fills: early, held,
+    bar close, waiting), the open risk is kept at or below the cap.
+    - Open risk = size x (price in - stop) summed over the open legs, at the price without the spread, so a full entry at the signal
+      stop = 1R. Over the cap, every open leg's stop is raised to one level that brings it back to exactly the cap (a leg already
+      above that level keeps its stop; never lowered). If that level would sit at or above the price, the add is skipped.
+    - Example: 25% at the signal, the 75% goes in at +0.5R with the trade's stop -> 0.25 x 1 + 0.75 x 1.5 = 1.375R, so every stop
+      goes to -0.625R (a stop-out then loses exactly 1R). An add at or below entry is never over 1R, so nothing moves.
+    - On by default at 1R: a new bar-add card from the palette, and also the "slow" preset when it is loaded (the trader chose
+      that). The frozen "slow" itself is unchanged: its menu results, R_presets and R_loaded are WITHOUT the cap, while the trader's
+      plan JSON shows `risk_cap` and R_choice includes it. Advisor plans load exactly as the advisor wrote them.
+    - Unset, it is left out of the normalised plan; the engine is identical without it (old vs new, every trade x every menu
+      plan + the wait/hold plans, 0 differences). A second new lever option before any Test session; not a menu change.
 
 ## Advisor recommendation (`advisor-levers/v1`)
 The advisor emits a fenced block:
