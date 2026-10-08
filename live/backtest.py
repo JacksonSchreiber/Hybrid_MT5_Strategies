@@ -17,11 +17,13 @@ be a later card's chart), and cards without the event calendar or a regime tag a
 2012). Cards file: cards_v2 (events as class + coarse timing only; v1 fingerprinted the symbol).
 Sizes: Practice 25 signals (coach 2026-10-06; was the Test sizes); Test commodity bloc 100, USD majors 35 (trader 2026-10-06: majors
 stay 35), taken in BLOCKS of 20 (coach 2026-10-06): after each block the session stops at a checkpoint (/bt/next_block starts the
-next one; leaving there and resuming later is fine) - nothing is revealed at a checkpoint either.
+next one; leaving there and resuming later is fine). At a checkpoint the trader sees the AGGREGATE grade (trader 2026-10-08,
+overriding the coach's "nothing at a checkpoint"): trader alone / advisor alone / combined for the block just finished and so far -
+no per-card result, chart or CSV row.
 TEST MODE (phase 3, 2026-10-05): a draw from the group's TEST partition; every Test id ever drawn goes into the ledger
 (<root>/web/backtest/test_ledger.json) at once and is never drawn again ("one pass per signal ever"; a session cannot be restarted,
 only resumed). Nothing is revealed during a Test session - no per-card result, no tally, no CSV rows, the session list shows no R -
-until its last card is decided; then the full report. Every Test card takes TWO steps (coach): the trader commits a plan + take/skip
+until its last card is decided (except the aggregate grade at each block checkpoint); then the full report. Every Test card takes TWO steps (coach): the trader commits a plan + take/skip
 (/bt/commit, immutable), only then the blind advisor's verdict + its v1 lever stack appear ("Advisor recommended", with its nearest
 preset; follow-up questions allowed - later versions count toward the combined result only), and the trader gives his final
 (/bt/decide). The advisor batch (live/backtest_advisor.py, run by the advisor runner) is queued when the session starts: one blind
@@ -220,6 +222,9 @@ def start(cfg: dict, group: str, mode: str, lock: dict, n_override=None) -> dict
         s = {"sid": sid, "group": group, "mode": mode, "seed": seed, "n": len(r["ids"]), "n_target": n, "shortfall": r["shortfall"],
              "created": _now(), "menu": menu["version"], "menu_frozen_at": frozen.get("at"), "ids": r["ids"], "pos": 0, "shown": {},
              "decisions": [], "commits": {}, "adv_loaded": {}, "block": BLOCK if mode == "test" else None, "block_ok": {}}
+        if mode == "test":                          # the advisor role this session starts on (an older session keeps v2 for its first block)
+            from live import backtest_advisor as BA
+            s["adv_role"] = BA.ROLE_VERSION
         if mode == "test":                          # the ledger takes the ids at once: a drawn Test signal is spent even if never decided
             led = load_ledger(cfg); led["ids"] += r["ids"]
             led["sessions"].append({"sid": sid, "group": group, "n": len(r["ids"]), "at": _now(), "menu": menu["version"], "seed": seed})
@@ -332,10 +337,11 @@ def card(cfg: dict, sid: str) -> dict:
             if s["mode"] == "test":                 # refreshed: an advisor v1 that arrived after the trader's final still counts
                 write_report(cfg, s, S); out["summary"] = load_summary(cfg, sid)
             return out
-        b = s.get("block")                          # Test blocks (coach 2026-10-06): a checkpoint before cards 21, 41, ... - no card, nothing revealed
+        b = s.get("block")                          # Test blocks (coach 2026-10-06): a checkpoint before cards 21, 41, ... - no card
         if b and i and i % b == 0 and str(i) not in s.get("block_ok", {}):
+            write_report(cfg, s, S); sm = load_summary(cfg, sid) or {}     # trader 2026-10-08: the aggregate grade (block + so far) only
             return {"block_break": True, "sid": sid, "mode": s["mode"], "group": s["group"], "i": i, "n": s["n"], "block": b, "blocks_done": i // b,
-                    "blocks": -(-s["n"] // b), "tally": {"decided": len(s["decisions"])}}
+                    "blocks": -(-s["n"] // b), "tally": {"decided": len(s["decisions"])}, "grading": sm.get("grading")}
         if str(i) not in s["shown"]: s["shown"][str(i)] = time.time(); save_session(cfg, s)
     if s["mode"] == "test": _top_up_advisor(cfg, s, S)     # review 2 #9: the batch runs ~10 cards ahead of the trader
     hid = s["ids"][i]; c = dict(S["cards"][hid]); c.pop("hid", None)      # no id before the decision
@@ -539,6 +545,7 @@ def _grade_inputs(cfg, S, s, d) -> dict:
         out.update(adv_graded=True, R_adv_alone=round(aR, 4), R_adv_alone_1pip=round(aR1, 4), adv_taken=vd == "TAKE", R_adv_plan=aP, adv_plan_graded=src)
     else: out.update(adv_graded=False, R_adv_alone="", R_adv_alone_1pip="", adv_taken="", R_adv_plan=None, adv_plan_graded="")
     out.update(adv_verdict=vd or "", adv_confidence=st.get("confidence", ""), adv_state=st.get("state", "") if s["mode"] == "test" else "",
+               adv_role=(st.get("role") or ("blind-backtest-advisor v2 (2026-10-05)" if st.get("state") == "done" else "")) if s["mode"] == "test" else "",
                R_minimal=R["R"]["minimal"], R_minimal_1pip=round(R["R"]["minimal"] - cost(gr.get("minimal", 1.0)), 4),
                reached_1R=bool(R["banked_1R"]), went_to_stop=bool((not R["banked_1R"]) and R["R"]["raw"] <= -0.9))
     return out
@@ -581,7 +588,7 @@ COLS = ["hid", "group", "detector", "direction", "mode", "seed", "menu_version",
        ["banked_1R", "hit_tp2", "first_decision", "first_config", "adv_v1_stack", "adv_nearest_preset", "R_adv_v1", "R_adv_nearest",
         "R_adv_latest", "adv_versions", "adv_loaded", "adv_final_unchanged", "skip_plan_invalid", "R_choice_1pip", "R_raw_1pip", "R_default_1pip",
         "R_first", "R_first_1pip", "adv_verdict", "adv_confidence", "R_adv_alone", "R_adv_alone_1pip", "adv_state", "adv_available_at_final",
-        "R_minimal", "R_minimal_1pip", "reached_1R", "went_to_stop", "adv_plan_graded"]
+        "R_minimal", "R_minimal_1pip", "reached_1R", "went_to_stop", "adv_plan_graded", "adv_role"]
 REPORT_HEADER = (f"# Backtest report - frames capped at {FRAME_CAP_DAYS} trading days after the entry (a trade still open then is closed at the "
                  f"last close); R at model cost (a lower bound - read the differences, not the levels); *_1pip columns = after +1 pip round "
                  f"trip (gross units x 1 pip / stop pips); comparison = the raw signal; grading comparator (R_default) = Minimal")
@@ -592,7 +599,7 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
     for d in s["decisions"]:
         d.update(_adv_cols(cfg, S, s, d["i"], d["hid"], d["plan"]))       # fresh: a late v1 still counts for the advisor-alone grade
         gi = _grade_inputs(cfg, S, s, d)
-        rows.append({**gi, "final_taken": d["decision"] == "take", "R_choice": d["R_choice"], "R_choice_1pip": d.get("R_choice_1pip", d["R_choice"]),
+        rows.append({**gi, "blk": d["i"] // (s.get("block") or 10 ** 9), "final_taken": d["decision"] == "take", "R_choice": d["R_choice"], "R_choice_1pip": d.get("R_choice_1pip", d["R_choice"]),
                      "R_final_plan": d["R_plan"] if d["decision"] == "take" else None, "R_raw": d["R_raw"], "R_raw_1pip": d.get("R_raw_1pip", d["R_raw"])})
         c = S["cards"][d["hid"]]; fst = d.get("first") or {}
         w.writerow([d["hid"], c["group"], c["detector"], c["direction"], s["mode"], s["seed"], s["menu"], d["decision"], d["decision_s"],
@@ -604,7 +611,7 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
                    + [d.get("plan_invalid") or "", d.get("R_choice_1pip", ""), d.get("R_raw_1pip", ""), d.get("R_default_1pip", "")]
                    + [gi["R_first"], gi["R_first_1pip"], gi["adv_verdict"], gi["adv_confidence"], gi["R_adv_alone"], gi["R_adv_alone_1pip"],
                       gi["adv_state"], d.get("adv_available", ""), gi["R_minimal"], gi["R_minimal_1pip"], gi["reached_1R"], gi["went_to_stop"],
-                      gi.get("adv_plan_graded", "")])
+                      gi.get("adv_plan_graded", ""), gi.get("adv_role", "")])
     rd = web_dir(cfg, "reports")
     tmp = os.path.join(rd, f"{s['sid']}.csv.tmp"); open(tmp, "w", newline="").write(buf.getvalue()); os.replace(tmp, os.path.join(rd, f"{s['sid']}.csv"))
     t = tally(s); n = max(1, t["decided"])
@@ -616,6 +623,13 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
                         "R_choice_per_signal": round(t["R_choice_1pip"] / n, 4), "R_raw_per_signal": round(t["R_raw_1pip"] / n, 4)},
             "frame_cap_days": FRAME_CAP_DAYS, "comparator": "minimal", "menu_frozen_at": s.get("menu_frozen_at"),
             "grading": {"trader_alone": _grade(rows, "trader"), "advisor_alone": _grade(rows, "advisor"), "combined": _grade(rows, "combined"),
+                        "by_block": [{"block": k + 1, "cards": f"{k * s['block'] + 1}-{min(s['n'], (k + 1) * s['block'])}",
+                                      "decided": sum(1 for r in rows if r["blk"] == k),
+                                      "adv_roles": sorted({r["adv_role"][23:25] for r in rows if r["blk"] == k and r.get("adv_role")}),
+                                      **{a: _grade([r for r in rows if r["blk"] == k], x) for a, x in
+                                         (("trader_alone", "trader"), ("advisor_alone", "advisor"), ("combined", "combined"))}}
+                                     for k in range(-(-s["n"] // s["block"]) if s.get("block") else 0)
+                                     if any(r["blk"] == k for r in rows)],
                         "definitions": "trader alone = the first commit (Practice: the final); advisor alone = its blind v1 verdict + v1 stack (a TAKE "
                                        "whose stack was rejected is graded with Minimal; cards without a blind verdict are left out of its "
                                        "grade); combined = the final. total_R vs_minimal = against every "

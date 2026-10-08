@@ -163,12 +163,15 @@ The advisor emits a fenced block:
     neighbour-year fill);
   - taken in **blocks of 20** (coach 2026-10-06). After cards 20, 40, ... the session stops at a checkpoint (`/bt/next_block`
     starts the next block; leaving there and resuming later is fine):
-    - nothing is revealed at a checkpoint;
+    - at a checkpoint the trader sees the AGGREGATE grade only (trader 2026-10-08, overriding the coach's "nothing at a checkpoint"):
+      trader alone / advisor alone / together for the block just finished, the session so far, and a by-block table (summary
+      `grading.by_block`). No per-card result, chart or CSV row. Coach flag: knowing the running score can change how the later
+      blocks are played (e.g. leaning on the advisor if it is ahead);
     - until the next block is started, the server refuses commits, decisions and advisor views for its first card;
     - bloc sessions are 5 blocks, majors sessions are 20 + 15;
   - every drawn id goes into `<root>/web/backtest/test_ledger.json` AT ONCE and is never drawn again ("one pass per signal ever");
   - a session cannot be restarted, only resumed.
-- **Nothing is revealed until the last card:** no per-card result, no tally, the session list shows "hidden", and the CSV holds the
+- **Nothing per card is revealed until the last card** (only the block totals at checkpoints): no per-card result, no tally, the session list shows "hidden", and the CSV holds the
   header only. Then the full report and the grade.
 - **Two steps on every Test card:**
   - `POST /bt/commit` records the first call (immutable). Only then the advisor's verdict, its v1 stack ("Advisor recommended", with
@@ -181,7 +184,14 @@ The advisor emits a fenced block:
     cards are decided (review 2). Each holds the BLIND card only: no symbol, date, outcome, results, combo data or commit.
   - Initial consults run in session order, follow-ups first, `max_parallel` at a time (default 2). A failure gets one retry after
     60 s, then the card is marked failed. A crash is recovered from the leftover `.running` files.
-  - Work dir: `<advisor live_dir>/../backtest/`, holding the role file CLAUDE.md, a deny-only `.claude/settings.json` (not load-bearing: `--restricted` ignores settings
+  - **Role v3 (trader 2026-10-08): a plan made for each signal.** Under v2 the advisor put the same ruthless-like plan on 18 of
+    its first 19 Test cards. v3 tells it to read the room on the card (swings / zone / EMAs against the stop, TP1, TP2; with the
+    trend or not; the event bucket) and set each lever from it, to treat the presets as starting points (card.md now lists their
+    exact levers), and to name the card feature behind each change in the rationale; `nearest_preset` is only a label.
+    - The role never changes inside a block: a Test session started before v3 (no `adv_role` stamp) keeps v2 for its first block
+      (`role_for`); each consult's role is in its status file and the CSV's `adv_role` column; `by_block` lists the roles per block.
+    - The parent work-dir CLAUDE.md is now a pointer only; the role is in the card's folder and on stdin.
+  - Work dir: `<advisor live_dir>/../backtest/`, holding a pointer CLAUDE.md, a deny-only `.claude/settings.json` (not load-bearing: `--restricted` ignores settings
     and the consult runs in a subfolder) and one
     folder per card, `bundles/<random token>/{CLAUDE.md, card.md, h4.png, d1.png, h4_bars.csv}`. The consult RUNS INSIDE that
     folder, and the prompt carries no session id, card number or path. The charts are rendered with `live/charts.py` from the

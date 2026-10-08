@@ -259,10 +259,18 @@
           self.maybePoll();
         });
       },
-      gradeRows: function () {
-        var g = this.summary && this.summary.grading; if (!g) return [];
+      gradeRows: function (g) {
+        g = g || (this.summary && this.summary.grading); if (!g) return [];
         return [['Your first call (you alone)', g.trader_alone], ['The advisor alone (its blind first plan)', g.advisor_alone], ['Your final (together)', g.combined]];
       },
+      brkTables: function () {        // trader 2026-10-08: at a Test checkpoint, the block just finished + the session so far (totals only)
+        var g = this.brk && this.brk.grading; if (!g) return [];
+        var bb = (g.by_block || []).filter(function (x) { return x.decided; }), last = bb[bb.length - 1], out = [];
+        if (last) out.push({ title: 'Block ' + last.block + ' (cards ' + last.cards + ')', g: last });
+        if (bb.length > 1) out.push({ title: 'So far (cards 1-' + this.brk.i + ')', g: g });
+        return out;
+      },
+      byBlock: function (g) { return ((g && g.by_block) || []).filter(function (x) { return x.decided; }); },
       pct: function (v) { return (v === null || v === undefined) ? '-' : Math.round(v * 100) + '%'; },
       devInject: function () {
         var self = this;

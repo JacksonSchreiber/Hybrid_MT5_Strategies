@@ -13,7 +13,7 @@ retried once after 60 s, then the card is marked failed (the trader proceeds wit
 STATUS (<root>/web/backtest/advisor/<sid>/<hid>.status.json, written by the runner only): state queued/running/done/failed, verdict
 TAKE/SKIP + confidence + why, the consult session id (follow-ups resume it), the follow-up thread. The lever-stack versions live in
 <hid>.json (live/backtest.py add_recommendation: v1 from the batch is blind_v1; conversation versions count toward the combined result).
-WORK DIR (<advisor live_dir>/../backtest/): CLAUDE.md (the blind role, written here), .claude/settings.json and bundles/<token>/
+WORK DIR (<advisor live_dir>/../backtest/): CLAUDE.md (a pointer: the role is in each bundle + the prompt), .claude/settings.json, bundles/<token>/
 {card.md, h4.png, d1.png, h4_bars.csv} - <token> is a random id per card (no session id, card number or path in it).
 TOOLS (review 2 #3): the consult runs with its working directory = that ONE card's bundle folder and `--restricted` (file tools
 confined to the working directory, user/project/local settings ignored, code-running tools and WebFetch removed), `--tools Read`
@@ -32,7 +32,8 @@ from __future__ import annotations
 import glob, json, os, re, subprocess, threading, time, uuid
 from live import backtest as BT
 
-ROLE_VERSION = "blind-backtest-advisor v2 (2026-10-05)"
+ROLE_VERSION = "blind-backtest-advisor v3 (2026-10-08)"      # trader 2026-10-08: a plan made for each signal (v2 copied one preset)
+ROLE_V2_VERSION = "blind-backtest-advisor v2 (2026-10-05)"
 DENIED = "Bash,Glob,Grep,LS,WebSearch,WebFetch,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,TodoWrite"
 ADVISOR_AHEAD = 10
 FOLLOWUPS_PER_CARD = 5
@@ -172,7 +173,7 @@ def card_view(cfg: dict, sid: str, i: int, hid: str) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------------------- the role + bundle
-ROLE = f"""# Blind backtest advisor ({ROLE_VERSION})
+_HEAD_V2 = f"""# Blind backtest advisor ({ROLE_V2_VERSION})
 
 You advise a discretionary trader on ONE historical trade signal at a time, shown BLIND: no symbol, no dates, prices in R from the
 entry, time counted back from the signal bar. You are graded on your FIRST answer for each card, against the trader and against a
@@ -189,7 +190,8 @@ VERDICT: TAKE or SKIP
 CONFIDENCE: a whole number 0-100
 WHY: one or two plain lines
 
-```levers
+"""
+_LEVERS = f"""```levers
 {{"schema": "advisor-levers/v1", "nearest_preset": "<minimal|ruthless|slow|banker|pyramid>", "rationale": "<one plain line>",
  "plan": {{"entry": {{"pct": 100}}, "tp2": true, "trim_to_cap": false, "levers": [ ... ]}}}}
 ```
@@ -211,16 +213,87 @@ The levers block is required even when you say SKIP (it is the plan you would us
   - {{"type": "cut_avg", "at_h": 1, "below": 0}}  close at N hours if the average R since the entry is below X
   - {{"type": "cut_unless", "at_h": 24, "reach": 1.5}}  close at N hours unless +X R was reached
 - entry.pct + every add must stay within 200% of the ruled size (or set trim_to_cap true to trim later adds); at most 20 levers per kind.
-- nearest_preset = the menu preset (listed in card.md) closest to your plan.
+"""
+_TAIL_V2 = """- nearest_preset = the menu preset (listed in card.md) closest to your plan.
 Keep it short. Do not write files.
 """
+_HEAD_V3 = f"""# Blind backtest advisor ({ROLE_VERSION})
+
+You advise a discretionary trader on ONE historical trade signal at a time, shown BLIND: no symbol, no dates, prices in R from the
+entry, time counted back from the signal bar. You are graded on your FIRST answer for each card, against the trader and against a
+plain default plan ("Minimal"). You cannot look anything up - you have no web access, and you must not try to work out the symbol or
+the period: judge the setup on the card.
+
+Your working folder holds exactly one card: read `card.md` and its two charts `h4.png` (the last ~2 months of H4 bars) and `d1.png`
+(the last 44 days; the last day is partial, up to the signal). `h4_bars.csv` has the H4 bars as numbers if you need precision. You
+can only read files in this folder.
+
+BUILD THE PLAN FOR THIS SIGNAL (the trader asks for a plan made for the card in front of you, not a pick from a list):
+- Read the room on the card: where the swing highs / lows, the detector's zone and the EMAs sit against the stop, TP1 and TP2;
+  whether the trade is with the trend; how far away the nearest V / W event is.
+- Set each lever from that. For example: bank before a level the price has to get through (and choose how much); move the stop once
+  the trade has cleared one; add only where there is room left for the add to pay; cut sooner when a quick failure is the main risk
+  here, or not at all when the setup needs time; turn TP2 off when nothing stands in the way, or keep it short when something does;
+  tighten the plan when an event lands inside the likely hold.
+- The menu presets in card.md (their exact levers are listed there) are starting points: take one and change what this card calls
+  for, or build your own from scratch. The group notes describe the group's AVERAGE signal - say where this one differs.
+- Change a lever only for a reason you can point to on the card, and put that reason in the rationale (which feature -> which
+  change). The same plan on every card is not doing the job.
+
+Answer in exactly this shape (the server parses it):
+
+VERDICT: TAKE or SKIP
+CONFIDENCE: a whole number 0-100
+WHY: one or two plain lines
+
+"""
+_LEVERS_V3 = f"""```levers
+{{"schema": "advisor-levers/v1", "nearest_preset": "<minimal|ruthless|slow|banker|pyramid>", "rationale": "<one or two plain lines: what on this card set the plan>",
+ "plan": {{"entry": {{"pct": 100}}, "tp2": true, "trim_to_cap": false, "levers": [ ... ]}}}}
+```
+
+The levers block is required even when you say SKIP (it is the plan you would use if the trade were taken). Rules for the plan:
+- Use only these lever types (the engine evaluates nothing else); values in R are profit-R (a short's +1R is in its favour):
+  - {{"type": "bank", "pct": 25, "at": 1.0, "tp1": false}}  bank a % of what is open at +X R (tp1: or at TP1 if nearer)
+  - {{"type": "move", "to": 0, "when": 1.0, "tp1": false, "legs": "all"}}  stop to `to` R when +`when` R is reached (tighten only;
+    legs: all / original / adds)
+  - {{"type": "add_reach", "pct": 75, "at": 2.0, "within_h": 24, "stop": 0}}  add a % of full size when +X R is reached (within N hours or
+    null = any time); its stop in R, or "trade" = the original leg's stop at that moment
+  - {{"type": "add_bar", "pct": 75, "bar": 6, "early_at": null, "hold_avg": null, "stop": "trade", "wait_avg": null, "risk_cap": 1.0}}
+    add at the bar-N close (optionally early at +X R; hold_avg holds THAT EARLY ADD while the average R since entry is below it - it
+    needs early_at, and at the bar close the add goes in regardless; wait_avg, independent: at the bar close, wait while the average R is
+    below it and add the first minute it gets there - never, if it never does; risk_cap: when the add goes in, if the open risk
+    (size x distance to the stop, every open leg) would be above risk_cap R, every open stop is raised just enough to bring it back to
+    risk_cap - never lowered; the add is skipped if it cannot fit; null = off. The trader's builder ticks risk_cap 1.0 by default)
+  - {{"type": "add_tp1", "pct": 50, "min_R": 1.0, "stop": 1.0}}  add at TP1 (only if TP1 is above min_R)
+  - {{"type": "cut_avg", "at_h": 1, "below": 0}}  close at N hours if the average R since the entry is below X
+  - {{"type": "cut_unless", "at_h": 24, "reach": 1.5}}  close at N hours unless +X R was reached
+- entry.pct + every add must stay within 200% of the ruled size (or set trim_to_cap true to trim later adds); at most 20 levers per kind.
+"""
+_TAIL_V3 = """- nearest_preset = the menu preset your plan is closest to - only a label for the report; your plan does not have to match it.
+Keep it short. Do not write files.
+"""
+ROLE_V2 = _HEAD_V2 + _LEVERS + _TAIL_V2           # kept: a Test session started before v3 keeps it for its first block
+ROLE = _HEAD_V3 + _LEVERS_V3 + _TAIL_V3
+
+
+PARENT_NOTE = "# Blind backtest advisor\n\nYour role and your card are in your working folder (CLAUDE.md, card.md) and in the prompt.\n"
+
+
+def role_for(cfg: dict, sid: str, i: int) -> tuple[str, str]:
+    """(role text, version) for card i of a session: a Test session started before v3 (no "adv_role" stamp) keeps v2 for its first
+    block - the role never changes inside a block (trader 2026-10-08, mid-session switch at the block boundary)."""
+    try: s = BT.load_session(cfg, sid)
+    except (OSError, ValueError): s = {}
+    if s and not s.get("adv_role") and i < int(s.get("block") or 0): return ROLE_V2, ROLE_V2_VERSION
+    return ROLE, ROLE_VERSION
 
 
 def _ensure_role(cfg) -> str:
     wd = work_dir(cfg); os.makedirs(os.path.join(wd, ".claude"), exist_ok=True); os.makedirs(os.path.join(wd, "bundles"), exist_ok=True)
-    p = os.path.join(wd, "CLAUDE.md")
-    if not os.path.exists(p) or ROLE_VERSION not in open(p, encoding="utf-8").read():
-        tmp = p + ".tmp"; open(tmp, "w", encoding="utf-8").write(ROLE); os.replace(tmp, p)
+    p = os.path.join(wd, "CLAUDE.md")               # a pointer only (2026-10-08): the role a consult uses is in its card folder + the prompt,
+    if not os.path.exists(p) or open(p, encoding="utf-8").read() != PARENT_NOTE:      # so a block pinned to an older role sees one role
+        tmp = p + ".tmp"; open(tmp, "w", encoding="utf-8").write(PARENT_NOTE); os.replace(tmp, p)
     sp = os.path.join(wd, ".claude", "settings.json")         # ignored under --restricted; kept as a deny-only second belt
     want = {"effortLevel": settings(cfg)["effort"], "permissions": {"allow": [], "deny": DENIED.split(",")}}
     try: cur = json.load(open(sp))
@@ -256,10 +329,11 @@ def overlay_lines(c: dict) -> list:
     return out
 
 
-def write_bundle(cfg: dict, job: dict) -> str:
+def write_bundle(cfg: dict, job: dict, role: str | None = None) -> str:
     """bundles/<sid>/<i>/: card.md + h4.png + d1.png + h4_bars.csv - from the blind card in the queue file only."""
     wd = _ensure_role(cfg); c = job["card"]; d = bundle_dir(cfg, job["bundle"]); os.makedirs(d, exist_ok=True)
-    open(os.path.join(d, "CLAUDE.md"), "w", encoding="utf-8").write(ROLE)      # the role also goes in the prompt (stdin)
+    role = role or ROLE; v2 = role is ROLE_V2
+    open(os.path.join(d, "CLAUDE.md"), "w", encoding="utf-8").write(role)      # the role also goes in the prompt (stdin)
     sell = c.get("direction") == "SELL"; sg = -1 if sell else 1; lv = c.get("levels") or {}
     sw = c.get("swings") or {}; rg = c.get("regime") or {}
     ev = "; ".join(f"nearest class {e['cls']} event: {e['when']}" for e in c.get("events") or []) or "no V or W event in the next 14 days"
@@ -278,11 +352,20 @@ def write_bundle(cfg: dict, job: dict) -> str:
              f"- At the signal bar - H4: {em('h4')}; D1: {em('d1')}",
              "- The H4 chart ends at the signal bar's close; the D1 chart's last bar is partial (up to the signal).", ""]
     if c.get("overlay"): lines += overlay_lines(c) + [""]
-    lines += ["## Group notes (Practice partition only; 'tested' = measured, 'observed' = descriptive)"]
+    lines += ["## Group notes (Practice partition only; 'tested' = measured, 'observed' = descriptive)" +
+              ("" if v2 else " - they describe the group's AVERAGE signal, not this one")]
     lines += [f"- [{l['tag']}] {l['text']}" for l in job.get("info_lines") or []]
-    lines += ["", f"## The trader's preloaded plan for this group: {job['preload']['label']}", f"- {job['preload']['about']}",
-              "", f"## Menu presets (v{job.get('menu_version', '1')[-1:]}, frozen) - name the nearest one in your levers block"]
-    lines += [f"- `{p['key']}` - {p['label']}: {p['about']}" for p in job.get("presets") or []]
+    lv_js = lambda cfg_: json.dumps({"entry": cfg_.get("entry"), "tp2": cfg_.get("tp2"), "levers": cfg_.get("levers")}, separators=(",", ":"))
+    lines += ["", f"## The trader's preloaded plan for this group: {job['preload']['label']}", f"- {job['preload']['about']}"]
+    if v2:
+        lines += ["", f"## Menu presets (v{job.get('menu_version', '1')[-1:]}, frozen) - name the nearest one in your levers block"]
+        lines += [f"- `{p['key']}` - {p['label']}: {p['about']}" for p in job.get("presets") or []]
+    else:                                              # v3: the exact levers, so a plan can start from one and be changed for this card
+        if job["preload"].get("cfg"): lines += [f"  - its levers: `{lv_js(job['preload']['cfg'])}`"]
+        lines += ["", f"## Menu presets (v{job.get('menu_version', '1')[-1:]}, frozen) - starting points to change for this card, or build "
+                      "your own; nearest_preset in your block = the one your plan is closest to (a label only)"]
+        for p in job.get("presets") or []:
+            lines += [f"- `{p['key']}` - {p['label']}: {p['about']}"] + ([f"  - its levers: `{lv_js(p['cfg'])}`"] if p.get("cfg") else [])
     open(os.path.join(d, "card.md"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
     with open(os.path.join(d, "h4_bars.csv"), "w") as f:
         f.write("bars_ago,open,high,low,close\n")
@@ -336,9 +419,9 @@ def parse_verdict(text: str) -> tuple[str | None, int | None, str | None]:
     return (m.group(1).upper() if m else None), conf, (w.group(1).strip()[:300] if w else None)
 
 
-def init_prompt() -> str:
+def init_prompt(role: str | None = None) -> str:
     """the role (sent here, on stdin, so it does not depend on CLAUDE.md loading) + the task. No session id, card number or path."""
-    return (ROLE + "\n\n---\n\nAdvise on the blind card in your working folder (read card.md, h4.png and d1.png). "
+    return ((role or ROLE) + "\n\n---\n\nAdvise on the blind card in your working folder (read card.md, h4.png and d1.png). "
             "Answer exactly in the shape given above: VERDICT, CONFIDENCE, WHY, then the levers block.")
 
 
@@ -346,17 +429,18 @@ def _do_init(cfg, log, job, consult) -> None:
     sid, i, hid = job["sid"], job["i"], job["hid"]
     if not job.get("bundle"): job["bundle"] = uuid.uuid4().hex[:16]          # a job queued before review 2
     _set_status(cfg, sid, hid, state="running", started=_now(), attempts=job.get("attempts", 0) + 1, bundle=job["bundle"])
-    d = write_bundle(cfg, job)
+    role, rv = role_for(cfg, sid, i)
+    d = write_bundle(cfg, job, role)
     s = settings(cfg)
-    r = (consult or call_claude)(cfg, init_prompt(), s, None, d)
+    r = (consult or call_claude)(cfg, init_prompt(role), s, None, d)
     if not r.get("ok"): raise RuntimeError(r.get("error") or "consult failed")
     text = r.get("text") or ""
     vd, conf, why = parse_verdict(text)
     ent = BT.add_recommendation(cfg, sid, hid, text, source="blind batch", blind=True)
     _set_status(cfg, sid, hid, state="done", verdict=vd, confidence=conf, why=why, session_id=r.get("session_id"), text=text[:6000],
                 elapsed_s=r.get("elapsed_s"), cost_usd=r.get("cost_usd"), stack_valid=ent.get("valid"), stack_reason=ent.get("reason"),
-                finished=_now(), error=None if vd else "no VERDICT line in the answer")
-    log(f"backtest advisor {sid}#{i}: {vd or 'no verdict'} ({conf}) stack {'ok' if ent.get('valid') else 'REJECTED: ' + str(ent.get('reason'))} in {r.get('elapsed_s')}s")
+                finished=_now(), error=None if vd else "no VERDICT line in the answer", role=rv)
+    log(f"backtest advisor {sid}#{i} [{rv[23:25]}]: {vd or 'no verdict'} ({conf}) stack {'ok' if ent.get('valid') else 'REJECTED: ' + str(ent.get('reason'))} in {r.get('elapsed_s')}s")
 
 
 def _do_followup(cfg, log, job, consult) -> None:
