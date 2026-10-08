@@ -205,15 +205,6 @@ def list_summaries(cfg: dict, sid: str) -> list:
     return out
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--config", default=r"C:\ProgramData\hybrid\live\live_config.json")
-    ap.add_argument("--sid", required=True); ap.add_argument("--name", default="e1"); ap.add_argument("--parallel", type=int, default=8)
-    ap.add_argument("--kind", default="e1", choices=("e1", "e2", "e3")); ap.add_argument("--summary-only", action="store_true"); a = ap.parse_args()
-    cfg = json.load(open(a.config))
-    if not re.fullmatch(r"[a-z0-9_]{1,24}", a.name): sys.exit("bad experiment name")
-    if a.summary_only: {"e1": write_summary, "e2": summary_e2, "e3": summary_e3}[a.kind](cfg, a.sid, a.name)
-    else: run_kind(cfg, a.sid, a.name, a.kind, a.parallel, log=lambda m: print(m, flush=True))
-
 
 # ============================================================================================ display (all experiments, raw only)
 def _tbl(cols, rows): return {"cols": cols, "rows": rows}
@@ -673,3 +664,13 @@ def run_kind(cfg: dict, sid: str, name: str, kind: str, parallel: int, consult=N
                     f"{' reviews %d' % (len(r['reviews']) - 1) if 'reviews' in r else ''} ({k}/{len(todo)}, {time.time() - t0:.0f}s)")
             except Exception as e: log(f"  card {futs[f] + 1}: ERROR {e!r}")
     summ(cfg, sid, name)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(); ap.add_argument("--config", default=r"C:\ProgramData\hybrid\live\live_config.json")
+    ap.add_argument("--sid", required=True); ap.add_argument("--name", default="e1"); ap.add_argument("--parallel", type=int, default=8)
+    ap.add_argument("--kind", default="e1", choices=("e1", "e2", "e3")); ap.add_argument("--summary-only", action="store_true"); a = ap.parse_args()
+    cfg = json.load(open(a.config))
+    if not re.fullmatch(r"[a-z0-9_]{1,24}", a.name): sys.exit("bad experiment name")
+    if a.summary_only: {"e1": write_summary, "e2": summary_e2, "e3": summary_e3}[a.kind](cfg, a.sid, a.name)
+    else: run_kind(cfg, a.sid, a.name, a.kind, a.parallel, log=lambda m: print(m, flush=True))
