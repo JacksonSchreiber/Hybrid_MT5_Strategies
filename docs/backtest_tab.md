@@ -65,6 +65,18 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
     - Unset, it is left out of the normalised plan; the engine is identical without it (old vs new, every trade x every menu
       plan + the wait/hold plans, 0 differences). A second new lever option before any Test session; not a menu change.
 
+## Advisor experiments (`live/backtest_experiment.py`, trader 2026-10-08)
+- Offline, on the cards of a finished Test session; results in `<root>/web/backtest/experiments/<sid>/<name>/`, shown on the
+  session's end page. Never written into the Test record (advisor/<sid>/, the session, its grades or CSV).
+- **E1 "take-raw + 1R plan":** a fresh blind consult per card (same bundle and confinement as the Test advisor), 8 at a time on the
+  box. Two decisions graded separately: (1) TAKE / SKIP the raw signal (a TAKE scores raw R, a SKIP 0); (2) only after a TAKE, the
+  plan that takes home the most R without risking more than 1R, graded against raw on the same trades. The harness forces entry
+  <= 100% (else graded as raw, flagged) and the plan-wide `risk_cap` 1.0. The role states the group's PRACTICE base rates only.
+- Caveat for the coach: E1's role was written after the trader saw these cards' outcomes (the advisor is still blind) - a good
+  result is a hint to confirm on fresh Test signals.
+- Engine: a plan-level `risk_cap` (levers/v1) applies the add_bar risk cap to every add; only written when set (old plans
+  unchanged: 157,464-run parity, 0 differences).
+
 ## Advisor recommendation (`advisor-levers/v1`)
 The advisor emits a fenced block:
 ```levers

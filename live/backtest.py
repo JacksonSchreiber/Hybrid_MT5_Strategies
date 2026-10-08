@@ -344,6 +344,8 @@ def card(cfg: dict, sid: str) -> dict:
             out = {"done": True, "tally": tally(s), "n": s["n"], "sid": sid, "mode": s["mode"], "advisor_only_from": s.get("advisor_only_from")}
             if s["mode"] == "test":                 # refreshed: an advisor v1 that arrived after the trader's final still counts
                 write_report(cfg, s, S); out["summary"] = load_summary(cfg, sid)
+                from live import backtest_experiment as BX          # offline advisor experiments on this session's cards (2026-10-08)
+                out["experiments"] = BX.list_summaries(cfg, sid)
             return out
         b = s.get("block")                          # Test blocks (coach 2026-10-06): a checkpoint before cards 21, 41, ... - no card
         if b and i and i % b == 0 and str(i) not in s.get("block_ok", {}):

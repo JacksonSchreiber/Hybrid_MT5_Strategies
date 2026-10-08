@@ -32,7 +32,7 @@
   window.btApp = function () {
     return {
       groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', startMode: 'practice', devN: '', menuFrozen: null, testLeft: {},
-      advTimer: null, aoTimer: null, askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
+      advTimer: null, aoTimer: null, exps: [], askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
       sess: null, done: false, brk: null, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '', basePreset: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null, wide: window.innerWidth > 640,
@@ -181,6 +181,9 @@
         post('/bt/advisor_only', { sid: self.sess.sid }).then(function (j) { self.busy = false; if (j.ok === false) { self.err = j.error; return; } self.brk = null; self.load(); })
           .catch(function (e) { self.busy = false; self.err = String(e); });
       },
+      expRows: function (X) {           // E1: decision 1 (raw take/skip), decision 2 (its plan on the trades it took), per part
+        return (X.parts || []).map(function (p) { return p; });
+      },
       aoRows: function (A) { return A && A.grade ? [['The advisor alone (its blind first plan)', A.grade]] : []; },
       nextBlock: function () {           // Test (coach 2026-10-06): start the next block of 20
         var self = this; self.busy = true;
@@ -196,7 +199,7 @@
         self.stopPoll(); self.askText = ''; self.proceedNoAdv = false;
         get('/api/bt/card?sid=' + self.sess.sid).then(function (j) { self.busy = false;
           if (j.ok === false) { self.err = j.error; return; }
-          if (j.done) { self.done = true; self.brk = null; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null;
+          if (j.done) { self.done = true; self.brk = null; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null; self.exps = j.experiments || [];
             var A = self.summary && self.summary.advisor_only; clearTimeout(self.aoTimer);      // the advisor still answering the rest: refresh
             if (A && A.answered + A.failed < A.total) self.aoTimer = setTimeout(function () { if (self.sess && self.done) self.load(); }, 20000);
             return; }

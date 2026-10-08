@@ -253,6 +253,13 @@ def unit_tests() -> bool:
     except ValueError: bad = True
     say(bad and "risk_cap" not in E.validate(K(None))[0]["levers"][0] and E.validate(K(1))[0]["levers"][0]["risk_cap"] == 1.0,
         "validation: risk_cap 0.1-10R; unset, it is left out of the normalised plan")
+    # plan-wide risk_cap (2026-10-08): every add obeys it, add_reach included
+    F, c = frame([(-0.2, 0.5, 0.3)] * 10 + [(0.3, 2.1, 2.0), (-1.1, 2.0, -1.0)])
+    pc = lambda rc: dict(stack([{"type": "add_reach", "pct": 75, "at": 2.0, "within_h": None, "stop": "trade"}]), **({"risk_cap": rc} if rc else {}))
+    r0, r1 = E.evaluate(pc(None), F, c), E.evaluate(pc(1.0), F, c)
+    say(abs(r1["R"] + 1.0) < 1e-12 and abs(r0["R"] + 3.25) < 1e-12,
+        f"plan risk_cap 1R: 100% + 75% added at +2R -> every stop raised to +0.286R, a stop-out loses {r1['R']:+.3f}R (without {r0['R']:+.3f}R)")
+    say("risk_cap" not in E.validate(pc(None))[0] and E.validate(pc(1))[0]["risk_cap"] == 1.0, "validation: the plan's risk_cap is left out when unset")
     # validation
     try: E.validate(stack([dict(ADD2), dict(ADD2)])); bad = False
     except ValueError: bad = True

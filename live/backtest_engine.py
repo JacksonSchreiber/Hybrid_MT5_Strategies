@@ -4,8 +4,10 @@ function for the offline precompute, the box runs it as plain Python (no numba t
 two give bit-identical results on the same frame (checked in backtest_rules.py --check).
 
 CONFIG (what the lever builder serialises; schema "levers/v1"):
-  {"schema": "levers/v1", "entry": {"pct": 100}, "tp2": true, "cap_pct": 200, "trim_to_cap": false, "levers": [ ...cards... ]}
+  {"schema": "levers/v1", "entry": {"pct": 100}, "tp2": true, "cap_pct": 200, "trim_to_cap": false, "levers": [ ...cards... ][, "risk_cap": R]}
   (trim_to_cap: the worst case - entry + every add - may exceed the cap; later adds are trimmed to fit. Off: such a plan is refused)
+  (risk_cap, optional, 2026-10-08: the add_bar risk_cap below applied to EVERY add of the plan - add_reach, add_bar, add_tp1; with a
+  card's own risk_cap the lower one counts. Only written when set, so plans without it normalise and run exactly as before)
   lever cards ("type" + fields; any card can appear any number of times):
     bank        {pct, at, tp1}              bank pct% of what is open when the trade first reaches +at R (tp1: or TP1 if that is
                                             nearer: min(at, TP1), capped at TP2)
@@ -166,7 +168,36 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                     if sz > 1e-12:
                         px = ad_lvl[a] if ad_lvl[a] > bo[j] else bo[j]
                         ls[nl] = sz; lp[nl] = px; le[nl] = px + eo[j]
-                        lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True; nl += 1; gross += sz; naf += 1
+                        lst[nl] = tstop if ad_trade[a] else be + ad_stop[a]; alive[nl] = True
+                        ok = True
+                        if ad_cap[a] < 1e17:           # risk_cap: open risk over it -> one stop level S for every open leg
+                            rk = 0.0
+                            for q in range(nl + 1):
+                                if alive[q]: rk += ls[q] * (lp[q] - lst[q])
+                            if rk > ad_cap[a] + 1e-9:
+                                S = -1.0
+                                for q in range(nl + 1): fxd[q] = False
+                                for it in range(nl + 1):       # legs already at or above S stay put; solve again without them
+                                    nm = -ad_cap[a]; sw = 0.0
+                                    for q in range(nl + 1):
+                                        if alive[q]:
+                                            if fxd[q]: nm += ls[q] * (lp[q] - lst[q])
+                                            else: nm += ls[q] * lp[q]; sw += ls[q]
+                                    if sw <= 1e-12: break
+                                    S = nm / sw; ch = False
+                                    for q in range(nl + 1):
+                                        if alive[q] and (not fxd[q]) and lst[q] >= S: fxd[q] = True; ch = True
+                                    if not ch: break
+                                if S >= xc[j]:
+                                    ok = False             # the stop would have to sit at or above the price: no add
+                                else:
+                                    for q in range(nl + 1):
+                                        if alive[q] and S > lst[q]: lst[q] = S
+                                    if S > tstop: tstop = S
+                        if ok:
+                            nl += 1; gross += sz; naf += 1
+                        else:
+                            alive[nl] = False
                     ad_done[a] = True
         if tp2_on and xh[j] >= tp2_R:
             v = locked
@@ -302,7 +333,10 @@ def validate(cfg: dict) -> tuple[dict, list[str]]:
             raise ValueError(f"the entry ({entry:g}%) plus every add ({adds:g}%) would reach {entry + adds:g}% - over the {cap:g}% cap "
                              f"(turn on 'trim adds to fit the cap' to allow it)")
         warn.append(f"the entry plus every add would reach {entry + adds:g}%; later adds are trimmed to fit the {cap:g}% cap")
-    return {"schema": SCHEMA, "entry": {"pct": entry}, "tp2": bool(cfg.get("tp2", True)), "cap_pct": cap, "trim_to_cap": trim, "levers": out}, warn
+    out_cfg = {"schema": SCHEMA, "entry": {"pct": entry}, "tp2": bool(cfg.get("tp2", True)), "cap_pct": cap, "trim_to_cap": trim, "levers": out}
+    prc = cfg.get("risk_cap")                          # plan-wide risk cap (2026-10-08): only written when set
+    if prc not in (None, ""): out_cfg["risk_cap"] = _num(prc, 0.1, 10, "the plan's risk cap")
+    return out_cfg, warn
 
 
 def _stop(v, i):
@@ -364,6 +398,7 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
         else:                                          # add_tp1
             ad_lvl[i] = tp1 if (tp1 is not None and tp1 > c["min_R"]) else NEVER
         if strict_tp2 and tp2_on and ad_type[i] == 0 and ad_lvl[i] >= tp2 - 1e-12: ad_lvl[i] = NEVER
+        if cfg.get("risk_cap") is not None and cfg["risk_cap"] < ad_cap[i]: ad_cap[i] = cfg["risk_cap"]      # the plan-wide cap: every add
     ct_type = np.array([0 if c["type"] == "cut_avg" else 1 for c in cuts], dtype=np.int64)
     ct_k = np.array([mark(ctx, c["at_h"], cut=True) for c in cuts], dtype=np.int64)
     ct_thr = np.array([c["below"] if c["type"] == "cut_avg" else c["reach"] for c in cuts], dtype=np.float64)

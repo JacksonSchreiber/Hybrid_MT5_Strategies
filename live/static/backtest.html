@@ -390,6 +390,33 @@
         </template>
       </div>
     </template>
+    <template x-for="X in exps" :key="X.name">
+      <div class="bt-ao">
+        <h3 class="bt-gh" x-text="X.title"></h3>
+        <p class="k" x-text="X.answered + ' of ' + X.total + ' cards answered' + (X.failed ? ', ' + X.failed + ' failed' : '') + ' · ' + X.notes"></p>
+        <div class="bt-scroll"><table class="bt-tbl bt-grade">
+          <thead><tr><th>Cards</th><th>Took (raw)</th><th>Every signal raw</th><th>Every signal Minimal</th><th>Decision 1: raw on the ones it took</th>
+            <th>Decision 2: its plan on those</th><th>Plan vs raw on those</th><th>Minimal on those</th></tr></thead>
+          <tbody><template x-for="p in expRows(X)"><tr>
+            <td x-text="p.cards"></td><td x-text="p.taken + ' of ' + p.n"></td>
+            <td :class="cls(p.all_raw)" x-text="fmt(p.all_raw)"></td><td :class="cls(p.all_minimal)" x-text="fmt(p.all_minimal)"></td>
+            <td :class="cls(p.d1_raw_on_taken)" x-text="fmt(p.d1_raw_on_taken)"></td><td :class="cls(p.d2_plan_on_taken)" x-text="fmt(p.d2_plan_on_taken)"></td>
+            <td :class="cls(p.d2_plan_minus_raw.total)" x-text="fmt(p.d2_plan_minus_raw.total) + (p.d2_plan_minus_raw.t !== null ? ' (t ' + p.d2_plan_minus_raw.t + ')' : '')"></td>
+            <td :class="cls(p.d2_minimal_on_taken)" x-text="fmt(p.d2_minimal_on_taken)"></td>
+          </tr></template></tbody></table></div>
+        <div class="k bt-small" x-text="'Selection (decision 1): took ' + pct(X.decision1.selection.take_rate_reached_1R) + ' of the signals that reached +1R and ' + pct(X.decision1.selection.take_rate_went_to_stop) + ' of those that hit the stop first' + (X.decision1.selection.z !== null ? ' (z ' + X.decision1.selection.z + ')' : '') + '. Plans: ' + X.no_plan + ' said no plan (raw), ' + X.plan_flagged + ' graded as raw (rejected or over 100%).'"></div>
+        <div class="bt-scroll"><table class="bt-tbl bt-aocards">
+          <thead><tr><th>Card</th><th>Signal</th><th>Raw call</th><th>Raw R</th><th>Its plan</th><th>Minimal</th><th>TP2?</th><th>Plan levers</th><th>Why</th></tr></thead>
+          <tbody><template x-for="c in X.cards" :key="c.card"><tr>
+            <td x-text="c.card"></td><td x-text="c.detector + ' · ' + c.direction"></td>
+            <td x-text="c.raw + (c.confidence !== null ? ' (' + c.confidence + ')' : '')"></td>
+            <td :class="c.raw === 'TAKE' ? cls(c.R_raw) : 'k'" x-text="fmt(c.R_raw)"></td>
+            <td :class="cls(c.R_plan)" x-text="c.R_plan === null ? '-' : fmt(c.R_plan)"></td>
+            <td :class="cls(c.R_minimal)" x-text="fmt(c.R_minimal)"></td><td x-text="c.hit_tp2 ? 'yes' : (c.reached_1R ? '+1R' : '')"></td>
+            <td x-text="c.raw === 'TAKE' ? (c.plan_note || c.levers || '-') : ''"></td><td class="bt-why" x-text="c.raw === 'TAKE' && c.rationale ? c.rationale : c.why"></td>
+          </tr></template></tbody></table></div>
+      </div>
+    </template>
     <div class="bt-row bt-tally">
       <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
       <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
