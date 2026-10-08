@@ -167,6 +167,11 @@ The advisor emits a fenced block:
       trader alone / advisor alone / together for the block just finished, the session so far, and a by-block table (summary
       `grading.by_block`). No per-card result, chart or CSV row. Coach flag: knowing the running score can change how the later
       blocks are played (e.g. leaning on the advisor if it is ahead);
+    - **the advisor plays the rest** (trader 2026-10-08, `POST /bt/advisor_only`, checkpoint only, with a confirm): the trader's play
+      ends there (his grade covers the cards he played; commits / decisions / next block are refused after it), every remaining card
+      gets its blind consult, and the advisor's results on them are revealed card by card on the end page (summary
+      `advisor_only`: grade, per block, per card with its verdict, its result, its plan if taken, Minimal, raw, closest preset, why).
+      The CSV keeps the trader's own decisions. First used on 13aaef98bc78 at card 20 (cards 21-100 = advisor role v3 alone);
     - until the next block is started, the server refuses commits, decisions and advisor views for its first card;
     - bloc sessions are 5 blocks, majors sessions are 20 + 15;
   - every drawn id goes into `<root>/web/backtest/test_ledger.json` AT ONCE and is never drawn again ("one pass per signal ever");

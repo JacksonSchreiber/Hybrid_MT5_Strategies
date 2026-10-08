@@ -32,7 +32,7 @@
   window.btApp = function () {
     return {
       groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', startMode: 'practice', devN: '', menuFrozen: null, testLeft: {},
-      advTimer: null, askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
+      advTimer: null, aoTimer: null, askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
       sess: null, done: false, brk: null, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '', basePreset: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null, wide: window.innerWidth > 640,
@@ -173,6 +173,15 @@
           if (j.ok === false) { self.err = j.error; return; } self.resume(j.sid); });
       },
       resume: function (sid) { this.sess = { sid: sid }; location.hash = 'sid=' + sid; this.load(); },
+      handOver: function () {            // trader 2026-10-08: the advisor plays the rest of this Test session; its results are shown
+        var self = this, left = this.brk.n - this.brk.i;
+        if (!confirm('Let the advisor play the rest?\n\nYour session ends here and is graded on the ' + this.brk.i + ' cards you played. The advisor answers the other ' +
+            left + ' cards blind, then you see its results card by card. Those ' + left + ' signals are used up - you can never play them blind.')) return;
+        self.busy = true;
+        post('/bt/advisor_only', { sid: self.sess.sid }).then(function (j) { self.busy = false; if (j.ok === false) { self.err = j.error; return; } self.brk = null; self.load(); })
+          .catch(function (e) { self.busy = false; self.err = String(e); });
+      },
+      aoRows: function (A) { return A && A.grade ? [['The advisor alone (its blind first plan)', A.grade]] : []; },
       nextBlock: function () {           // Test (coach 2026-10-06): start the next block of 20
         var self = this; self.busy = true;
         post('/bt/next_block', { sid: self.sess.sid }).then(function (j) { self.busy = false; if (j.ok === false) { self.err = j.error; return; } self.load(); })
@@ -180,14 +189,17 @@
       },
       blockOf: function () { var b = this.C && this.C.block; return b ? ' · block ' + (Math.floor(this.C.i / b) + 1) + ' of ' + Math.ceil(this.C.n / b) : ''; },
       sizeOf: function (g) { return this.startMode === 'test' ? g.test : g.practice; },
-      leave: function () { var self = this; this.stopPoll(); this.sess = null; this.done = false; this.rev = null; this.summary = null; this.brk = null; location.hash = '';
+      leave: function () { var self = this; this.stopPoll(); clearTimeout(this.aoTimer); this.sess = null; this.done = false; this.rev = null; this.summary = null; this.brk = null; location.hash = '';
         get('/api/bt/sessions').then(function (j) { self.sessions = j; }); this.$nextTick(function () { self.syncGroupSelect(0); }); },
       load: function () {
         var self = this; self.busy = true;
         self.stopPoll(); self.askText = ''; self.proceedNoAdv = false;
         get('/api/bt/card?sid=' + self.sess.sid).then(function (j) { self.busy = false;
           if (j.ok === false) { self.err = j.error; return; }
-          if (j.done) { self.done = true; self.brk = null; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null; return; }
+          if (j.done) { self.done = true; self.brk = null; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null;
+            var A = self.summary && self.summary.advisor_only; clearTimeout(self.aoTimer);      // the advisor still answering the rest: refresh
+            if (A && A.answered + A.failed < A.total) self.aoTimer = setTimeout(function () { if (self.sess && self.done) self.load(); }, 20000);
+            return; }
           if (j.block_break) { self.brk = j; self.sess.group = j.group; self.C = { i: j.i, n: j.n, mode: j.mode, tally: j.tally }; self.rev = null; return; }   // Test: between blocks
           self.brk = null;
           self.sess.group = j.card ? (self.groups.filter(function (g) { return g.name === j.card.group; })[0] || {}).key : self.sess.group;

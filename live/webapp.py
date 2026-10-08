@@ -1853,6 +1853,7 @@ class H(BaseHTTPRequestHandler):
                     elif u.path == "/bt/commit": rep = BT.commit_first(CFG, sid, i, form.get("decision", ""), plan)
                     elif u.path == "/bt/adv_loaded": rep = BT.mark_adv_loaded(CFG, sid, i)
                     elif u.path == "/bt/next_block": rep = BT.next_block(CFG, sid)
+                    elif u.path == "/bt/advisor_only": rep = BT.advisor_only(CFG, sid)
                     elif u.path == "/bt/ask": rep = BT.ask(CFG, sid, i, form.get("text", ""))
                     elif u.path == "/bt/dev/advisor": rep = BT.dev_inject(CFG, sid, form.get("text", ""), form.get("blind") == "1")
                     else: return self._send(json.dumps({"ok": False, "error": "unknown"}), "application/json", 404)

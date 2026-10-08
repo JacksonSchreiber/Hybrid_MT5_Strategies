@@ -35,11 +35,11 @@
       <div class="bt-scroll"><table class="bt-tbl">
         <thead><tr><th>Started</th><th>Group</th><th>Mode</th><th>Done</th><th>Your R</th><th>Raw</th><th>vs raw</th><th></th></tr></thead>
         <tbody><template x-for="s in sessions" :key="s.sid"><tr>
-          <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.mode === 'test' ? 'Test' : 'Practice'"></td><td x-text="s.done + ' / ' + s.n"></td>
+          <td x-text="s.created.replace('T',' ').slice(0,16)"></td><td x-text="groupName(s.group)"></td><td x-text="s.mode === 'test' ? 'Test' : 'Practice'"></td><td x-text="s.done + ' / ' + s.n + (s.advisor_only !== null && s.advisor_only !== undefined ? ' + advisor' : '')"></td>
           <td :class="s.tally ? cls(s.tally.R_choice) : ''" x-text="s.tally ? fmt(s.tally.R_choice) : 'hidden'"></td><td :class="s.tally ? cls(s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_raw) : '-'"></td>
           <td :class="s.tally ? cls(s.tally.R_choice - s.tally.R_raw) : ''" x-text="s.tally ? fmt(s.tally.R_choice - s.tally.R_raw) : '-'"></td>
-          <td class="bt-actions"><sl-button size="small" x-show="s.done < s.n" @click="resume(s.sid)">Resume</sl-button>
-            <sl-button size="small" variant="text" x-show="s.mode !== 'test' || s.done >= s.n" :href="'/bt/report/' + s.sid + '.csv'">CSV</sl-button></td>
+          <td class="bt-actions"><sl-button size="small" x-show="s.done < s.n" @click="resume(s.sid)" x-text="s.advisor_only != null ? 'Results' : 'Resume'"></sl-button>
+            <sl-button size="small" variant="text" x-show="s.mode !== 'test' || s.done >= s.n || s.advisor_only != null" :href="'/bt/report/' + s.sid + '.csv'">CSV</sl-button></td>
         </tr></template></tbody>
       </table></div>
     </div>
@@ -85,6 +85,7 @@
     <div class="bt-row">
       <sl-button variant="warning" @click="nextBlock()" :loading="busy"><sl-icon slot="prefix" name="chevron-right"></sl-icon><span x-text="'Start block ' + (brk.blocks_done + 1)"></span></sl-button>
       <sl-button variant="text" @click="leave()">Leave for now</sl-button>
+      <sl-button variant="text" @click="handOver()" :loading="busy" x-text="'Let the advisor play the other ' + (brk.n - brk.i)"></sl-button>
     </div>
   </div>
 </template>
@@ -321,6 +322,7 @@
 <template x-if="sess && done">
   <div class="card bt-done">
     <h2 x-text="C.mode === 'test' ? 'Test session finished - the results' : 'Session finished'"></h2>
+    <h3 class="bt-gh" x-show="summary && summary.advisor_only" x-text="'You (cards 1-' + (summary && summary.advisor_only ? summary.advisor_only.from : '') + ')'"></h3>
     <template x-if="summary && summary.grading">
       <div class="bt-scroll"><table class="bt-tbl bt-grade">
         <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
@@ -345,6 +347,48 @@
                 x-text="bb[a].n ? (fmt(bb[a].total_R) + ' (' + fmt(bb[a].vs_minimal) + ')') : '-'"></td></template>
             </tr></template></tbody></table></div>
         </template></div></div>
+    </template>
+    <template x-if="summary && summary.advisor_only">
+      <div class="bt-ao" x-data="{ A: summary.advisor_only }">
+        <h3 class="bt-gh" x-text="'The advisor alone on cards ' + (A.from + 1) + '-' + (A.from + A.total) + ' (it played them for you)'"></h3>
+        <p class="k" x-show="A.answered + A.failed < A.total" x-text="'Still answering: ' + A.answered + ' of ' + A.total + ' done' + (A.failed ? ', ' + A.failed + ' failed' : '') + ' - this page refreshes itself.'"></p>
+        <p class="k" x-show="A.failed && A.answered + A.failed >= A.total" x-text="A.failed + ' card(s) failed and are left out.'"></p>
+        <template x-if="A.answered">
+          <div>
+            <div class="bt-scroll"><table class="bt-tbl bt-grade">
+        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
+        <tbody><template x-for="row in aoRows(A)"><tr>
+          <td><b x-text="row[0]"></b></td>
+          <td x-text="row[1].n ? (row[1].taken + ' of ' + row[1].n) : 'n/a'"></td>
+          <td :class="cls(row[1].total_R)" x-text="row[1].n ? fmt(row[1].total_R) : '-'"></td>
+          <td :class="cls(row[1].vs_minimal)" x-text="row[1].n ? fmt(row[1].vs_minimal) : '-'"></td>
+          <td :class="cls(row[1].vs_raw)" x-text="row[1].n ? fmt(row[1].vs_raw) : '-'"></td>
+          <td :class="row[1].n ? cls(row[1].at_1pip.vs_minimal) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_minimal) : '-'"></td>
+          <td x-text="row[1].n ? (pct(row[1].selection.take_rate_reached_1R) + ' / ' + pct(row[1].selection.take_rate_went_to_stop) + (row[1].selection.spread_points !== null ? ' (' + (row[1].selection.spread_points > 0 ? '+' : '') + row[1].selection.spread_points + ' pts' + (row[1].selection.z !== null ? ', z ' + row[1].selection.z : '') + ')' : '')) : '-'"></td>
+          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_minimal) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
+        </tr></template></tbody></table></div>
+            <template x-if="A.by_block.length > 1"><div class="bt-scroll"><table class="bt-tbl bt-grade bt-byblock">
+              <thead><tr><th>Block</th><th>Cards</th><th>Taken</th><th>Advisor: total R</th><th>vs Minimal</th><th>vs raw</th></tr></thead>
+              <tbody><template x-for="bb in A.by_block"><tr><td x-text="bb.block"></td><td x-text="bb.cards"></td>
+                <td x-text="bb.advisor_alone.n ? bb.advisor_alone.taken + ' of ' + bb.advisor_alone.n : '-'"></td>
+                <td :class="cls(bb.advisor_alone.total_R)" x-text="bb.advisor_alone.n ? fmt(bb.advisor_alone.total_R) : '-'"></td>
+                <td :class="cls(bb.advisor_alone.vs_minimal)" x-text="bb.advisor_alone.n ? fmt(bb.advisor_alone.vs_minimal) : '-'"></td>
+                <td :class="cls(bb.advisor_alone.vs_raw)" x-text="bb.advisor_alone.n ? fmt(bb.advisor_alone.vs_raw) : '-'"></td></tr></template></tbody></table></div></template>
+            <div class="bt-scroll"><table class="bt-tbl bt-aocards">
+              <thead><tr><th>Card</th><th>Signal</th><th>Advisor</th><th>Its result</th><th>Its plan if taken</th><th>Minimal</th><th>Raw</th><th>Closest preset</th><th>Why (its plan)</th></tr></thead>
+              <tbody><template x-for="c in A.cards" :key="c.card"><tr>
+                <td x-text="c.card"></td><td x-text="c.detector + ' · ' + c.direction"></td>
+                <td x-text="(c.verdict || '-') + (c.confidence !== '' && c.confidence !== null ? ' (' + c.confidence + ')' : '')"></td>
+                <td :class="cls(c.R_adv)" x-text="c.R_adv === '' ? '-' : fmt(c.R_adv)"></td>
+                <td :class="cls(c.R_plan_if_taken)" x-text="c.R_plan_if_taken === null ? '-' : fmt(c.R_plan_if_taken)"></td>
+                <td :class="cls(c.R_minimal)" x-text="fmt(c.R_minimal)"></td><td :class="cls(c.R_raw)" x-text="fmt(c.R_raw)"></td>
+                <td x-text="c.nearest_preset ? labelOf(c.nearest_preset) : '-'"></td><td class="bt-why" x-text="c.rationale"></td>
+              </tr></template></tbody></table></div>
+            <div class="k bt-small">"Its result" = its verdict with its own plan (a SKIP scores 0; a TAKE whose plan was rejected is scored with Minimal).
+              "Its plan if taken" = what its plan would have made had the trade been taken. Model cost.</div>
+          </div>
+        </template>
+      </div>
     </template>
     <div class="bt-row bt-tally">
       <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>

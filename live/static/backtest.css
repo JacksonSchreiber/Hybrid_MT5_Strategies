@@ -81,4 +81,4 @@ main{max-width:1400px}
 .bt-q{color:#c9d1d9}.bt-a{white-space:pre-wrap}
 .bt-ask{display:flex;gap:6px;align-items:center}.bt-ask sl-input{flex:1;min-width:0}
 .bt-grade td,.bt-grade th{white-space:nowrap}
-.bt-block{max-width:900px;margin:24px auto;padding:20px}.bt-gh{font-size:15px;margin:16px 0 6px}.bt-byblock{margin-top:12px}.bt-block h2{margin:0 0 8px}.bt-block .bt-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.bt-block{max-width:900px;margin:24px auto;padding:20px}.bt-gh{font-size:15px;margin:16px 0 6px}.bt-aocards{margin-top:12px}.bt-aocards td{vertical-align:top}.bt-aocards .bt-why{min-width:280px;max-width:520px;white-space:normal;font-size:12px;color:var(--dim)}.bt-byblock{margin-top:12px}.bt-block h2{margin:0 0 8px}.bt-block .bt-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}

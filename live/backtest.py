@@ -20,6 +20,9 @@ stay 35), taken in BLOCKS of 20 (coach 2026-10-06): after each block the session
 next one; leaving there and resuming later is fine). At a checkpoint the trader sees the AGGREGATE grade (trader 2026-10-08,
 overriding the coach's "nothing at a checkpoint"): trader alone / advisor alone / combined for the block just finished and so far -
 no per-card result, chart or CSV row.
+ADVISOR PLAYS THE REST (trader 2026-10-08): at a checkpoint the trader can hand the rest of a Test session to the advisor
+(/bt/advisor_only): his session ends there (graded on the cards he played), the blind advisor answers every remaining card, and its
+results on those cards are revealed card by card (summary "advisor_only"; the CSV keeps his own decisions). Those ids stay spent.
 TEST MODE (phase 3, 2026-10-05): a draw from the group's TEST partition; every Test id ever drawn goes into the ledger
 (<root>/web/backtest/test_ledger.json) at once and is never drawn again ("one pass per signal ever"; a session cannot be restarted,
 only resumed). Nothing is revealed during a Test session - no per-card result, no tally, no CSV rows, the session list shows no R -
@@ -305,10 +308,15 @@ def list_sessions(cfg: dict) -> list:
         if not f.endswith(".json"): continue
         try: s = json.load(open(os.path.join(web_dir(cfg, "sessions"), f)))
         except (OSError, ValueError): continue
-        hide = s["mode"] == "test" and len(s["decisions"]) < s["n"]          # Test: nothing revealed until the last card is decided
+        hide = s["mode"] == "test" and not trader_done(s)                    # Test: nothing revealed until the trader's last card
         out.append({"sid": s["sid"], "group": s["group"], "mode": s["mode"], "created": s["created"], "n": s["n"], "done": len(s["decisions"]), "block": s.get("block"),
-                    "tally": None if hide else tally(s)})
+                    "tally": None if hide else tally(s), "advisor_only": s.get("advisor_only_from")})
     return sorted(out, key=lambda x: x["created"], reverse=True)[:50]
+
+
+def trader_done(s: dict) -> bool:
+    """the trader has nothing left to play: the last card is decided, or he handed the rest to the advisor (advisor_only_from)."""
+    return s["pos"] >= s["n"] or s.get("advisor_only_from") is not None
 
 
 def tally(s: dict) -> dict:
@@ -332,8 +340,8 @@ def card(cfg: dict, sid: str) -> dict:
     S = store(cfg)                                  # review 2 #1: load/reload the data BEFORE taking the lock
     with _LOCK:
         s = load_session(cfg, sid); i = s["pos"]
-        if i >= s["n"]:
-            out = {"done": True, "tally": tally(s), "n": s["n"], "sid": sid, "mode": s["mode"]}
+        if trader_done(s):
+            out = {"done": True, "tally": tally(s), "n": s["n"], "sid": sid, "mode": s["mode"], "advisor_only_from": s.get("advisor_only_from")}
             if s["mode"] == "test":                 # refreshed: an advisor v1 that arrived after the trader's final still counts
                 write_report(cfg, s, S); out["summary"] = load_summary(cfg, sid)
             return out
@@ -357,6 +365,7 @@ def card(cfg: dict, sid: str) -> dict:
 def _gate(s: dict) -> None:
     """Test blocks: no card of the next block can be committed, decided or consulted before the trader starts that block."""
     b = s.get("block"); i = s["pos"]
+    if s.get("advisor_only_from") is not None: raise ValueError("the advisor plays the rest of this session - nothing left to play")
     if b and i and i % b == 0 and i < s["n"] and str(i) not in s.get("block_ok", {}): raise ValueError("start the next block first")
 
 
@@ -364,10 +373,57 @@ def next_block(cfg: dict, sid: str) -> dict:
     """the trader starts the next block of a Test session (only at a checkpoint)."""
     with _LOCK:
         s = load_session(cfg, sid); i = s["pos"]; b = s.get("block")
+        if s.get("advisor_only_from") is not None: raise ValueError("the advisor plays the rest of this session - nothing left to play")
         if s["mode"] != "test" or not b or not i or i % b or i >= s["n"]: raise ValueError("not at a block checkpoint")
         if str(i) in s.get("block_ok", {}): raise ValueError("this block has already started")
         s.setdefault("block_ok", {})[str(i)] = _now(); save_session(cfg, s)
     return {"ok": True, "sid": sid, "i": i, "block": i // b + 1}
+
+
+def advisor_only(cfg: dict, sid: str) -> dict:
+    """trader 2026-10-08: at a Test checkpoint, hand the rest of the session to the advisor - the trader's play ends here, every
+    remaining card gets its blind consult, and the advisor's results on them are revealed as they come (summary "advisor_only")."""
+    S = store(cfg)
+    with _LOCK:
+        s = load_session(cfg, sid); i = s["pos"]; b = s.get("block")
+        if s["mode"] != "test" or not b: raise ValueError("only a Test session can be handed to the advisor")
+        if s.get("advisor_only_from") is not None: raise ValueError("the advisor already plays the rest of this session")
+        if not i or i % b or i >= s["n"] or str(i) in s.get("block_ok", {}): raise ValueError("only at a block checkpoint")
+        s["advisor_only_from"] = i; s["advisor_only_at"] = _now(); save_session(cfg, s)
+    from live import backtest_advisor as BA
+    q = BA.queue_session(cfg, s, S, ahead=s["n"])
+    return {"ok": True, "sid": sid, "from": i, "queued": q}
+
+
+def _advisor_only(cfg, S, s) -> dict | None:
+    """the advisor alone on the cards the trader handed over: its blind verdict + v1 plan, graded like the advisor-alone column
+    (a TAKE whose stack was rejected = Minimal), overall, per block and card by card."""
+    a0 = s.get("advisor_only_from")
+    if a0 is None: return None
+    from live import backtest_advisor as BA
+    b = s.get("block") or 10 ** 9; rows, cards, failed = [], [], 0
+    for i in range(a0, s["n"]):
+        hid = s["ids"][i]; st = BA.get_status(cfg, s["sid"], hid)
+        if st.get("state") == "failed": failed += 1
+        if st.get("state") != "done": continue
+        gi = _grade_inputs(cfg, S, s, {"hid": hid, "i": i, "decision": "skip", "plan": None, "first": {"decision": "skip", "plan": None}})
+        R = S["results"][hid]; sp = R.get("stop_pips"); gr = R.get("gross") or {}
+        raw1 = R["R"]["raw"] - (PIP_COST * gr.get("raw", 1.0) / sp if sp else 0.0)
+        rows.append({**gi, "blk": i // b, "R_raw": R["R"]["raw"], "R_raw_1pip": round(raw1, 4)})
+        adv = advisor_record(cfg, s["sid"], hid)
+        b1 = next((v for v in adv["versions"] if v.get("blind_v1")), None) if adv else None
+        c = S["cards"][hid]
+        cards.append({"card": i + 1, "detector": c.get("detector"), "direction": c.get("direction"), "verdict": gi["adv_verdict"],
+                      "confidence": gi["adv_confidence"], "R_adv": gi["R_adv_alone"], "plan_graded": gi["adv_plan_graded"],
+                      "R_plan_if_taken": round(_evaluate(S, hid, b1["plan"])["R"], 4) if (b1 and b1.get("valid")) else None,
+                      "R_minimal": gi["R_minimal"], "R_raw": R["R"]["raw"], "nearest_preset": (b1 or {}).get("nearest_preset"),
+                      "rationale": (b1 or {}).get("rationale") or st.get("why") or "", "role": (gi.get("adv_role") or "")[23:25]})
+    blocks = sorted({r["blk"] for r in rows})
+    return {"from": a0, "total": s["n"] - a0, "answered": len(rows), "failed": failed, "at": s.get("advisor_only_at"),
+            "grade": _grade(rows, "advisor"),
+            "by_block": [{"block": k + 1, "cards": f"{max(a0, k * b) + 1}-{min(s['n'], (k + 1) * b)}",
+                          "advisor_alone": _grade([r for r in rows if r["blk"] == k], "advisor")} for k in blocks],
+            "cards": cards}
 
 
 def _advisor_payload(cfg, s, i, hid) -> dict:
@@ -622,6 +678,7 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
                         "vs_raw": round(t["R_choice_1pip"] - t["R_raw_1pip"], 3), "vs_default": round(t["R_choice_1pip"] - t["R_default_1pip"], 3),
                         "R_choice_per_signal": round(t["R_choice_1pip"] / n, 4), "R_raw_per_signal": round(t["R_raw_1pip"] / n, 4)},
             "frame_cap_days": FRAME_CAP_DAYS, "comparator": "minimal", "menu_frozen_at": s.get("menu_frozen_at"),
+            "advisor_only": _advisor_only(cfg, S, s),
             "grading": {"trader_alone": _grade(rows, "trader"), "advisor_alone": _grade(rows, "advisor"), "combined": _grade(rows, "combined"),
                         "by_block": [{"block": k + 1, "cards": f"{k * s['block'] + 1}-{min(s['n'], (k + 1) * s['block'])}",
                                       "decided": sum(1 for r in rows if r["blk"] == k),
@@ -652,7 +709,7 @@ def report_csv(cfg: dict, sid: str) -> bytes:
     if not _safe_sid(sid): raise ValueError("bad session id")
     try: s = load_session(cfg, sid)
     except ValueError: s = None
-    if s and s["mode"] == "test" and len(s["decisions"]) < s["n"]:     # Test: no outcome leaves the server before the session ends
+    if s and s["mode"] == "test" and not trader_done(s):             # Test: no outcome leaves the server before the trader's play ends
         return (REPORT_HEADER + "\n# Test session in progress - the report is available once its last card is decided\n" + ",".join(COLS) + "\n").encode()
     if s and s["mode"] == "test":                       # refresh once at the end (a late advisor v1 still counts)
         S = store(cfg)                                  # review 2 #1: never call store() while holding the lock
