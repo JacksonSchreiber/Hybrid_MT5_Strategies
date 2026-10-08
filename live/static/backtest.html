@@ -9,8 +9,8 @@
       <h1>Backtest</h1>
       <p class="k">Blind historical signals, one at a time: decide <b>skip</b> or <b>take</b>, and build how you'd manage it. <b>Practice</b> reveals the
         result after each decision. <b>Test</b> is graded: each signal can be tested only once, ever; every card takes two steps (your first call,
-        then the advisor's view, then your final call) and nothing is revealed until the session ends. The comparison is always the <b>raw signal</b>;
-        the grading comparator is <b>Minimal</b>. Model costs - read the differences, not the levels.</p>
+        then the advisor's view, then your final call) and nothing is revealed until the session ends. The comparison is always the <b>raw signal</b>
+        (Minimal is gone - it was shaped off the data). Model costs - read the differences, not the levels.</p>
     </div>
     <div class="card bt-startcard">
       <div class="bt-row">
@@ -56,25 +56,24 @@
         <template x-for="tb in brkTables()">
           <div><h3 class="bt-gh" x-text="tb.title"></h3>
             <div class="bt-scroll"><table class="bt-tbl bt-grade">
-        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
+        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs raw</th><th>at +1 pip vs raw</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs raw on taken</th></tr></thead>
         <tbody><template x-for="row in gradeRows(tb.g)"><tr>
           <td><b x-text="row[0]"></b></td>
           <td x-text="row[1].n ? (row[1].taken + ' of ' + row[1].n) : 'n/a'"></td>
           <td :class="cls(row[1].total_R)" x-text="row[1].n ? fmt(row[1].total_R) : '-'"></td>
-          <td :class="cls(row[1].vs_minimal)" x-text="row[1].n ? fmt(row[1].vs_minimal) : '-'"></td>
           <td :class="cls(row[1].vs_raw)" x-text="row[1].n ? fmt(row[1].vs_raw) : '-'"></td>
-          <td :class="row[1].n ? cls(row[1].at_1pip.vs_minimal) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_minimal) : '-'"></td>
+          <td :class="row[1].n ? cls(row[1].at_1pip.vs_raw) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_raw) : '-'"></td>
           <td x-text="row[1].n ? (pct(row[1].selection.take_rate_reached_1R) + ' / ' + pct(row[1].selection.take_rate_went_to_stop) + (row[1].selection.spread_points !== null ? ' (' + (row[1].selection.spread_points > 0 ? '+' : '') + row[1].selection.spread_points + ' pts' + (row[1].selection.z !== null ? ', z ' + row[1].selection.z : '') + ')' : '')) : '-'"></td>
-          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_minimal) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
+          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_raw) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
         </tr></template></tbody></table></div></div>
         </template>
         <template x-if="byBlock(G).length > 1">
           <div class="bt-scroll"><table class="bt-tbl bt-grade bt-byblock">
-            <thead><tr><th>Block</th><th>Cards</th><th>You alone: total R (vs Minimal)</th><th>Advisor alone</th><th>Together (your final)</th></tr></thead>
+            <thead><tr><th>Block</th><th>Cards</th><th>You alone: total R (vs raw)</th><th>Advisor alone</th><th>Together (your final)</th></tr></thead>
             <tbody><template x-for="bb in byBlock(G)"><tr>
               <td x-text="bb.block"></td><td x-text="bb.cards"></td>
-              <template x-for="a in ['trader_alone', 'advisor_alone', 'combined']"><td :class="bb[a].n ? cls(bb[a].vs_minimal) : ''"
-                x-text="bb[a].n ? (fmt(bb[a].total_R) + ' (' + fmt(bb[a].vs_minimal) + ')') : '-'"></td></template>
+              <template x-for="a in ['trader_alone', 'advisor_alone', 'combined']"><td :class="bb[a].n ? cls(bb[a].vs_raw) : ''"
+                x-text="bb[a].n ? (fmt(bb[a].total_R) + ' (' + fmt(bb[a].vs_raw) + ')') : '-'"></td></template>
             </tr></template></tbody></table></div>
         </template>
         <div class="k bt-small">Model cost. "You alone" = your first call on each card; "the advisor alone" = its blind first plan; "together" =
@@ -99,7 +98,6 @@
         <span class="bt-pill" x-show="isTest()">results hidden until the last card</span>
         <span class="bt-pill" x-show="!isTest()">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
         <span class="bt-pill" x-show="!isTest()">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
-        <span class="bt-pill" x-show="!isTest()" title="the grading comparator">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
         <sl-button size="small" variant="text" @click="leave()">Leave</sl-button>
       </div>
     </div>
@@ -269,7 +267,7 @@
                     <span class="k" x-show="(C.adv||{}).confidence !== null && (C.adv||{}).confidence !== undefined" x-text="'confidence ' + (C.adv||{}).confidence"></span></div>
                   <div x-show="(C.adv||{}).why" x-text="(C.adv||{}).why"></div>
                   <div class="k bt-small" x-show="C.advisor" x-text="C.advisor ? ('Its plan is in the preset list as “Advisor recommended” (' + C.advisor.note + ', closest preset: ' + labelOf(C.advisor.nearest_preset) + ')') : ''"></div>
-                  <div class="k bt-small" x-show="!C.advisor">Its lever plan was not usable (rejected) - its verdict still counts and is graded as if it had used Minimal.</div></div></template>
+                  <div class="k bt-small" x-show="!C.advisor">Its lever plan was not usable (rejected) - its verdict still counts and is graded as the raw signal.</div></div></template>
                 <div class="bt-thread"><template x-for="t in (C.adv && C.adv.thread) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + t.q"></div>
                   <div class="bt-a" x-text="'Advisor: ' + t.a"></div><div class="k bt-small" x-show="t.new_version" x-text="typeof t.new_version === 'number' ? ('new plan v' + t.new_version + ' - in the preset list') : t.new_version"></div></div></template>
                   <template x-for="q in (C.adv && C.adv.pending) || []"><div class="bt-qa"><div class="bt-q" x-text="'You: ' + q"></div><div class="k"><sl-spinner></sl-spinner> the advisor is answering…</div></div></template></div>
@@ -296,8 +294,6 @@
             <table class="bt-tbl bt-cmp">
               <tr class="bt-me"><td>Your plan</td><td :class="cls(rev?.R_plan)" x-text="rev?.R_plan === null ? '-' : fmt(rev?.R_plan)"></td></tr>
               <tr><td><b>Raw signal</b></td><td :class="cls(rev?.R_raw)" x-text="fmt(rev?.R_raw)"></td></tr>
-              <tr><td x-text="rev?.default_label"></td><td :class="cls(rev?.R_default)" x-text="fmt(rev?.R_default)"></td></tr>
-              <template x-if="rev && rev.preload_label && rev.preload_label !== 'Minimal'"><tr><td x-text="rev?.preload_label"></td><td :class="cls(rev?.R_preload)" x-text="fmt(rev?.R_preload)"></td></tr></template>
               <template x-for="p in rev?.presets" :key="p.key"><tr><td x-text="p.label"></td><td :class="cls(p.R)" x-text="fmt(p.R)"></td></tr></template>
               <template x-if="rev && rev.advisor"><tr><td>Advisor · first (blind) plan</td><td :class="cls(rev?.advisor?.R_adv_v1)" x-text="rev?.advisor?.R_adv_v1 === '' ? '-' : fmt(rev?.advisor?.R_adv_v1)"></td></tr></template>
               <template x-if="rev && rev.advisor"><tr><td>Advisor · latest plan</td><td :class="cls(rev?.advisor?.R_adv_latest)" x-text="rev?.advisor?.R_adv_latest === '' ? '-' : fmt(rev?.advisor?.R_adv_latest)"></td></tr></template>
@@ -325,26 +321,25 @@
     <h3 class="bt-gh" x-show="summary && summary.advisor_only" x-text="'You (cards 1-' + (summary && summary.advisor_only ? summary.advisor_only.from : '') + ')'"></h3>
     <template x-if="summary && summary.grading && summary.grading.trader_alone && summary.grading.trader_alone.n">
       <div class="bt-scroll"><table class="bt-tbl bt-grade">
-        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
+        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs raw</th><th>at +1 pip vs raw</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs raw on taken</th></tr></thead>
         <tbody><template x-for="row in gradeRows()"><tr>
           <td><b x-text="row[0]"></b></td>
           <td x-text="row[1].n ? (row[1].taken + ' of ' + row[1].n) : 'n/a'"></td>
           <td :class="cls(row[1].total_R)" x-text="row[1].n ? fmt(row[1].total_R) : '-'"></td>
-          <td :class="cls(row[1].vs_minimal)" x-text="row[1].n ? fmt(row[1].vs_minimal) : '-'"></td>
           <td :class="cls(row[1].vs_raw)" x-text="row[1].n ? fmt(row[1].vs_raw) : '-'"></td>
-          <td :class="row[1].n ? cls(row[1].at_1pip.vs_minimal) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_minimal) : '-'"></td>
+          <td :class="row[1].n ? cls(row[1].at_1pip.vs_raw) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_raw) : '-'"></td>
           <td x-text="row[1].n ? (pct(row[1].selection.take_rate_reached_1R) + ' / ' + pct(row[1].selection.take_rate_went_to_stop) + (row[1].selection.spread_points !== null ? ' (' + (row[1].selection.spread_points > 0 ? '+' : '') + row[1].selection.spread_points + ' pts' + (row[1].selection.z !== null ? ', z ' + row[1].selection.z : '') + ')' : '')) : '-'"></td>
-          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_minimal) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
+          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_raw) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
         </tr></template></tbody></table>
-        <div class="k bt-small">Model cost. The advisor's grade leaves out cards where it gave no verdict; a verdict whose plan was rejected is graded with Minimal. Bars (coach): selection spread of at least 15 points
-          at z/t >= 2 and total R at or above Minimal; presets/plans +0.05R vs Minimal on taken trades at t >= 2.</div>
+        <div class="k bt-small">Model cost. The advisor's grade leaves out cards where it gave no verdict; a verdict whose plan was rejected is graded as the raw signal. Bars (coach, now against raw): selection spread of at
+          least 15 points at z/t >= 2 and total R at or above raw; plans +0.05R vs raw on taken trades at t >= 2.</div>
         <div x-data="{ G: summary.grading }"><template x-if="byBlock(G).length > 1">
           <div class="bt-scroll"><table class="bt-tbl bt-grade bt-byblock">
-            <thead><tr><th>Block</th><th>Cards</th><th>You alone: total R (vs Minimal)</th><th>Advisor alone</th><th>Together (your final)</th></tr></thead>
+            <thead><tr><th>Block</th><th>Cards</th><th>You alone: total R (vs raw)</th><th>Advisor alone</th><th>Together (your final)</th></tr></thead>
             <tbody><template x-for="bb in byBlock(G)"><tr>
               <td x-text="bb.block"></td><td x-text="bb.cards"></td>
-              <template x-for="a in ['trader_alone', 'advisor_alone', 'combined']"><td :class="bb[a].n ? cls(bb[a].vs_minimal) : ''"
-                x-text="bb[a].n ? (fmt(bb[a].total_R) + ' (' + fmt(bb[a].vs_minimal) + ')') : '-'"></td></template>
+              <template x-for="a in ['trader_alone', 'advisor_alone', 'combined']"><td :class="bb[a].n ? cls(bb[a].vs_raw) : ''"
+                x-text="bb[a].n ? (fmt(bb[a].total_R) + ' (' + fmt(bb[a].vs_raw) + ')') : '-'"></td></template>
             </tr></template></tbody></table></div>
         </template></div></div>
     </template>
@@ -356,35 +351,33 @@
         <template x-if="A.answered">
           <div>
             <div class="bt-scroll"><table class="bt-tbl bt-grade">
-        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs Minimal</th><th>vs raw</th><th>at +1 pip vs Minimal</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs Minimal on taken</th></tr></thead>
+        <thead><tr><th></th><th>Taken</th><th>Total R</th><th>vs raw</th><th>at +1 pip vs raw</th><th>Take rate: reached +1R / went to the stop</th><th>Plan vs raw on taken</th></tr></thead>
         <tbody><template x-for="row in aoRows(A)"><tr>
           <td><b x-text="row[0]"></b></td>
           <td x-text="row[1].n ? (row[1].taken + ' of ' + row[1].n) : 'n/a'"></td>
           <td :class="cls(row[1].total_R)" x-text="row[1].n ? fmt(row[1].total_R) : '-'"></td>
-          <td :class="cls(row[1].vs_minimal)" x-text="row[1].n ? fmt(row[1].vs_minimal) : '-'"></td>
           <td :class="cls(row[1].vs_raw)" x-text="row[1].n ? fmt(row[1].vs_raw) : '-'"></td>
-          <td :class="row[1].n ? cls(row[1].at_1pip.vs_minimal) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_minimal) : '-'"></td>
+          <td :class="row[1].n ? cls(row[1].at_1pip.vs_raw) : ''" x-text="row[1].n ? fmt(row[1].at_1pip.vs_raw) : '-'"></td>
           <td x-text="row[1].n ? (pct(row[1].selection.take_rate_reached_1R) + ' / ' + pct(row[1].selection.take_rate_went_to_stop) + (row[1].selection.spread_points !== null ? ' (' + (row[1].selection.spread_points > 0 ? '+' : '') + row[1].selection.spread_points + ' pts' + (row[1].selection.z !== null ? ', z ' + row[1].selection.z : '') + ')' : '')) : '-'"></td>
-          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_minimal) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
+          <td x-text="row[1].n && row[1].settings_on_taken.n ? (fmt(row[1].settings_on_taken.mean_vs_raw) + ' per trade' + (row[1].settings_on_taken.t !== null ? ' (t ' + row[1].settings_on_taken.t + ')' : '')) : '-'"></td>
         </tr></template></tbody></table></div>
             <template x-if="A.by_block.length > 1"><div class="bt-scroll"><table class="bt-tbl bt-grade bt-byblock">
-              <thead><tr><th>Block</th><th>Cards</th><th>Taken</th><th>Advisor: total R</th><th>vs Minimal</th><th>vs raw</th></tr></thead>
+              <thead><tr><th>Block</th><th>Cards</th><th>Taken</th><th>Advisor: total R</th><th>vs raw</th></tr></thead>
               <tbody><template x-for="bb in A.by_block"><tr><td x-text="bb.block"></td><td x-text="bb.cards"></td>
                 <td x-text="bb.advisor_alone.n ? bb.advisor_alone.taken + ' of ' + bb.advisor_alone.n : '-'"></td>
                 <td :class="cls(bb.advisor_alone.total_R)" x-text="bb.advisor_alone.n ? fmt(bb.advisor_alone.total_R) : '-'"></td>
-                <td :class="cls(bb.advisor_alone.vs_minimal)" x-text="bb.advisor_alone.n ? fmt(bb.advisor_alone.vs_minimal) : '-'"></td>
                 <td :class="cls(bb.advisor_alone.vs_raw)" x-text="bb.advisor_alone.n ? fmt(bb.advisor_alone.vs_raw) : '-'"></td></tr></template></tbody></table></div></template>
             <div class="bt-scroll"><table class="bt-tbl bt-aocards">
-              <thead><tr><th>Card</th><th>Signal</th><th>Advisor</th><th>Its result</th><th>Its plan if taken</th><th>Minimal</th><th>Raw</th><th>Closest preset</th><th>Why (its plan)</th></tr></thead>
+              <thead><tr><th>Card</th><th>Signal</th><th>Advisor</th><th>Its result</th><th>Its plan if taken</th><th>Raw</th><th>Closest preset</th><th>Why (its plan)</th></tr></thead>
               <tbody><template x-for="c in A.cards" :key="c.card"><tr>
                 <td x-text="c.card"></td><td x-text="c.detector + ' · ' + c.direction"></td>
                 <td x-text="(c.verdict || '-') + (c.confidence !== '' && c.confidence !== null ? ' (' + c.confidence + ')' : '')"></td>
                 <td :class="cls(c.R_adv)" x-text="c.R_adv === '' ? '-' : fmt(c.R_adv)"></td>
                 <td :class="cls(c.R_plan_if_taken)" x-text="c.R_plan_if_taken === null ? '-' : fmt(c.R_plan_if_taken)"></td>
-                <td :class="cls(c.R_minimal)" x-text="fmt(c.R_minimal)"></td><td :class="cls(c.R_raw)" x-text="fmt(c.R_raw)"></td>
+                <td :class="cls(c.R_raw)" x-text="fmt(c.R_raw)"></td>
                 <td x-text="c.nearest_preset ? labelOf(c.nearest_preset) : '-'"></td><td class="bt-why" x-text="c.rationale"></td>
               </tr></template></tbody></table></div>
-            <div class="k bt-small">"Its result" = its verdict with its own plan (a SKIP scores 0; a TAKE whose plan was rejected is scored with Minimal).
+            <div class="k bt-small">"Its result" = its verdict with its own plan (a SKIP scores 0; a TAKE whose plan was rejected is scored as the raw signal).
               "Its plan if taken" = what its plan would have made had the trade been taken. Model cost.</div>
           </div>
         </template>
@@ -409,7 +402,6 @@
       <span class="bt-pill">Your R <b :class="cls(C.tally.R_choice)" x-text="fmt(C.tally.R_choice)"></b></span>
       <span class="bt-pill">Raw <b :class="cls(C.tally.R_raw)" x-text="fmt(C.tally.R_raw)"></b></span>
       <span class="bt-pill">vs raw <b :class="cls(C.tally.R_choice - C.tally.R_raw)" x-text="fmt(C.tally.R_choice - C.tally.R_raw)"></b></span>
-      <span class="bt-pill">Minimal <b :class="cls(C.tally.R_default)" x-text="fmt(C.tally.R_default)"></b></span>
       <span class="bt-pill" x-text="C.tally.taken + ' taken · ' + C.tally.skipped + ' skipped'"></span>
       <span class="bt-pill" title="after a +1 pip round trip per trade">at +1 pip: you <b :class="cls(C.tally.R_choice_1pip)" x-text="fmt(C.tally.R_choice_1pip)"></b> · raw <b :class="cls(C.tally.R_raw_1pip)" x-text="fmt(C.tally.R_raw_1pip)"></b></span>
     </div>

@@ -65,6 +65,15 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
     - Unset, it is left out of the normalised plan; the engine is identical without it (old vs new, every trade x every menu
       plan + the wait/hold plans, 0 differences). A second new lever option before any Test session; not a menu change.
 
+## Minimal removed (trader 2026-10-08)
+- "Get rid of the minimal preset, since it is shaped off the data and invalid." The tab and the advisor no longer see it: the preset
+  list drops it (`backtest.menu_view` - the frozen menu FILE is unchanged so old results stay reproducible), the other presets are
+  described by their own levers, every group's preloaded plan is the raw signal (the bloc's "Minimal + 1h cut" default went with it),
+  the group notes drop the lines built on Minimal, and every grade is against the raw signal (vs raw, plan vs raw on taken; a TAKE
+  whose plan was rejected is graded as the raw signal). Advisor role v4: nearest_preset raw / ruthless / slow / banker / pyramid.
+- For the coach: this changes the Test grading comparator (Minimal -> raw) and the frozen menu as served; old session records keep
+  their Minimal-era R_default values.
+
 ## Advisor experiments (`live/backtest_experiment.py`, trader 2026-10-08)
 - Offline, on the cards of a finished Test session; results in `<root>/web/backtest/experiments/<sid>/<name>/`, shown on the
   session's end page. Never written into the Test record (advisor/<sid>/, the session, its grades or CSV).

@@ -32,16 +32,16 @@ preset; follow-up questions allowed - later versions count toward the combined r
 (/bt/decide). The advisor batch (live/backtest_advisor.py, run by the advisor runner) is queued when the session starts: one blind
 consult per served card, in session order. Test needs the preset menu FROZEN (menu_v1.json "frozen").
 GRADING (the session summary): the trader alone (his first commit), the advisor alone (its blind v1 verdict + stack) and both together
-(the final), each against Minimal (every signal taken with Minimal - the grading comparator) and the raw signal, at model cost and
+(the final), each against the raw signal (every signal taken raw - the only comparison; Minimal removed 2026-10-08), at model cost and
 +1 pip; the selection inputs (take rate on signals that reached +1R minus take rate on signals that went to the stop without reaching
-it, with a two-proportion z) and the settings input (R of the chosen plan minus Minimal on the taken signals, paired t).
+it, with a two-proportion z) and the settings input (R of the chosen plan minus the raw signal on the taken signals, paired t).
 
 ADVISOR RECOMMENDATION (schema "advisor-levers/v1" - what the advisor emits, as a fenced block in its reply):
     ```levers
     {"schema": "advisor-levers/v1", "nearest_preset": "ruthless", "rationale": "one plain-words line",
      "plan": {"entry": {"pct": 100}, "tp2": true, "trim_to_cap": false, "levers": [{"type": "bank", "pct": 25, "at": 1.0, "tp1": true}, ...]}}
     ```
-  nearest_preset: one of the menu-v1 preset keys (minimal / ruthless / slow / banker / pyramid); plan: a levers/v1 plan (see
+  nearest_preset: raw or one of the served preset keys (ruthless / slow / banker / pyramid); plan: a levers/v1 plan (see
   live/backtest_engine.py - only levers the engine evaluates, within the 200% cap); anything else is REJECTED with the reason logged.
   Versions per (session, card): v1 = generated BLIND from the pre-generated card bundle (blind_v1: true); later versions come from
   conversation ("v2 - updated after your question"); every version is kept with its time. Advisor-alone grading uses v1; the
@@ -64,7 +64,7 @@ SIZES = TEST_SIZES           # the groups
 DEFAULTS = {"tab_visible": False, "data_dir": None, "advisor_slot": {"practice": "off", "test": "after_commit"}, "dev": False}
 _LOCK = threading.RLock()       # review 2 #1: reentrant (store() reloads under it; card()/report_csv() also call store() before locking)
 _STORE: dict = {}
-PRESET_KEYS = ("minimal", "ruthless", "slow", "banker", "pyramid")
+PRESET_KEYS = ("ruthless", "slow", "banker", "pyramid")     # trader 2026-10-08: Minimal removed ("shaped off the data and invalid")
 LOADABLE = ("default", "raw", "advisor", "advisor_v1") + PRESET_KEYS      # what the builder can load (the "loaded_preset" a plan started from)
 FRAME_CAP_DAYS = 40
 PIP_COST = 1.0                                              # the +1 pip round-trip summary (coach 2026-10-04): cost = gross units x 1 pip / stop pips
@@ -99,9 +99,47 @@ def store(cfg: dict) -> dict:
             res = json.load(gzip.open(os.path.join(d, "results_v1.json.gz")))
             frames = E.Frames(os.path.join(d, "frames_v1"))
             ok = {h for h in split["trades"] if h in cards and h in res["trades"] and h in frames.idx and servable(cards[h])}
-            _STORE.clear(); _STORE.update(key=key, split=split, cards=cards, results=res["trades"], menu=json.load(open(os.path.join(d, "menu_v1.json"))),
-                                          info=json.load(open(os.path.join(d, "info_v1.json"))), frames=frames, eligible=ok)
+            menu_file = json.load(open(os.path.join(d, "menu_v1.json")))
+            _STORE.clear(); _STORE.update(key=key, split=split, cards=cards, results=res["trades"], menu=menu_view(menu_file), menu_file=menu_file,
+                                          info=info_view(json.load(open(os.path.join(d, "info_v1.json")))), frames=frames, eligible=ok)
     return _STORE
+
+
+def describe(cfg: dict) -> str:
+    """a plan's levers in plain words (the preset descriptions no longer lean on Minimal)."""
+    R = lambda v: "entry" if v == 0 else f"{v:+g}R"
+    st = lambda v: "the trade stop" if v == "trade" else R(v)
+    out = [f"{cfg['entry']['pct']:g}% at the signal"]
+    for l in cfg["levers"]:
+        t = l["type"]; tp = " (or TP1 if nearer)" if l.get("tp1") else ""
+        if t == "bank": out.append(f"bank {l['pct']:g}% at +{l['at']:g}R{tp}")
+        elif t == "move": out.append(f"stop to {R(l['to'])} at {l['when']:+g}R{tp}")
+        elif t == "add_reach": out.append(f"+{l['pct']:g}% if +{l['at']:g}R" + (f" within {l['within_h']:g} h" if l.get("within_h") else "") + f" (its stop at {st(l['stop'])})")
+        elif t == "add_bar": out.append(f"+{l['pct']:g}% at the bar-{l['bar']} close" + (f" or early at +{l['early_at']:g}R" if l.get("early_at") is not None else "")
+                                        + (f" (held while the average R < {l['hold_avg']:+g}R)" if l.get("hold_avg") is not None else ""))
+        elif t == "add_tp1": out.append(f"+{l['pct']:g}% at TP1 (its stop at {st(l['stop'])})")
+        elif t == "cut_avg": out.append(f"close at {l['at_h']:g} h if the average R is below " + ("0R" if l["below"] == 0 else f"{l['below']:+g}R"))
+        elif t == "cut_unless": out.append(f"close at {l['at_h']:g} h unless +{l['reach']:g}R was reached")
+    if not cfg.get("tp2", True): out.append("no TP2 exit")
+    if cfg.get("trim_to_cap"): out.append("trimmed to the 200% cap")
+    return "; ".join(out)
+
+
+def menu_view(m: dict) -> dict:
+    """trader 2026-10-08: "get rid of the minimal preset, since it is shaped off the data and invalid" - the menu as the tab and the
+    advisor see it: no Minimal, the other presets described by their own levers, every group's preloaded plan = the raw signal (the only
+    comparison). The frozen menu file itself is unchanged (its results stay reproducible)."""
+    v = dict(m); raw = m["raw"]
+    v["presets"] = [dict(p, about=describe(p["cfg"])) for p in m["presets"] if p["key"] != "minimal"]
+    v["defaults"] = {g: {"preset": "raw", "label": "Raw signal", "about": "In at the signal, out at TP2 or the stop - nothing added", "cfg": raw,
+                         "status": "the raw signal - the only comparison (trader 2026-10-08)"} for g in m["defaults"]}
+    return v
+
+
+def info_view(info: dict) -> dict:
+    """the group notes without the lines built on Minimal (its own line and the bloc default 'Minimal + 1h cut')."""
+    v = dict(info); v["groups"] = {g: dict(gi, lines=[l for l in gi["lines"] if "minimal" not in l["text"].lower()]) for g, gi in info["groups"].items()}
+    return v
 
 
 # ------------------------------------------------------------------------------------------------------------- sampler
@@ -420,7 +458,7 @@ def advisor_only(cfg: dict, sid: str) -> dict:
 
 def _advisor_only(cfg, S, s) -> dict | None:
     """the advisor alone on the cards the trader handed over: its blind verdict + v1 plan, graded like the advisor-alone column
-    (a TAKE whose stack was rejected = Minimal), overall, per block and card by card."""
+    (a TAKE whose stack was rejected = the raw signal), overall, per block and card by card."""
     a0 = s.get("advisor_only_from")
     if a0 is None or s.get("experiment_only"): return None          # an experiment-only draw has no Test advisor batch
     from live import backtest_advisor as BA
@@ -439,7 +477,7 @@ def _advisor_only(cfg, S, s) -> dict | None:
         cards.append({"card": i + 1, "detector": c.get("detector"), "direction": c.get("direction"), "verdict": gi["adv_verdict"],
                       "confidence": gi["adv_confidence"], "R_adv": gi["R_adv_alone"], "plan_graded": gi["adv_plan_graded"],
                       "R_plan_if_taken": round(_evaluate(S, hid, b1["plan"])["R"], 4) if (b1 and b1.get("valid")) else None,
-                      "R_minimal": gi["R_minimal"], "R_raw": R["R"]["raw"], "nearest_preset": (b1 or {}).get("nearest_preset"),
+                      "R_raw": R["R"]["raw"], "nearest_preset": (b1 or {}).get("nearest_preset"),
                       "rationale": (b1 or {}).get("rationale") or st.get("why") or "", "role": (gi.get("adv_role") or "")[23:25]})
     blocks = sorted({r["blk"] for r in rows})
     return {"from": a0, "total": s["n"] - a0, "answered": len(rows), "failed": failed, "at": s.get("advisor_only_at"),
@@ -524,14 +562,14 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
             try: plan_n, warn = (E.validate(plan) if plan else (None, []))
             except Exception as e: plan_n, warn, plan_bad = None, [], str(e)[:200]
         ev = _evaluate(S, hid, plan_n) if plan_n else None
-        dflt = R["default"]; mv = S["menu"]
+        dflt = "raw"; mv = S["menu"]                  # trader 2026-10-08: the raw signal is the only comparison (Minimal removed)
         adv_avail = bool(advisor_visible(cfg, s, i) and advisor_latest(cfg, sid, hid))      # could the trader see a plan before his final?
         adv_cols = _adv_cols(cfg, S, s, i, hid, plan_n)
         t_shown = s["shown"].get(str(i), time.time())
         sp = R.get("stop_pips"); gr = R.get("gross") or {}
         cost = (lambda units: round(PIP_COST * units / sp, 4)) if sp else (lambda units: 0.0)       # +1 pip round trip, in R
         lp = loaded_preset or None
-        if lp == "default": lp = R.get("preload") or R["default"]                               # the preloaded plan's own key
+        if lp == "default": lp = "raw"                                                           # the preloaded plan = the raw signal
         rec = {"i": i, "hid": hid, "decision": decision, "plan": plan_n, "t_decided": _now(), "decision_s": round(time.time() - t_shown, 1),
                "R_choice": round(ev["R"], 4) if (decision == "take" and ev) else 0.0, "R_plan": round(ev["R"], 4) if ev else None,
                "R_raw": R["R"]["raw"], "R_default": R["R"][dflt], "default": dflt, "R_presets": {k: R["R"][k] for k in PRESET_KEYS},
@@ -540,7 +578,7 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
                "loaded_preset": lp, "R_loaded": R["R"].get(lp, "") if lp and lp not in ("advisor", "advisor_v1") else "",
                "R_choice_1pip": round((ev["R"] - cost(ev["gross"])) if (decision == "take" and ev) else 0.0, 4),
                "R_raw_1pip": round(R["R"]["raw"] - cost(gr.get("raw", 1.0)), 4), "R_default_1pip": round(R["R"][dflt] - cost(gr.get(dflt, 1.0)), 4),
-               "R_minimal": R["R"]["minimal"], "adv_available": adv_avail, **adv_cols}
+               "adv_available": adv_avail, **adv_cols}
         s["decisions"].append(rec); s["pos"] = i + 1
         save_session(cfg, s); write_report(cfg, s, S)
     if s["mode"] == "test":                           # Test: nothing is revealed until the session ends (coach)
@@ -548,8 +586,7 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
         return {"ok": True, "decision": decision, "recorded": True, "warnings": warn, "decided": len(s["decisions"]), "next": s["pos"] < s["n"]}
     labels = {p["key"]: p["label"] for p in mv["presets"]}
     return {"ok": True, "decision": decision, "warnings": warn, "R_choice": rec["R_choice"], "R_plan": rec["R_plan"], "R_raw": rec["R_raw"],
-            "R_default": rec["R_default"], "default_label": labels.get(dflt, dflt) + " (grading comparator)", "default_key": dflt,
-            "preload_label": mv["defaults"][g]["label"], "R_preload": R["R"].get(R.get("preload") or dflt),
+            "R_default": rec["R_default"], "default_key": dflt,
             "presets": [{"key": k, "label": labels[k], "R": R["R"][k]} for k in PRESET_KEYS],
             "banked_1R": rec["banked_1R"], "hit_tp2": rec["hit_tp2"], "kind": KIND.get(rec["kind"], "") if ev else "", "exit_h": rec["exit_h"],
             "adds_fired": ev["adds"] if ev else 0, "post_bars": R["reveal"], "advisor": adv_cols or None, "tally": tally(s), "next": s["pos"] < s["n"]}
@@ -601,7 +638,7 @@ def _adv_cols(cfg, S, s, i, hid, plan_final) -> dict:
 
 def _grade_inputs(cfg, S, s, d) -> dict:
     """per decided card: the trader alone (first commit; Practice has none -> the final), the advisor alone (blind v1 verdict + stack)
-    and the combined final, at model cost and +1 pip, + Minimal / raw and the selection classes."""
+    and the combined final, at model cost and +1 pip, + the raw signal and the selection classes."""
     hid = d["hid"]; R = S["results"][hid]; sp = R.get("stop_pips"); gr = R.get("gross") or {}
     cost = (lambda u: PIP_COST * u / sp) if sp else (lambda u: 0.0)
     def plan_R(dec, plan):
@@ -618,14 +655,13 @@ def _grade_inputs(cfg, S, s, d) -> dict:
     if vd in ("TAKE", "SKIP") and b1 is not None:
         if b1.get("valid"):
             aR, aR1, aP = plan_R("take" if vd == "TAKE" else "skip", b1["plan"]); src = "its own plan"
-        else:                                          # review 2 #6: its stack was rejected - the verdict still counts, with Minimal
-            mR = R["R"]["minimal"]; take = vd == "TAKE"
-            aR, aR1, aP = (mR, mR - cost(gr.get("minimal", 1.0)), mR) if take else (0.0, 0.0, None); src = "Minimal (its plan was rejected)"
+        else:                                          # review 2 #6: its stack was rejected - the verdict still counts, as the raw signal
+            mR = R["R"]["raw"]; take = vd == "TAKE"                  # (2026-10-08: was Minimal - removed, shaped off the data)
+            aR, aR1, aP = (mR, mR - cost(gr.get("raw", 1.0)), mR) if take else (0.0, 0.0, None); src = "the raw signal (its plan was rejected)"
         out.update(adv_graded=True, R_adv_alone=round(aR, 4), R_adv_alone_1pip=round(aR1, 4), adv_taken=vd == "TAKE", R_adv_plan=aP, adv_plan_graded=src)
     else: out.update(adv_graded=False, R_adv_alone="", R_adv_alone_1pip="", adv_taken="", R_adv_plan=None, adv_plan_graded="")
     out.update(adv_verdict=vd or "", adv_confidence=st.get("confidence", ""), adv_state=st.get("state", "") if s["mode"] == "test" else "",
                adv_role=(st.get("role") or ("blind-backtest-advisor v2 (2026-10-05)" if st.get("state") == "done" else "")) if s["mode"] == "test" else "",
-               R_minimal=R["R"]["minimal"], R_minimal_1pip=round(R["R"]["minimal"] - cost(gr.get("minimal", 1.0)), 4),
                reached_1R=bool(R["banked_1R"]), went_to_stop=bool((not R["banked_1R"]) and R["R"]["raw"] <= -0.9))
     return out
 
@@ -638,7 +674,6 @@ def _grade(rows: list, actor: str) -> dict:
     n = len(rs)
     if not n: return {"n": 0}
     tot = sum(x[1] for x in rs); tot1 = sum(x[2] for x in rs)
-    mn = sum(x[4]["R_minimal"] for x in rs); mn1 = sum(x[4]["R_minimal_1pip"] for x in rs)
     rw = sum(x[4]["R_raw"] for x in rs); rw1 = sum(x[4]["R_raw_1pip"] for x in rs)
     a = [x for x in rs if x[4]["reached_1R"]]; b = [x for x in rs if x[4]["went_to_stop"]]
     ta, tb = sum(1 for x in a if x[0]), sum(1 for x in b if x[0])
@@ -647,18 +682,18 @@ def _grade(rows: list, actor: str) -> dict:
     if a and b:
         p = (ta + tb) / (len(a) + len(b)); se = (p * (1 - p) * (1 / len(a) + 1 / len(b))) ** 0.5
         z = round((pa - pb) / se, 2) if se > 0 else None
-    dd = [x[3] - x[4]["R_minimal"] for x in rs if x[0] and x[3] is not None]
+    dd = [x[3] - x[4]["R_raw"] for x in rs if x[0] and x[3] is not None]          # the plan minus the raw signal on the trades taken
     t = None
     if len(dd) >= 2:
         m = sum(dd) / len(dd); sd = (sum((v - m) ** 2 for v in dd) / (len(dd) - 1)) ** 0.5
         t = round(m / (sd / len(dd) ** 0.5), 2) if sd > 0 else None
     return {"n": n, "taken": sum(1 for x in rs if x[0]), "take_rate": round(sum(1 for x in rs if x[0]) / n, 3),
-            "total_R": round(tot, 3), "vs_minimal": round(tot - mn, 3), "vs_raw": round(tot - rw, 3),
-            "at_1pip": {"total_R": round(tot1, 3), "vs_minimal": round(tot1 - mn1, 3), "vs_raw": round(tot1 - rw1, 3)},
+            "total_R": round(tot, 3), "vs_raw": round(tot - rw, 3),
+            "at_1pip": {"total_R": round(tot1, 3), "vs_raw": round(tot1 - rw1, 3)},
             "selection": {"take_rate_reached_1R": round(pa, 3) if pa is not None else None, "n_reached_1R": len(a),
                           "take_rate_went_to_stop": round(pb, 3) if pb is not None else None, "n_went_to_stop": len(b),
                           "spread_points": round(100 * (pa - pb), 1) if (pa is not None and pb is not None) else None, "z": z},
-            "settings_on_taken": {"n": len(dd), "mean_vs_minimal": round(sum(dd) / len(dd), 4) if dd else None, "t": t}}
+            "settings_on_taken": {"n": len(dd), "mean_vs_raw": round(sum(dd) / len(dd), 4) if dd else None, "t": t}}
 
 
 # ------------------------------------------------------------------------------------------------------------- report
@@ -667,10 +702,10 @@ COLS = ["hid", "group", "detector", "direction", "mode", "seed", "menu_version",
        ["banked_1R", "hit_tp2", "first_decision", "first_config", "adv_v1_stack", "adv_nearest_preset", "R_adv_v1", "R_adv_nearest",
         "R_adv_latest", "adv_versions", "adv_loaded", "adv_final_unchanged", "skip_plan_invalid", "R_choice_1pip", "R_raw_1pip", "R_default_1pip",
         "R_first", "R_first_1pip", "adv_verdict", "adv_confidence", "R_adv_alone", "R_adv_alone_1pip", "adv_state", "adv_available_at_final",
-        "R_minimal", "R_minimal_1pip", "reached_1R", "went_to_stop", "adv_plan_graded", "adv_role"]
+        "reached_1R", "went_to_stop", "adv_plan_graded", "adv_role"]
 REPORT_HEADER = (f"# Backtest report - frames capped at {FRAME_CAP_DAYS} trading days after the entry (a trade still open then is closed at the "
                  f"last close); R at model cost (a lower bound - read the differences, not the levels); *_1pip columns = after +1 pip round "
-                 f"trip (gross units x 1 pip / stop pips); comparison = the raw signal; grading comparator (R_default) = Minimal")
+                 f"trip (gross units x 1 pip / stop pips); comparison = the raw signal (R_default = raw since 2026-10-08; Minimal removed)")
 
 
 def write_report(cfg: dict, s: dict, S: dict) -> None:
@@ -689,7 +724,7 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
                    [d.get(k, "") for k in ("adv_v1_stack", "adv_nearest_preset", "R_adv_v1", "R_adv_nearest", "R_adv_latest", "adv_versions", "adv_loaded", "adv_final_unchanged")]
                    + [d.get("plan_invalid") or "", d.get("R_choice_1pip", ""), d.get("R_raw_1pip", ""), d.get("R_default_1pip", "")]
                    + [gi["R_first"], gi["R_first_1pip"], gi["adv_verdict"], gi["adv_confidence"], gi["R_adv_alone"], gi["R_adv_alone_1pip"],
-                      gi["adv_state"], d.get("adv_available", ""), gi["R_minimal"], gi["R_minimal_1pip"], gi["reached_1R"], gi["went_to_stop"],
+                      gi["adv_state"], d.get("adv_available", ""), gi["reached_1R"], gi["went_to_stop"],
                       gi.get("adv_plan_graded", ""), gi.get("adv_role", "")])
     rd = web_dir(cfg, "reports")
     tmp = os.path.join(rd, f"{s['sid']}.csv.tmp"); open(tmp, "w", newline="").write(buf.getvalue()); os.replace(tmp, os.path.join(rd, f"{s['sid']}.csv"))
@@ -700,7 +735,7 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
             "at_1pip": {"R_choice": t["R_choice_1pip"], "R_raw": t["R_raw_1pip"], "R_default": t["R_default_1pip"],
                         "vs_raw": round(t["R_choice_1pip"] - t["R_raw_1pip"], 3), "vs_default": round(t["R_choice_1pip"] - t["R_default_1pip"], 3),
                         "R_choice_per_signal": round(t["R_choice_1pip"] / n, 4), "R_raw_per_signal": round(t["R_raw_1pip"] / n, 4)},
-            "frame_cap_days": FRAME_CAP_DAYS, "comparator": "minimal", "menu_frozen_at": s.get("menu_frozen_at"),
+            "frame_cap_days": FRAME_CAP_DAYS, "comparator": "raw", "menu_frozen_at": s.get("menu_frozen_at"),
             "advisor_only": _advisor_only(cfg, S, s),
             "grading": {"trader_alone": _grade(rows, "trader"), "advisor_alone": _grade(rows, "advisor"), "combined": _grade(rows, "combined"),
                         "by_block": [{"block": k + 1, "cards": f"{k * s['block'] + 1}-{min(s['n'], (k + 1) * s['block'])}",
@@ -711,14 +746,14 @@ def write_report(cfg: dict, s: dict, S: dict) -> None:
                                      for k in range(-(-s["n"] // s["block"]) if s.get("block") else 0)
                                      if any(r["blk"] == k for r in rows)],
                         "definitions": "trader alone = the first commit (Practice: the final); advisor alone = its blind v1 verdict + v1 stack (a TAKE "
-                                       "whose stack was rejected is graded with Minimal; cards without a blind verdict are left out of its "
-                                       "grade); combined = the final. total_R vs_minimal = against every "
-                                       "signal taken with Minimal (the grading comparator); selection = take rate on signals that reached +1R minus "
+                                       "whose stack was rejected is graded as the raw signal; cards without a blind verdict are left out of its "
+                                       "grade); combined = the final. vs_raw = against every signal taken raw (the only comparison - trader "
+                                       "2026-10-08: Minimal removed, shaped off the data); selection = take rate on signals that reached +1R minus "
                                        "take rate on signals that went to the -1R stop without reaching +1R (two-proportion z); settings_on_taken = "
-                                       "R of the plan minus Minimal on the signals the actor took (paired t). Model cost; at_1pip = after a +1 pip "
+                                       "R of the plan minus the raw signal on the signals the actor took (paired t). Model cost; at_1pip = after a +1 pip "
                                        "round trip."},
-            "note": "comparison = the raw signal (every signal taken raw); grading comparator (R_default) = Minimal; model cost - read the "
-                    f"difference, not the level; at_1pip = after +1 pip round trip; frames capped at {FRAME_CAP_DAYS} trading days"}
+            "note": "comparison = the raw signal (every signal taken raw); model cost - read the difference, not the level; at_1pip = after +1 pip "
+                    f"round trip; frames capped at {FRAME_CAP_DAYS} trading days"}
     json.dump(summ, open(os.path.join(rd, f"{s['sid']}.summary.json"), "w"), indent=1)
     save_session(cfg, s)                                # keeps the refreshed advisor columns on the decisions
 
@@ -745,7 +780,7 @@ def report_csv(cfg: dict, sid: str) -> bytes:
 FENCE = re.compile(r"```levers\s*(\{.*?\})\s*```", re.S)
 
 
-def parse_recommendation(text_or_obj, menu_keys=PRESET_KEYS) -> dict:
+def parse_recommendation(text_or_obj, menu_keys=PRESET_KEYS + ("raw",)) -> dict:
     """advisor text (with a ```levers {...}``` block) or an already-parsed object -> {nearest_preset, rationale, plan}. Raises
     ValueError with the reason when it is not a valid advisor-levers/v1 recommendation."""
     if isinstance(text_or_obj, str):

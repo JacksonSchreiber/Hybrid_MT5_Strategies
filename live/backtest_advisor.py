@@ -32,7 +32,8 @@ from __future__ import annotations
 import glob, json, os, re, subprocess, threading, time, uuid
 from live import backtest as BT
 
-ROLE_VERSION = "blind-backtest-advisor v3 (2026-10-08)"      # trader 2026-10-08: a plan made for each signal (v2 copied one preset)
+ROLE_VERSION = "blind-backtest-advisor v4 (2026-10-08)"      # v3 (2026-10-08): a plan made for each signal (v2 copied one preset); v4: no Minimal
+V3_VERSION = "blind-backtest-advisor v3 (2026-10-08)"
 ROLE_V2_VERSION = "blind-backtest-advisor v2 (2026-10-05)"
 DENIED = "Bash,Glob,Grep,LS,WebSearch,WebFetch,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,TodoWrite"
 ADVISOR_AHEAD = 10
@@ -217,7 +218,7 @@ The levers block is required even when you say SKIP (it is the plan you would us
 _TAIL_V2 = """- nearest_preset = the menu preset (listed in card.md) closest to your plan.
 Keep it short. Do not write files.
 """
-_HEAD_V3 = f"""# Blind backtest advisor ({ROLE_VERSION})
+_HEAD_V3 = f"""# Blind backtest advisor ({V3_VERSION})
 
 You advise a discretionary trader on ONE historical trade signal at a time, shown BLIND: no symbol, no dates, prices in R from the
 entry, time counted back from the signal bar. You are graded on your FIRST answer for each card, against the trader and against a
@@ -274,7 +275,8 @@ _TAIL_V3 = """- nearest_preset = the menu preset your plan is closest to - only 
 Keep it short. Do not write files.
 """
 ROLE_V2 = _HEAD_V2 + _LEVERS + _TAIL_V2           # kept: a Test session started before v3 keeps it for its first block
-ROLE = _HEAD_V3 + _LEVERS_V3 + _TAIL_V3
+ROLE = (_HEAD_V3.replace(V3_VERSION, ROLE_VERSION).replace('plain default plan ("Minimal")', "taking the raw signal (in at the signal, out at TP2 or the stop)")
+        + _LEVERS_V3.replace("<minimal|ruthless|slow|banker|pyramid>", "<raw|ruthless|slow|banker|pyramid>") + _TAIL_V3)       # v4: Minimal removed
 
 
 PARENT_NOTE = "# Blind backtest advisor\n\nYour role and your card are in your working folder (CLAUDE.md, card.md) and in the prompt.\n"
