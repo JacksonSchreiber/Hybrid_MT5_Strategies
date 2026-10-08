@@ -677,12 +677,12 @@ def parse_recommendation(text_or_obj, menu_keys=PRESET_KEYS) -> dict:
     if not isinstance(obj, dict) or obj.get("schema") != "advisor-levers/v1": raise ValueError("schema must be advisor-levers/v1")
     np_ = obj.get("nearest_preset")
     if np_ not in menu_keys: raise ValueError(f"nearest_preset must be one of {', '.join(menu_keys)}")
-    rat = str(obj.get("rationale") or "").strip()
-    if not rat or len(rat) > 300: raise ValueError("rationale must be one line (1-300 characters)")
+    rat = " ".join(str(obj.get("rationale") or "").split())[:600]     # 2026-10-08: collapsed to one line, cut at 600 (v3 asks for the reason
+    if not rat: raise ValueError("rationale is missing")                #   behind each change; length alone no longer rejects a plan)
     if obj.get("plan") is not None and not isinstance(obj.get("plan"), dict): raise ValueError("plan must be an object")
     plan = dict(obj.get("plan") or {}); plan.setdefault("schema", E.SCHEMA)
     plan_n, warn = E.validate(plan)                     # only levers the engine evaluates, within the cap (raises otherwise)
-    return {"nearest_preset": np_, "rationale": rat.splitlines()[0], "plan": plan_n, "warnings": warn}
+    return {"nearest_preset": np_, "rationale": rat, "plan": plan_n, "warnings": warn}
 
 
 def _ap(cfg, sid, hid):

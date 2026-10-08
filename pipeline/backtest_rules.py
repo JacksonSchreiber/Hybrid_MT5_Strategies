@@ -270,6 +270,9 @@ def unit_tests() -> bool:
     from live import backtest as BT
     good = '```levers\n{"schema": "advisor-levers/v1", "nearest_preset": "ruthless", "rationale": "cut fast", "plan": {"entry": {"pct": 100}, "levers": [{"type": "cut_avg", "at_h": 1, "below": 0}]}}\n```'
     say(BT.parse_recommendation(good)["nearest_preset"] == "ruthless", "advisor-levers/v1 block parses")
+    long_r = BT.parse_recommendation({"schema": "advisor-levers/v1", "nearest_preset": "banker", "rationale": "Swing highs at +1.4R.\n" + "x " * 400,
+                                      "plan": {"entry": {"pct": 100}, "levers": []}})["rationale"]
+    say("\n" not in long_r and 300 < len(long_r) <= 600, "a long two-line rationale is kept on one line, cut at 600 characters (not rejected)")
     for txt, why in (('```levers\n{"schema": "x"}\n```', "schema"), ('```levers\n{"schema": "advisor-levers/v1", "nearest_preset": "hero", "rationale": "x", "plan": {}}\n```', "preset"),
                      ('```levers\n{"schema": "advisor-levers/v1", "nearest_preset": "slow", "rationale": "x", "plan": {"entry": {"pct": 100}, "levers": [{"type": "add_reach", "pct": 150, "at": 2, "stop": 0}]}}\n```', "cap"),
                      ("no block here", "no block")):
