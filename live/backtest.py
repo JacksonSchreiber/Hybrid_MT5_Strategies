@@ -52,6 +52,7 @@ ADVISOR RECOMMENDATION (schema "advisor-levers/v1" - what the advisor emits, as 
 """
 from __future__ import annotations
 import csv, datetime as dt, gzip, hashlib, io, json, os, random, re, secrets, threading, time
+import numpy as np
 from live import backtest_engine as E
 
 GAP_DAYS = 91                # coach 2026-10-04: one symbol at most once per THREE months (the longest history a card shows + a month)
@@ -542,6 +543,37 @@ def _evaluate(S, hid, cfg_plan):
     return dict(r)
 
 
+def path_view(S, hid, plan_n) -> dict:
+    """trader 2026-10-08 (a reveal that showed raw at -1R while its chart ended at +3.3R, and an exit marker 11 bars late): the
+    post-signal H4 bars from the frame on the REAL 4-hour grid - clock buckets from the entry-bar open with the empty ones (weekends)
+    dropped, the same grid the chart draws - to where the raw trade ended (the frame runs to the first -1R touch or 40 days); the
+    plan's and the raw trade's exits as BAR positions and TRADING hours (the clock hours include weekends); and a note when raw came
+    close to TP2 without filling it (a SELL closes at the ask, a BUY at the bid)."""
+    F, ctx = S["frames"].get(hid); n = F["n"]; tm = np.asarray(ctx["tm"][:n]); kb = tm // 240
+    starts = np.flatnonzero(np.r_[True, kb[1:] != kb[:-1]]); ends = np.r_[starts[1:] - 1, n - 1]
+    rank = np.repeat(np.arange(len(starts)), np.diff(np.r_[starts, n]))
+    blow = F["xl"] + (F["bh"] - F["xh"])                       # the bid low (xl is the exit side: a SELL's is the ask)
+    up = bool(ctx["up"]); bars = []
+    for a, b in zip(starts, ends):
+        o, h, l, c = float(F["bo"][a]), float(F["bh"][a:b + 1].max()), float(blow[a:b + 1].min()), float(F["bc"][b])
+        bars.append([round(o, 3), round(h, 3), round(l, 3), round(c, 3)] if up else [round(-o, 3), round(-l, 3), round(-h, 3), round(-c, 3)])
+    def at(j):
+        j = min(int(j), n - 1); return {"bar": int(rank[j]), "th": round(float(rank[j]) * 4 + (float(tm[j]) - float(kb[j]) * 240) / 60.0, 1), "clock_h": round(float(tm[j]) / 60.0, 1)}
+    raw = E.evaluate({"schema": E.SCHEMA, "entry": {"pct": 100}, "tp2": True, "levers": []}, F, ctx); out = {"raw_exit": dict(at(raw["exit_j"]), kind=KIND.get(raw["kind"], ""))}
+    if plan_n:
+        ev = E.evaluate(plan_n, F, ctx); out["plan_exit"] = at(ev["exit_j"])
+    last = max(out["raw_exit"]["bar"], out.get("plan_exit", {}).get("bar", 0)) + 1        # through the later of the two exits
+    old = S["results"][hid].get("reveal") or []                # the 60-bar reveal also shows the path AFTER an early stop - kept;
+    out["post_bars"] = old + bars[len(old):last] if last > len(old) else old    # longer when a trade ran past it (99.6% of bars agree)
+    tp2 = ctx.get("tp2")
+    if tp2 is not None and raw["kind"] != 1:
+        bx, bb = float(F["xh"].max()), float(F["bh"].max())
+        if bb >= tp2 - 0.25:
+            out["raw_note"] = (f"Raw got within {tp2 - bx:.2f}R of TP2 without filling it: its best exit price was {bx:+.2f}R while the bid reached {bb:+.2f}R"
+                               + (" (a SELL closes at the ask)" if not up else "") + f", then it {KIND.get(raw['kind'], 'ended')} after {out['raw_exit']['th']:g} trading hours.")
+    return out
+
+
 def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded_preset: str = "") -> dict:
     """record the decision server-side, THEN evaluate and reveal. loaded_preset = the preset the plan was loaded from when editing
     began (coach 2026-10-04: the "nearest preset" for grading a custom plan)."""
@@ -589,7 +621,7 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
             "R_default": rec["R_default"], "default_key": dflt,
             "presets": [{"key": k, "label": labels[k], "R": R["R"][k]} for k in PRESET_KEYS],
             "banked_1R": rec["banked_1R"], "hit_tp2": rec["hit_tp2"], "kind": KIND.get(rec["kind"], "") if ev else "", "exit_h": rec["exit_h"],
-            "adds_fired": ev["adds"] if ev else 0, "post_bars": R["reveal"], "advisor": adv_cols or None, "tally": tally(s), "next": s["pos"] < s["n"]}
+            "adds_fired": ev["adds"] if ev else 0, "advisor": adv_cols or None, "tally": tally(s), "next": s["pos"] < s["n"], **path_view(S, hid, plan_n)}
 
 
 def commit_first(cfg: dict, sid: str, i: int, decision: str, plan: dict | None) -> dict:

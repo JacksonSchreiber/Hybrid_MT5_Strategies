@@ -290,7 +290,9 @@
               <span x-text="rev?.decision === 'take' ? ('Taken · ' + fmt(rev?.R_choice)) : 'Skipped'"></span>
               <span class="k bt-small" x-show="rev?.decision === 'skip' && rev?.R_plan !== null" x-text="' - your plan would have made ' + fmt(rev?.R_plan)"></span>
             </div>
-            <div class="k" x-show="rev?.kind" x-text="'Your plan: ' + rev?.kind + (rev?.exit_h !== null ? ' after ' + fmtH(rev?.exit_h) : '') + (rev?.adds_fired ? ' · adds fired: ' + rev?.adds_fired : '')"></div>
+            <div class="k" x-show="rev?.kind" x-text="'Your plan: ' + rev?.kind + (rev?.plan_exit ? ' after ' + fmtTH(rev?.plan_exit) : '') + (rev?.adds_fired ? ' · adds fired: ' + rev?.adds_fired : '')"></div>
+            <div class="k" x-show="rev?.raw_exit" x-text="'Raw signal: ' + (rev?.raw_exit?.kind || '') + ' after ' + fmtTH(rev?.raw_exit)"></div>
+            <div class="k bt-small" x-show="rev?.raw_note" x-text="rev?.raw_note"></div>
             <table class="bt-tbl bt-cmp">
               <tr class="bt-me"><td>Your plan</td><td :class="cls(rev?.R_plan)" x-text="rev?.R_plan === null ? '-' : fmt(rev?.R_plan)"></td></tr>
               <tr><td><b>Raw signal</b></td><td :class="cls(rev?.R_raw)" x-text="fmt(rev?.R_raw)"></td></tr>

@@ -66,6 +66,10 @@
       // review #7: the card stores price-R (a SELL's SL at +1R); every R label on a SELL card is shown in PROFIT terms, like the levers
       sgn: function () { return this.C.card && this.C.card.direction === 'SELL' ? -1 : 1; },
       fmtP: function (v) { if (v === null || v === undefined) return '-'; return this.fmtR(this.sgn() * v); },
+      fmtTH: function (x) {             // trading hours (the chart's time), + the clock span when a weekend sits inside it
+        if (!x) return ''; var s = x.th < 48 ? (x.th < 10 ? (+x.th).toFixed(1) : Math.round(x.th)) + ' trading hours' : (x.th / 24).toFixed(1) + ' trading days';
+        return x.clock_h - x.th > 6 ? s + ' (' + this.fmtH(x.clock_h) + ' on the clock, with the weekend)' : s;
+      },
       fmtH: function (h) { h = +h; return h < 48 ? h.toFixed(h < 10 ? 1 : 0) + ' h' : (h / 24).toFixed(1) + ' days'; },
       cls: function (v) { if (v === null || v === undefined || v === '') return ''; return +v > 0.0005 ? 'up' : +v < -0.0005 ? 'dn' : ''; },
       groupName: function (k) { var g = this.groups.filter(function (x) { return x.key === k; })[0]; return g ? g.name : k; },
@@ -220,8 +224,9 @@
           this.rev.post_bars.forEach(function (b, k) { h4.push([t + 14400 * (k + 1), b[0], b[1], b[2], b[3], 0]); });
           ['20', '50', '200'].forEach(function (n) { var e = ema[n], kk = 2 / (+n + 1), p = e[e.length - 1];   // continue the EMA through the revealed bars
             for (var i = C.h4.bars.length; i < h4.length; i++) { p = p + kk * (h4[i][4] - p); e.push(p); } });
-          if (this.rev.exit_h !== null && this.rev.R_plan !== null) { var eb = Math.min(this.rev.post_bars.length, Math.max(1, Math.ceil(this.rev.exit_h / 4)));
-            marks.push({ t: t + 14400 * eb, label: 'exit ' + this.fmt(this.rev.R_plan) }); }
+          if (this.rev.plan_exit && this.rev.R_plan !== null) marks.push({ t: t + 14400 * (this.rev.plan_exit.bar + 1), label: 'exit ' + this.fmt(this.rev.R_plan) });
+          if (this.rev.raw_exit && (!this.rev.plan_exit || this.rev.raw_exit.bar !== this.rev.plan_exit.bar))      // trader 2026-10-08: where raw really ended
+            marks.push({ t: t + 14400 * (this.rev.raw_exit.bar + 1), label: 'raw ' + (this.rev.raw_exit.kind === 'TP2 hit' ? 'TP2 ' : (this.rev.raw_exit.kind === 'stopped out' ? 'stop ' : 'end ')) + this.fmt(this.rev.R_raw) });
         }
         HybridChart.mount(el, { blind: true, live: false, bars_h4: h4, bars_d1: C.d1.bars, ema_h4: ema, ema_d1: C.d1.ema, sig_h4: C.h4.sig, sig_d1: C.d1.sig,
                                 levels: C.levels, strategy: C.detector, overlay: C.overlay || null, marks: marks, rsign: this.sgn() });

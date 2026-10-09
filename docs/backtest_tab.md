@@ -65,6 +65,14 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
     - Unset, it is left out of the normalised plan; the engine is identical without it (old vs new, every trade x every menu
       plan + the wait/hold plans, 0 differences). A second new lever option before any Test session; not a menu change.
 
+## Reveal in trading time (trader 2026-10-08)
+- The Practice reveal's chart runs to where the raw trade really ended (the frame: first -1R touch or 40 days; at least the old 60
+  bars, which also show the path after an early stop), with markers for the plan's exit AND the raw exit placed on the real 4-hour
+  grid (`backtest.path_view`: clock buckets with the weekends dropped - 99.6% of bars identical to the old reveal). Exit times are
+  TRADING hours, with the clock span added when a weekend sits inside ("16 trading hours (2.5 days on the clock, with the
+  weekend)"); before, a 16 h cut over a weekend read "2.5 days" and its marker sat 11 bars late. A note says when raw came within
+  0.25R of TP2 without filling it (a SELL closes at the ask).
+
 ## Minimal removed (trader 2026-10-08)
 - "Get rid of the minimal preset, since it is shaped off the data and invalid." The tab and the advisor no longer see it: the preset
   list drops it (`backtest.menu_view` - the frozen menu FILE is unchanged so old results stay reproducible), the other presets are
