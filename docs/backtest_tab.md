@@ -65,6 +65,12 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
     - Unset, it is left out of the normalised plan; the engine is identical without it (old vs new, every trade x every menu
       plan + the wait/hold plans, 0 differences). A second new lever option before any Test session; not a menu change.
 
+## Trailing stop (trader 2026-10-09)
+- Lever `trail {every_h, dist, lower}` (at most one per plan): every every_h TRADING hours after the entry (weekend gaps removed), at
+  that minute's close, every open leg's stop goes to the exit price - dist. Raise only by default; with `lower` it also follows the
+  price down to that distance - never below the signal stop (-1R: the frames end at the first -1R touch, and the loss stays capped
+  at 1R). 157,464-run parity with the old engine (0 differences); plain Python == numba on trailing plans.
+
 ## Average cuts (trader 2026-10-09)
 - Each extra "cut on a weak average" added from the palette starts 4 h after the previous one (the level stays 0), so a ladder of
   cuts goes in quickly. `cut_avg.window_h` (the "over the last 12 h only" box): the average over the last 12 trading hours (the

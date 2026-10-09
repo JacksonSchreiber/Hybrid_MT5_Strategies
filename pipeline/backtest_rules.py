@@ -260,6 +260,17 @@ def unit_tests() -> bool:
     say(r0["kind"] == 2 and r0["exit_j"] == 1439 and r1["kind"] != 2,
         f"cut_avg window_h 12: since entry the 24 h average is below 0 (cut), over the last 12 h it is +0.2 (no cut) - kinds {r0['kind']} / {r1['kind']}")
     say("window_h" not in E.validate(cw(None))[0]["levers"][0] and E.validate(cw(12))[0]["levers"][0]["window_h"] == 12.0, "validation: window_h left out when unset")
+    # trail (2026-10-09): every N trading hours the stop goes to the price - dist; raise only unless lower
+    F, c = frame([(0.9, 1.1, 1.0)] * 60 + [(1.9, 2.1, 2.0)] * 60 + [(1.2, 1.6, 1.5)] * 60 + [(0.7, 0.9, 0.8)] * 60 + [(0.0, 0.3, 0.1)] * 60 + [(-1.1, 0.0, -1.0)])
+    tl = lambda lower: stack([{"type": "trail", "every_h": 1, "dist": 1.0, "lower": lower}])
+    r_up, r_lo = E.evaluate(tl(False), F, c), E.evaluate(tl(True), F, c)
+    say(abs(r_up["R"] - 1.0) < 1e-9 and r_up["exit_j"] == 180,
+        f"trail raise-only: at +2R the stop goes to +1R and stays; the dip to +0.7R stops it out at +1.0R ({r_up['R']:+.2f}R)")
+    say(abs(r_lo["R"] + 0.9) < 1e-9 and r_lo["exit_j"] == 300,
+        f"trail with lower: the stop follows the price down (+1 -> +0.5 -> -0.2 -> -0.9R), out at -0.9R on the final drop ({r_lo['R']:+.2f}R)")
+    try: E.validate(stack([{"type": "trail"}, {"type": "trail"}])); bad = False
+    except ValueError: bad = True
+    say(bad, "validation: at most one trailing stop")
     # plan-wide risk_cap (2026-10-08): every add obeys it, add_reach included
     F, c = frame([(-0.2, 0.5, 0.3)] * 10 + [(0.3, 2.1, 2.0), (-1.1, 2.0, -1.0)])
     pc = lambda rc: dict(stack([{"type": "add_reach", "pct": 75, "at": 2.0, "within_h": None, "stop": "trade"}]), **({"risk_cap": rc} if rc else {}))

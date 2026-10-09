@@ -206,6 +206,10 @@
                     if the average R is below <sl-input type="number" size="small" class="bt-n bt-neg" :value="L.below" step="0.05" @sl-change="setF(L,'below',$event)" :disabled="!!rev"><button type="button" slot="prefix" class="bt-pm" title="flip the sign (+/-)" @click.stop.prevent="flip(L,'below')" :disabled="!!rev">±</button><span slot="suffix">R</span></sl-input>
                     <sl-checkbox size="small" :checked="L.window_h != null" @sl-change="toggleWin(L,$event)" :disabled="!!rev">over the last 12 h only</sl-checkbox>
                     <span class="k" x-text="L.window_h != null ? '(the average of the last 12 trading hours, not since the entry)' : ''"></span></span></template>
+                  <template x-if="L.type === 'trail'"><span>Every <sl-input type="number" size="small" class="bt-n" :value="L.every_h" min="0.25" step="1" @sl-change="setF(L,'every_h',$event)" :disabled="!!rev"><span slot="suffix">h</span></sl-input>,
+                    move the stop to <sl-input type="number" size="small" class="bt-n" :value="L.dist" min="0.1" step="0.25" @sl-change="setF(L,'dist',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input> below the price
+                    <sl-checkbox size="small" :checked="L.lower" @sl-change="setB(L,'lower',$event)" :disabled="!!rev">also lower it to that distance</sl-checkbox>
+                    <span class="k" x-text="L.lower ? '(follows the price both ways, never below the signal stop)' : '(raise only - it never moves down)'"></span></span></template>
                   <template x-if="L.type === 'cut_unless'"><span>Close at <sl-input type="number" size="small" class="bt-n" :value="L.at_h" step="1" min="0.25" @sl-change="setF(L,'at_h',$event)" :disabled="!!rev"><span slot="suffix">h</span></sl-input>
                     unless <sl-input type="number" size="small" class="bt-n" :value="L.reach" step="0.25" @sl-change="setF(L,'reach',$event)" :disabled="!!rev"><span slot="suffix">R</span></sl-input> was reached</span></template>
                 </div>

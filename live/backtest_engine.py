@@ -34,6 +34,10 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
                                             (optional, trader 2026-10-09): the average over only the last window_h trading hours
                                             (the minutes after the at_h - window_h mark; from the entry when at_h <= window_h)
     cut_unless  {at_h, reach}               close everything at at_h hours unless +reach R was reached (bid high) by then
+    trail       {every_h, dist, lower}      (trader 2026-10-09; at most one) every every_h TRADING hours after the entry, at that
+                                            minute's close, every open leg's stop goes to the exit price - dist: raised when that is
+                                            higher; with lower, also lowered to it - never below the signal stop (-1R: the frames end
+                                            at the first -1R touch, and the loss stays capped at 1R). Takes effect from the next minute
   At most 20 levers per list (adds / take profit / stop moves / cuts) and 60 in all (review 2026-10-04).
   entry.pct = the first position (% of ruled size); every leg's first stop is the signal stop (-1R) unless the card says else;
   stops are never set below -1R; cap_pct = gross units entered (banking does not free room): an add is trimmed to what is left.
@@ -65,7 +69,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
          bk_lvl, bk_pct, nbk,
          mv_when, mv_to, mv_legs, mv_src, nmv,
          ad_type, ad_lvl, ad_until, ad_k, ad_early, ad_hold, ad_pct, ad_stop, ad_trade, nad,
-         ct_type, ct_k, ct_thr, nct, ad_wait, ad_cap, ct_ws):
+         ct_type, ct_k, ct_thr, nct, ad_wait, ad_cap, ct_ws, tr_on, tr_dist, tr_lower, tr_chk):
     """-> (R of the full ruled position, kind 0 stopped / 1 TP2 / 2 cut / 3 frame end / 4 banked out (everything open was banked:
     the trade ends that minute), exit minute, gross units entered, banks fired, adds fired, cut index or -1)."""
     nleg = 1 + nad
@@ -258,6 +262,12 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                     else:
                         alive[nl] = False
                 ad_done[a] = True; ad_held[a] = False
+        if tr_on and tr_chk[j]:                        # trail: every leg's stop to the exit price - dist (raise; lower too if set)
+            tv = xc[j] - tr_dist
+            if tv < -1.0: tv = -1.0
+            for q in range(nl):
+                if alive[q] and (tv > lst[q] or (tr_lower and tv < lst[q])): lst[q] = tv
+            if tv > tstop or tr_lower: tstop = tv
     v = locked
     for q in range(nl):
         if alive[q]:
@@ -268,7 +278,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
 # ------------------------------------------------------------------------------------------------------------- config
 TYPES = {"bank": ("pct", "at", "tp1"), "move": ("to", "when", "tp1", "legs", "src"), "add_reach": ("pct", "at", "within_h", "stop"),
          "add_bar": ("pct", "bar", "early_at", "hold_avg", "stop", "wait_avg", "risk_cap"), "add_tp1": ("pct", "min_R", "stop"),
-         "cut_avg": ("at_h", "below", "window_h"), "cut_unless": ("at_h", "reach")}
+         "cut_avg": ("at_h", "below", "window_h"), "cut_unless": ("at_h", "reach"), "trail": ("every_h", "dist", "lower")}
 
 
 def _num(v, lo=None, hi=None, what="value"):
@@ -333,7 +343,11 @@ def validate(cfg: dict) -> tuple[dict, list[str]]:
             if wh not in (None, ""): d["window_h"] = _num(wh, 1, 240, "a cut's average window")
         elif t == "cut_unless":
             d.update(at_h=_num(c.get("at_h"), 0.25, 2400, "a cut's hours"), reach=_num(c.get("reach"), 0.05, 50, "a cut's R level"))
+        elif t == "trail":
+            d.update(every_h=_num(c.get("every_h", 1), 0.25, 48, "the trail's interval"), dist=_num(c.get("dist", 1.0), 0.1, 10, "the trail's distance"),
+                     lower=bool(c.get("lower", False)))
         out.append(d)
+    if sum(1 for d in out if d["type"] == "trail") > 1: raise ValueError("at most one trailing stop in a plan")
     adds = sum(d["pct"] for d in out if d["type"].startswith("add")); trim = bool(cfg.get("trim_to_cap", False))
     if entry + adds > cap + 1e-9:
         if not trim:
@@ -413,11 +427,17 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
         if c["type"] != "cut_avg" or not c.get("window_h") or c["at_h"] <= c["window_h"]: return -1
         k = mark(ctx, c["at_h"] - c["window_h"]); return k if 0 <= k < BEYOND else -1
     ct_ws = np.array([wstart(c) for c in cuts], dtype=np.int64)
+    tr = next((c for c in L if c["type"] == "trail"), None); tm = np.asarray(ctx["tm"], dtype=np.int64); nn = len(tm)
+    tr_chk = np.zeros(max(nn, 1), dtype=np.bool_)
+    if tr is not None and nn:                          # the check minutes: every every_h of TRADING time (gaps over 6 h - weekends - removed)
+        d = np.diff(tm); tt = tm - np.r_[0, np.cumsum(np.where(d > 360, d - 1, 0))]
+        step = tr["every_h"] * 60.0; ks = np.searchsorted(tt, np.arange(1, int(tt[-1] // step) + 2) * step, side="left"); tr_chk[ks[ks < nn]] = True
     return {"tp2_on": tp2_on, "tp2_R": tp2 if tp2 is not None else 0.0, "cap": cfg["cap_pct"] / 100.0, "F0": cfg["entry"]["pct"] / 100.0,
             "bk_lvl": bk_lvl, "bk_pct": bk_pct, "nbk": len(banks), "mv_when": mv_when, "mv_to": mv_to, "mv_legs": mv_legs, "mv_src": mv_src,
             "nmv": len(moves), "ad_type": ad_type, "ad_lvl": ad_lvl, "ad_until": ad_until, "ad_k": ad_k, "ad_early": ad_early,
             "ad_hold": ad_hold, "ad_wait": ad_wait, "ad_cap": ad_cap, "ad_pct": ad_pct, "ad_stop": ad_stop, "ad_trade": ad_trade, "nad": na,
-            "ct_type": ct_type, "ct_k": ct_k, "ct_thr": ct_thr, "nct": len(cuts), "ct_ws": ct_ws}
+            "ct_type": ct_type, "ct_k": ct_k, "ct_thr": ct_thr, "nct": len(cuts), "ct_ws": ct_ws,
+            "tr_on": tr is not None, "tr_dist": float(tr["dist"]) if tr else 1.0, "tr_lower": bool(tr["lower"]) if tr else False, "tr_chk": tr_chk}
 
 
 def run(fn, F: dict, ctx: dict, P: dict):
@@ -426,7 +446,7 @@ def run(fn, F: dict, ctx: dict, P: dict):
               P["tp2_on"], P["tp2_R"], P["cap"], P["F0"], P["bk_lvl"], P["bk_pct"], P["nbk"],
               P["mv_when"], P["mv_to"], P["mv_legs"], P["mv_src"], P["nmv"],
               P["ad_type"], P["ad_lvl"], P["ad_until"], P["ad_k"], P["ad_early"], P["ad_hold"], P["ad_pct"], P["ad_stop"], P["ad_trade"], P["nad"],
-              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"], P["ad_cap"], P["ct_ws"])
+              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"], P["ad_cap"], P["ct_ws"], P["tr_on"], P["tr_dist"], P["tr_lower"], P["tr_chk"])
 
 
 # ------------------------------------------------------------------------------------------------------------- box frames

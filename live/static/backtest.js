@@ -8,7 +8,7 @@
   var CAP = 200;
   var uid = function () { return Math.random().toString(36).slice(2, 10); };
   var clone = function (o) { return JSON.parse(JSON.stringify(o)); };
-  var TYPE_LABEL = { add_reach: 'Add', add_bar: 'Add', add_tp1: 'Add', bank: 'Take profit', move: 'Stop', cut_avg: 'Cut', cut_unless: 'Cut' };
+  var TYPE_LABEL = { add_reach: 'Add', add_bar: 'Add', add_tp1: 'Add', bank: 'Take profit', move: 'Stop', trail: 'Stop', cut_avg: 'Cut', cut_unless: 'Cut' };
   var PALETTE = [
     { name: 'Adds', items: [
       { type: 'add_reach', label: 'Add at a level', help: 'Add a share when the trade reaches +X R (optionally within N hours)', tpl: { pct: 75, at: 2.0, within_h: 24, stop: 0 } },
@@ -17,7 +17,8 @@
     { name: 'Take profit', items: [
       { type: 'bank', label: 'Bank a share', help: 'Bank a % of what is open at +X R', tpl: { pct: 25, at: 1.0, tp1: false } }] },
     { name: 'Stop moves', items: [
-      { type: 'move', label: 'Move the stop', help: 'Move the stop to a level when +X R is reached (tighten only)', tpl: { to: 0, when: 1.0, tp1: false, legs: 'all', src: 'exit' } }] },
+      { type: 'move', label: 'Move the stop', help: 'Move the stop to a level when +X R is reached (tighten only)', tpl: { to: 0, when: 1.0, tp1: false, legs: 'all', src: 'exit' } },
+      { type: 'trail', label: 'Trail the stop', help: 'Every N hours, the stop goes to X R below the price (raise only, or follow it both ways)', tpl: { every_h: 1, dist: 1.0, lower: false } }] },
     { name: 'Cuts', items: [
       { type: 'cut_avg', label: 'Cut on a weak average', help: 'Close at N hours if the average R since entry (or over the last 12 h) is below X', tpl: { at_h: 1, below: 0, window_h: null } },
       { type: 'cut_unless', label: 'Cut unless it got going', help: 'Close at N hours unless +X R was reached', tpl: { at_h: 24, reach: 1.5 } }] }];
@@ -75,7 +76,7 @@
       groupName: function (k) { var g = this.groups.filter(function (x) { return x.key === k; })[0]; return g ? g.name : k; },
       labelOf: function (k) { var p = this.menu.presets.filter(function (x) { return x.key === k; })[0]; return p ? p.label : k; },
       typeLabel: function (t) { return TYPE_LABEL[t] || t; },
-      kindOf: function (t) { return t.indexOf('add') === 0 ? 'add' : t === 'bank' ? 'bank' : t === 'move' ? 'move' : t.indexOf('cut') === 0 ? 'cut' : ''; },
+      kindOf: function (t) { return t.indexOf('add') === 0 ? 'add' : t === 'bank' ? 'bank' : (t === 'move' || t === 'trail') ? 'move' : t.indexOf('cut') === 0 ? 'cut' : ''; },
       // ---------------------------------------------------------------- plan <-> config
       toConfig: function () {
         return { schema: 'levers/v1', entry: { pct: +this.plan.entry }, tp2: !!this.plan.tp2, cap_pct: CAP, trim_to_cap: !!this.plan.trim,
