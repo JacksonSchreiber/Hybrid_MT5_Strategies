@@ -67,7 +67,7 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
 
 ## Trailing stop (trader 2026-10-09)
 - Lever `trail {every_h, dist, lower}` (at most one per plan): every every_h TRADING hours after the entry (weekend gaps removed), at
-  that minute's close, every open leg's stop goes to the exit price - dist. Raise only by default; with `lower` it also follows the
+  that minute's close, every open leg's stop goes to dist below the HIGHEST exit-side price since the previous check (trader 2026-10-09: the past hour's high, not the current price). Raise only by default; with `lower` it also follows the
   price down to that distance - never below the signal stop (-1R: the frames end at the first -1R touch, and the loss stays capped
   at 1R). 157,464-run parity with the old engine (0 differences); plain Python == numba on trailing plans.
 

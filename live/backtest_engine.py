@@ -35,9 +35,11 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
                                             (the minutes after the at_h - window_h mark; from the entry when at_h <= window_h)
     cut_unless  {at_h, reach}               close everything at at_h hours unless +reach R was reached (bid high) by then
     trail       {every_h, dist, lower}      (trader 2026-10-09; at most one) every every_h TRADING hours after the entry, at that
-                                            minute's close, every open leg's stop goes to the exit price - dist: raised when that is
-                                            higher; with lower, also lowered to it - never below the signal stop (-1R: the frames end
-                                            at the first -1R touch, and the loss stays capped at 1R). Takes effect from the next minute
+                                            minute's close, every open leg's stop goes to dist below the HIGHEST exit-side price since
+                                            the previous check (the past every_h hours): raised when that is higher; with lower, also
+                                            lowered to it - never below the signal stop (-1R: the frames end at the first -1R touch, and
+                                            the loss stays capped at 1R). Takes effect from the next minute (a level already above the
+                                            price closes the trade at the next minute's open)
   At most 20 levers per list (adds / take profit / stop moves / cuts) and 60 in all (review 2026-10-04).
   entry.pct = the first position (% of ruled size); every leg's first stop is the signal stop (-1R) unless the card says else;
   stops are never set below -1R; cap_pct = gross units entered (banking does not free room): an add is trimmed to what is left.
@@ -80,6 +82,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
     bk_done = np.zeros(max(nbk, 1), dtype=np.bool_); mv_done = np.zeros(max(nmv, 1), dtype=np.bool_)
     ad_done = np.zeros(max(nad, 1), dtype=np.bool_); ad_held = np.zeros(max(nad, 1), dtype=np.bool_)
     ct_hit = np.zeros(max(nct, 1), dtype=np.bool_); ct_csw = np.zeros(max(nct, 1))      # cs at a windowed cut's window start
+    tr_hi = -1e18                                      # trail: the highest exit-side price since the last check
     nbf = 0; naf = 0
     for j in range(n):
         cs += bc[j]; avg = cs / (j + 1)
@@ -262,8 +265,9 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
                     else:
                         alive[nl] = False
                 ad_done[a] = True; ad_held[a] = False
-        if tr_on and tr_chk[j]:                        # trail: every leg's stop to the exit price - dist (raise; lower too if set)
-            tv = xc[j] - tr_dist
+        if tr_on and xh[j] > tr_hi: tr_hi = xh[j]
+        if tr_on and tr_chk[j]:                        # trail: every leg's stop to dist below the window's high (raise; lower too if set)
+            tv = tr_hi - tr_dist; tr_hi = -1e18
             if tv < -1.0: tv = -1.0
             for q in range(nl):
                 if alive[q] and (tv > lst[q] or (tr_lower and tv < lst[q])): lst[q] = tv
