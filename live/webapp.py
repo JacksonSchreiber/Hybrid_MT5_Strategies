@@ -19,7 +19,8 @@ from live import eligibility as ELIG
 
 CFG: dict = {}
 LOG = None
-STATIC_V = str(int(os.path.getmtime(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "hybrid_chart.js")))) if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "hybrid_chart.js")) else "0"
+_SD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")      # the cache-buster: the NEWEST static file (2026-10-09: it read only
+STATIC_V = str(int(max((os.path.getmtime(os.path.join(_SD, f)) for f in os.listdir(_SD) if os.path.isfile(os.path.join(_SD, f))), default=0)))   # hybrid_chart.js, so a backtest.js-only deploy kept the day-old cached script)
 E = html.escape
 
 CSS = """
