@@ -41,7 +41,8 @@ never execute anything - you can only read files. The trader decides and acts wi
   day as stale). You also have WebSearch/WebFetch and the trader encourages you to use them: check recent news, central-bank
   comments and anything that could change a position (public sources only, never paywalled; name the source and its time).
 - The live doctrine: `{advisor}/CLAUDE.md` (the signal advisor's role file - read it ONLY for the management rules the EA
-  enforces: bank at +1R, BE floor, ratchet, staged add, pyramid, the commodity-bloc rules; do NOT answer in its scorecard
+  enforces: bank at +1R, BE floor, ratchet, the commodity-bloc rules - the staged add and the pyramid are OFF for trades
+  opened from 2026-10-09 (older trades may still carry a staged add); do NOT answer in its scorecard
   format) and `{advisor}/library/INDEX.md` for evidence-backed notes.
 
 ## What to look for
@@ -50,8 +51,13 @@ never execute anything - you can only read files. The trader decides and acts wi
   back a lot of its best R.
 - A stop that could come up under the doctrine floors, or a reason to bank part (structure broken, target unlikely).
 - Correlated positions stacking the same risk (the portfolio block's numbers are authoritative - don't redo the maths).
-- The EA already manages banks, adds, the pyramid and the bloc rules automatically: the DEFAULT is HOLD. Suggest a change
-  only with a concrete reason you can point at.
+- **Averages kill bad trades early (trader ruling 2026-10-09).** Each position shows its average R since the entry (and over
+  the last ~12 h). A trade whose average is below 0 in its first hours (roughly the first day) is the trade to cut: recommend
+  `close` with urgency now, naming the average. Later in a trade a negative average alone is not enough (late average cuts
+  lost in the record) - judge it with the rest.
+- Weigh the symbol's GROUP and how that group behaves (the group line) heavily in every call.
+- The EA already manages banks and the bloc rules automatically: apart from the early-average cut above, the DEFAULT is HOLD.
+  Suggest a change only with a concrete reason you can point at.
 
 ## Answer format (exactly)
 First a short markdown summary (at most 8 lines): the portfolio-level picture (event and correlation risk) and the
@@ -117,6 +123,23 @@ def _excursion(p, h4: list[list]) -> tuple[float | None, float | None]:
     e = _f(p.get("entry"))
     if _up(p): return (max(b[2] for b in xs) - e) / R, (min(b[3] for b in xs) - e) / R
     return (e - min(b[3] for b in xs)) / R, (e - max(b[2] for b in xs)) / R
+
+def _avg_r(p):
+    """trader 2026-10-09 ("averages are great tools to kill bad trades early"): the average R of the M1 bid closes since the entry
+    and over the last 720 M1 bars (~12 trading hours), signed by the trade, against the fill and the original stop. (None, None) when
+    the terminal has no bars."""
+    try:
+        from live import mt5feed
+        t0 = int(_f(p.get("opened_at"))); R = _R(p); e = _f(p.get("entry"))
+        if not (t0 and R > 0 and e): return None, None
+        n = min(30000, max(120, int((time.time() - t0) / 60) + 400))           # opened_at is the server clock (ahead of UTC): a margin
+        xs = [b for b in (mt5feed.bars(p["symbol"], "m1", n) or []) if b[0] >= t0]
+        if not xs: return None, None
+        sg = 1.0 if _up(p) else -1.0; last = xs[-720:]
+        return sg * (sum(b[4] for b in xs) / len(xs) - e) / R, sg * (sum(b[4] for b in last) / len(last) - e) / R
+    except Exception:
+        return None, None
+
 
 def _hours(p) -> str:
     try:
@@ -199,6 +222,7 @@ def build_bundle(cfg: dict, positions: list[dict]) -> tuple[str, list[dict]]:
         row = {"key": k, "symbol": p["symbol"], "posid": p["posid"], "direction": p.get("direction"), "strategy": p.get("strategy"),
                "open_r": p.get("open_r"), "banked_r": p.get("banked_r"), "bars_open": p.get("bars_open"), "best_r": best,
                "sl_r": _inR(p, p.get("sl_live")), "hours": _hours(p)}
+        row["avg_r"], row["avg12_r"] = _avg_r(p)
         snap.append(row)
         lines += [f"## {k}", f"- **{p['symbol']} {p.get('direction')}** · {p.get('strategy')} · signal #{p.get('signal_id')} [{p.get('decision_class', '')}]"
                   + (f" · advisor at entry: {vw}" if vw else ""),
@@ -206,6 +230,8 @@ def build_bundle(cfg: dict, positions: list[dict]) -> tuple[str, list[dict]]:
                   f"- R now (open) **{C.r_fmt(p.get('open_r'))}** · banked {C.r_fmt(p.get('banked_r'))} · if closed now {C.r_fmt(p.get('closenow_r'))}"
                   + (f" · best since entry {best:+.2f}R · worst {worst:+.2f}R" if best is not None else " · best/worst since entry: n/a (no live bars)"),
                   f"- time in trade: {row['hours']}",
+                  (f"- average R since entry **{row['avg_r']:+.2f}R** (last ~12 h {row['avg12_r']:+.2f}R) - an average below 0 in the first hours is"
+                   f" the early-cut signal (trader 2026-10-09)" if row.get("avg_r") is not None else "- average R since entry: n/a (no M1 bars from the terminal)"),
                   f"- levels: entry {p.get('entry')} · original SL {p.get('sl_risk_basis')} (1R = {R:.{dg}f}) · SL now {p.get('sl_live')}"
                   + (f" ({row['sl_r']:+.2f}R)" if row["sl_r"] is not None else "") + f" · TP1 {p.get('tp1') or '-'}"
                   + (f" ({_inR(p, p.get('tp1')):+.2f}R)" if _inR(p, p.get('tp1')) is not None else "") + f" · TP2/TP now {p.get('tp_live') or '-'}"
