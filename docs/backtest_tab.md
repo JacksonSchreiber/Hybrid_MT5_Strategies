@@ -65,6 +65,12 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
     - Unset, it is left out of the normalised plan; the engine is identical without it (old vs new, every trade x every menu
       plan + the wait/hold plans, 0 differences). A second new lever option before any Test session; not a menu change.
 
+## Average cuts (trader 2026-10-09)
+- Each extra "cut on a weak average" added from the palette starts 4 h after the previous one (the level stays 0), so a ladder of
+  cuts goes in quickly. `cut_avg.window_h` (the "over the last 12 h only" box): the average over the last 12 trading hours (the
+  minutes after the at_h - 12 h mark) instead of since the entry. Only written when set: 157,464-run parity with the old engine,
+  0 differences; plain Python == numba on windowed cuts.
+
 ## Reveal in trading time (trader 2026-10-08)
 - The Practice reveal's chart runs to where the raw trade really ended (the frame: first -1R touch or 40 days; at least the old 60
   bars, which also show the path after an early stop), with markers for the plan's exit AND the raw exit placed on the real 4-hour

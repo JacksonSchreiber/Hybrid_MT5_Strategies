@@ -253,6 +253,13 @@ def unit_tests() -> bool:
     except ValueError: bad = True
     say(bad and "risk_cap" not in E.validate(K(None))[0]["levers"][0] and E.validate(K(1))[0]["levers"][0]["risk_cap"] == 1.0,
         "validation: risk_cap 0.1-10R; unset, it is left out of the normalised plan")
+    # cut_avg window_h (2026-10-09): the average over the last N trading hours only
+    F, c = frame([(-0.6, -0.4, -0.5)] * 720 + [(0.1, 0.3, 0.2)] * 2000)        # 12 h well below 0, then 12 h at +0.2
+    cw = lambda wh: stack([dict({"type": "cut_avg", "at_h": 24, "below": 0.0}, **({"window_h": wh} if wh else {}))])
+    r0, r1 = E.evaluate(cw(None), F, c), E.evaluate(cw(12), F, c)
+    say(r0["kind"] == 2 and r0["exit_j"] == 1439 and r1["kind"] != 2,
+        f"cut_avg window_h 12: since entry the 24 h average is below 0 (cut), over the last 12 h it is +0.2 (no cut) - kinds {r0['kind']} / {r1['kind']}")
+    say("window_h" not in E.validate(cw(None))[0]["levers"][0] and E.validate(cw(12))[0]["levers"][0]["window_h"] == 12.0, "validation: window_h left out when unset")
     # plan-wide risk_cap (2026-10-08): every add obeys it, add_reach included
     F, c = frame([(-0.2, 0.5, 0.3)] * 10 + [(0.3, 2.1, 2.0), (-1.1, 2.0, -1.0)])
     pc = lambda rc: dict(stack([{"type": "add_reach", "pct": 75, "at": 2.0, "within_h": None, "stop": "trade"}]), **({"risk_cap": rc} if rc else {}))

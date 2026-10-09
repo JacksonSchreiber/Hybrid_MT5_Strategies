@@ -19,7 +19,7 @@
     { name: 'Stop moves', items: [
       { type: 'move', label: 'Move the stop', help: 'Move the stop to a level when +X R is reached (tighten only)', tpl: { to: 0, when: 1.0, tp1: false, legs: 'all', src: 'exit' } }] },
     { name: 'Cuts', items: [
-      { type: 'cut_avg', label: 'Cut on a weak average', help: 'Close at N hours if the average R since entry is below X', tpl: { at_h: 1, below: 0 } },
+      { type: 'cut_avg', label: 'Cut on a weak average', help: 'Close at N hours if the average R since entry (or over the last 12 h) is below X', tpl: { at_h: 1, below: 0, window_h: null } },
       { type: 'cut_unless', label: 'Cut unless it got going', help: 'Close at N hours unless +X R was reached', tpl: { at_h: 24, reach: 1.5 } }] }];
   var STOP_OPTS = [['trade', "the trade's stop"], ['-1', '-1R (signal stop)'], ['-0.5', '-0.5R'], ['0', 'entry'], ['0.25', '+0.25R'], ['0.5', '+0.5R'], ['1', '+1R'], ['2', '+2R']];
 
@@ -116,7 +116,13 @@
         this.$nextTick(this.bindSort.bind(this));
       },
       // ---------------------------------------------------------------- edits
-      add: function (it) { var c = clone(it.tpl); c.type = it.type; c.id = uid(); this.plan.levers.push(c); this.commit(); this.$nextTick(this.bindSort.bind(this)); },
+      add: function (it) { var c = clone(it.tpl); c.type = it.type; c.id = uid();
+        if (c.type === 'cut_avg') {                 // trader 2026-10-09: each extra average cut starts 4 h after the previous one (the level stays 0)
+          var prev = this.plan.levers.filter(function (l) { return l.type === 'cut_avg'; });
+          if (prev.length) c.at_h = (+prev[prev.length - 1].at_h || 0) + 4;
+        }
+        this.plan.levers.push(c); this.commit(); this.$nextTick(this.bindSort.bind(this)); },
+      toggleWin: function (L, ev) { L.window_h = ev.target.checked ? 12 : null; this.commit(); },
       addByKey: function (key) { var p = key.split('|'); var it = null; PALETTE.forEach(function (g) { g.items.forEach(function (x) { if (x.type === p[0] && x.label === p[1]) it = x; }); }); if (it) this.add(it); },
       remove: function (idx) { this.plan.levers.splice(idx, 1); this.commit(); },
       // review #6: a blank or non-numeric entry never leaves the screen disagreeing with the plan - the committed value is written back

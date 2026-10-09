@@ -29,8 +29,10 @@ CONFIG (what the lever builder serialises; schema "levers/v1"):
                                             raised to one level S that brings it back to exactly risk_cap (tighten only); if S would be at
                                             or above the price, the add is skipped
     add_tp1     {pct, min_R, stop}          add pct% when TP1 is reached (only if TP1 is above +min_R R and below TP2)
-    cut_avg     {at_h, below}               close everything at at_h hours if the average R (the EA's AvgRSince: mean of the M1
-                                            bid closes since the entry-bar open, against the card entry) is below `below`
+    cut_avg     {at_h, below[, window_h]}   close everything at at_h hours if the average R (the EA's AvgRSince: mean of the M1
+                                            bid closes since the entry-bar open, against the card entry) is below `below`; window_h
+                                            (optional, trader 2026-10-09): the average over only the last window_h trading hours
+                                            (the minutes after the at_h - window_h mark; from the entry when at_h <= window_h)
     cut_unless  {at_h, reach}               close everything at at_h hours unless +reach R was reached (bid high) by then
   At most 20 levers per list (adds / take profit / stop moves / cuts) and 60 in all (review 2026-10-04).
   entry.pct = the first position (% of ruled size); every leg's first stop is the signal stop (-1R) unless the card says else;
@@ -63,7 +65,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
          bk_lvl, bk_pct, nbk,
          mv_when, mv_to, mv_legs, mv_src, nmv,
          ad_type, ad_lvl, ad_until, ad_k, ad_early, ad_hold, ad_pct, ad_stop, ad_trade, nad,
-         ct_type, ct_k, ct_thr, nct, ad_wait, ad_cap):
+         ct_type, ct_k, ct_thr, nct, ad_wait, ad_cap, ct_ws):
     """-> (R of the full ruled position, kind 0 stopped / 1 TP2 / 2 cut / 3 frame end / 4 banked out (everything open was banked:
     the trade ends that minute), exit minute, gross units entered, banks fired, adds fired, cut index or -1)."""
     nleg = 1 + nad
@@ -73,10 +75,12 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
     gross = F0; locked = 0.0; tstop = -1.0; cs = 0.0
     bk_done = np.zeros(max(nbk, 1), dtype=np.bool_); mv_done = np.zeros(max(nmv, 1), dtype=np.bool_)
     ad_done = np.zeros(max(nad, 1), dtype=np.bool_); ad_held = np.zeros(max(nad, 1), dtype=np.bool_)
-    ct_hit = np.zeros(max(nct, 1), dtype=np.bool_)
+    ct_hit = np.zeros(max(nct, 1), dtype=np.bool_); ct_csw = np.zeros(max(nct, 1))      # cs at a windowed cut's window start
     nbf = 0; naf = 0
     for j in range(n):
         cs += bc[j]; avg = cs / (j + 1)
+        for c in range(nct):
+            if ct_ws[c] == j: ct_csw[c] = cs
         anyalive = False
         for q in range(nl):
             if alive[q]:
@@ -207,7 +211,8 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
             return v, 1, j, gross, nbf, naf, -1
         for c in range(nct):
             if j == ct_k[c]:
-                fire = (avg < ct_thr[c]) if ct_type[c] == 0 else (not ct_hit[c])
+                aw = avg if ct_ws[c] < 0 else (cs - ct_csw[c]) / (j - ct_ws[c])          # windowed: the minutes after the window start
+                fire = (aw < ct_thr[c]) if ct_type[c] == 0 else (not ct_hit[c])
                 if fire:
                     v = locked
                     for q in range(nl):
@@ -263,7 +268,7 @@ def kern(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0,
 # ------------------------------------------------------------------------------------------------------------- config
 TYPES = {"bank": ("pct", "at", "tp1"), "move": ("to", "when", "tp1", "legs", "src"), "add_reach": ("pct", "at", "within_h", "stop"),
          "add_bar": ("pct", "bar", "early_at", "hold_avg", "stop", "wait_avg", "risk_cap"), "add_tp1": ("pct", "min_R", "stop"),
-         "cut_avg": ("at_h", "below"), "cut_unless": ("at_h", "reach")}
+         "cut_avg": ("at_h", "below", "window_h"), "cut_unless": ("at_h", "reach")}
 
 
 def _num(v, lo=None, hi=None, what="value"):
@@ -324,6 +329,8 @@ def validate(cfg: dict) -> tuple[dict, list[str]]:
             d.update(pct=_num(c.get("pct"), 1, 200, "an add's %"), min_R=_num(c.get("min_R", 1.0), 0, 50, "the TP1 minimum"), stop=_stop(c.get("stop", 1.0), i))
         elif t == "cut_avg":
             d.update(at_h=_num(c.get("at_h"), 0.25, 2400, "a cut's hours"), below=_num(c.get("below", 0.0), -5, 50, "a cut's average"))
+            wh = c.get("window_h")                      # only written when set: plans without it normalise and run exactly as before
+            if wh not in (None, ""): d["window_h"] = _num(wh, 1, 240, "a cut's average window")
         elif t == "cut_unless":
             d.update(at_h=_num(c.get("at_h"), 0.25, 2400, "a cut's hours"), reach=_num(c.get("reach"), 0.05, 50, "a cut's R level"))
         out.append(d)
@@ -402,11 +409,15 @@ def compile_cfg(cfg: dict, ctx: dict, strict_tp2: bool = True) -> dict:
     ct_type = np.array([0 if c["type"] == "cut_avg" else 1 for c in cuts], dtype=np.int64)
     ct_k = np.array([mark(ctx, c["at_h"], cut=True) for c in cuts], dtype=np.int64)
     ct_thr = np.array([c["below"] if c["type"] == "cut_avg" else c["reach"] for c in cuts], dtype=np.float64)
+    def wstart(c):
+        if c["type"] != "cut_avg" or not c.get("window_h") or c["at_h"] <= c["window_h"]: return -1
+        k = mark(ctx, c["at_h"] - c["window_h"]); return k if 0 <= k < BEYOND else -1
+    ct_ws = np.array([wstart(c) for c in cuts], dtype=np.int64)
     return {"tp2_on": tp2_on, "tp2_R": tp2 if tp2 is not None else 0.0, "cap": cfg["cap_pct"] / 100.0, "F0": cfg["entry"]["pct"] / 100.0,
             "bk_lvl": bk_lvl, "bk_pct": bk_pct, "nbk": len(banks), "mv_when": mv_when, "mv_to": mv_to, "mv_legs": mv_legs, "mv_src": mv_src,
             "nmv": len(moves), "ad_type": ad_type, "ad_lvl": ad_lvl, "ad_until": ad_until, "ad_k": ad_k, "ad_early": ad_early,
             "ad_hold": ad_hold, "ad_wait": ad_wait, "ad_cap": ad_cap, "ad_pct": ad_pct, "ad_stop": ad_stop, "ad_trade": ad_trade, "nad": na,
-            "ct_type": ct_type, "ct_k": ct_k, "ct_thr": ct_thr, "nct": len(cuts)}
+            "ct_type": ct_type, "ct_k": ct_k, "ct_thr": ct_thr, "nct": len(cuts), "ct_ws": ct_ws}
 
 
 def run(fn, F: dict, ctx: dict, P: dict):
@@ -415,7 +426,7 @@ def run(fn, F: dict, ctx: dict, P: dict):
               P["tp2_on"], P["tp2_R"], P["cap"], P["F0"], P["bk_lvl"], P["bk_pct"], P["nbk"],
               P["mv_when"], P["mv_to"], P["mv_legs"], P["mv_src"], P["nmv"],
               P["ad_type"], P["ad_lvl"], P["ad_until"], P["ad_k"], P["ad_early"], P["ad_hold"], P["ad_pct"], P["ad_stop"], P["ad_trade"], P["nad"],
-              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"], P["ad_cap"])
+              P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"], P["ad_cap"], P["ct_ws"])
 
 
 # ------------------------------------------------------------------------------------------------------------- box frames
