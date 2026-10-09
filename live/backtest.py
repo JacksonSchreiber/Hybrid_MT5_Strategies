@@ -101,8 +101,9 @@ def store(cfg: dict) -> dict:
             frames = E.Frames(os.path.join(d, "frames_v1"))
             ok = {h for h in split["trades"] if h in cards and h in res["trades"] and h in frames.idx and servable(cards[h])}
             menu_file = json.load(open(os.path.join(d, "menu_v1.json")))
+            fi = os.path.join(d, "frames_inv_v1"); frames_inv = E.Frames(fi) if os.path.exists(os.path.join(fi, "index.json")) else None
             _STORE.clear(); _STORE.update(key=key, split=split, cards=cards, results=res["trades"], menu=menu_view(menu_file), menu_file=menu_file,
-                                          info=info_view(json.load(open(os.path.join(d, "info_v1.json")))), frames=frames, eligible=ok)
+                                          info=info_view(json.load(open(os.path.join(d, "info_v1.json")))), frames=frames, frames_inv=frames_inv, eligible=ok)
     return _STORE
 
 
@@ -529,12 +530,12 @@ _EVAL: dict = {}
 _EVAL_MAX = 50000
 
 
-def _evaluate(S, hid, cfg_plan):
+def _evaluate(S, hid, cfg_plan, inverse: bool = False):
     """one plan on one trade - cached by (data build, hid, plan) (review 2 #10: write_report re-reads every row at each decide)."""
-    k = (S.get("key"), hid, json.dumps(cfg_plan, sort_keys=True, separators=(",", ":")))
+    k = (S.get("key"), hid, json.dumps(cfg_plan, sort_keys=True, separators=(",", ":")), inverse)
     r = _EVAL.get(k)
     if r is None:
-        F, ctx = S["frames"].get(hid)
+        F, ctx = (S["frames_inv"] if inverse else S["frames"]).get(hid)       # inverse: the flipped trade's own frame (trader 2026-10-09)
         r = E.evaluate(cfg_plan, F, ctx)
         tm = ctx["tm"]; j = min(r["exit_j"], len(tm) - 1)
         r["exit_h"] = round(float(tm[j]) / 60.0, 1)
@@ -543,13 +544,13 @@ def _evaluate(S, hid, cfg_plan):
     return dict(r)
 
 
-def path_view(S, hid, plan_n) -> dict:
+def path_view(S, hid, plan_n, inverse: bool = False) -> dict:
     """trader 2026-10-08 (a reveal that showed raw at -1R while its chart ended at +3.3R, and an exit marker 11 bars late): the
     post-signal H4 bars from the frame on the REAL 4-hour grid - clock buckets from the entry-bar open with the empty ones (weekends)
     dropped, the same grid the chart draws - to where the raw trade ended (the frame runs to the first -1R touch or 40 days); the
     plan's and the raw trade's exits as BAR positions and TRADING hours (the clock hours include weekends); and a note when raw came
     close to TP2 without filling it (a SELL closes at the ask, a BUY at the bid)."""
-    F, ctx = S["frames"].get(hid); n = F["n"]; tm = np.asarray(ctx["tm"][:n]); kb = tm // 240
+    F, ctx = (S["frames_inv"] if inverse else S["frames"]).get(hid); n = F["n"]; tm = np.asarray(ctx["tm"][:n]); kb = tm // 240
     starts = np.flatnonzero(np.r_[True, kb[1:] != kb[:-1]]); ends = np.r_[starts[1:] - 1, n - 1]
     rank = np.repeat(np.arange(len(starts)), np.diff(np.r_[starts, n]))
     blow = F["xl"] + (F["bh"] - F["xh"])                       # the bid low (xl is the exit side: a SELL's is the ask)
@@ -574,7 +575,7 @@ def path_view(S, hid, plan_n) -> dict:
     return out
 
 
-def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded_preset: str = "") -> dict:
+def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded_preset: str = "", inverse: bool = False) -> dict:
     """record the decision server-side, THEN evaluate and reveal. loaded_preset = the preset the plan was loaded from when editing
     began (coach 2026-10-04: the "nearest preset" for grading a custom plan)."""
     if decision not in ("take", "skip"): raise ValueError("decision must be take or skip")
@@ -593,7 +594,9 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
         else:                                         # a skip is never blocked: an invalid plan is just not evaluated
             try: plan_n, warn = (E.validate(plan) if plan else (None, []))
             except Exception as e: plan_n, warn, plan_bad = None, [], str(e)[:200]
-        ev = _evaluate(S, hid, plan_n) if plan_n else None
+        if inverse and (s["mode"] != "practice" or not S.get("frames_inv")): raise ValueError("the inverse is a Practice option (and needs the inverse frames)")
+        ev = _evaluate(S, hid, plan_n, inverse) if plan_n else None
+        raw_inv = _evaluate(S, hid, {"schema": E.SCHEMA, "entry": {"pct": 100}, "tp2": True, "levers": []}, True)["R"] if S.get("frames_inv") and hid in S["frames_inv"].idx else None
         dflt = "raw"; mv = S["menu"]                  # trader 2026-10-08: the raw signal is the only comparison (Minimal removed)
         adv_avail = bool(advisor_visible(cfg, s, i) and advisor_latest(cfg, sid, hid))      # could the trader see a plan before his final?
         adv_cols = _adv_cols(cfg, S, s, i, hid, plan_n)
@@ -610,7 +613,7 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
                "loaded_preset": lp, "R_loaded": R["R"].get(lp, "") if lp and lp not in ("advisor", "advisor_v1") else "",
                "R_choice_1pip": round((ev["R"] - cost(ev["gross"])) if (decision == "take" and ev) else 0.0, 4),
                "R_raw_1pip": round(R["R"]["raw"] - cost(gr.get("raw", 1.0)), 4), "R_default_1pip": round(R["R"][dflt] - cost(gr.get(dflt, 1.0)), 4),
-               "adv_available": adv_avail, **adv_cols}
+               "adv_available": adv_avail, "inverse": bool(inverse), "R_raw_inverse": round(raw_inv, 4) if raw_inv is not None else None, **adv_cols}
         s["decisions"].append(rec); s["pos"] = i + 1
         save_session(cfg, s); write_report(cfg, s, S)
     if s["mode"] == "test":                           # Test: nothing is revealed until the session ends (coach)
@@ -619,9 +622,11 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
     labels = {p["key"]: p["label"] for p in mv["presets"]}
     return {"ok": True, "decision": decision, "warnings": warn, "R_choice": rec["R_choice"], "R_plan": rec["R_plan"], "R_raw": rec["R_raw"],
             "R_default": rec["R_default"], "default_key": dflt,
-            "presets": [{"key": k, "label": labels[k], "R": R["R"][k]} for k in PRESET_KEYS],
+            "presets": [{"key": k, "label": labels[k], "R": round(_evaluate(S, hid, next(p["cfg"] for p in mv["presets"] if p["key"] == k), True)["R"], 4) if inverse else R["R"][k]}
+                        for k in PRESET_KEYS],
+            "inverse": bool(inverse), "R_raw_inverse": rec["R_raw_inverse"],
             "banked_1R": rec["banked_1R"], "hit_tp2": rec["hit_tp2"], "kind": KIND.get(rec["kind"], "") if ev else "", "exit_h": rec["exit_h"],
-            "adds_fired": ev["adds"] if ev else 0, "advisor": adv_cols or None, "tally": tally(s), "next": s["pos"] < s["n"], **path_view(S, hid, plan_n)}
+            "adds_fired": ev["adds"] if ev else 0, "advisor": adv_cols or None, "tally": tally(s), "next": s["pos"] < s["n"], **path_view(S, hid, plan_n, bool(inverse))}
 
 
 def commit_first(cfg: dict, sid: str, i: int, decision: str, plan: dict | None) -> dict:

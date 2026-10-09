@@ -113,7 +113,7 @@
         </div>
         <div class="card bt-facts" x-show="C.card">
           <div class="bt-row bt-pills">
-            <span class="bt-tag" :class="C.card && C.card.direction === 'BUY' ? 'up' : 'dn'" x-text="C.card && C.card.direction"></span>
+            <span class="bt-tag" :class="dirShown().indexOf('BUY') === 0 ? 'up' : 'dn'" x-text="dirShown()"></span>
             <span class="bt-tag" x-text="C.card && C.card.detector"></span>
             <span class="bt-tag" x-text="C.card && C.card.group"></span>
             <span class="bt-tag dim" x-text="'regime ' + ((C.card && C.card.regime && C.card.regime.tag) || '-')"></span>
@@ -160,6 +160,9 @@
               <div x-text="C.advisor.rationale"></div></div>
           </template>
 
+          <!-- trader 2026-10-09: trade the opposite direction (Practice) - redraws the chart, scored on the inverted trade -->
+          <div class="bt-row" x-show="!isTest()" style="margin:4px 0 8px"><sl-checkbox :checked="inverse" @sl-change="setInverse($event)" :disabled="!!rev">Inverse - trade the opposite direction</sl-checkbox>
+            <span class="k bt-small" x-show="inverse">BUY and SELL swapped; the stop and targets mirrored round the entry at the same distances</span></div>
           <!-- entry (always first) -->
           <div class="bt-lever fixed">
             <span class="bt-lt">Entry</span>
@@ -296,6 +299,7 @@
             <table class="bt-tbl bt-cmp">
               <tr class="bt-me"><td>Your plan</td><td :class="cls(rev?.R_plan)" x-text="rev?.R_plan === null ? '-' : fmt(rev?.R_plan)"></td></tr>
               <tr><td><b>Raw signal</b></td><td :class="cls(rev?.R_raw)" x-text="fmt(rev?.R_raw)"></td></tr>
+              <template x-if="rev && rev.R_raw_inverse !== null && rev.R_raw_inverse !== undefined"><tr><td><b>Raw inverted</b></td><td :class="cls(rev?.R_raw_inverse)" x-text="fmt(rev?.R_raw_inverse)"></td></tr></template>
               <template x-for="p in rev?.presets" :key="p.key"><tr><td x-text="p.label"></td><td :class="cls(p.R)" x-text="fmt(p.R)"></td></tr></template>
               <template x-if="rev && rev.advisor"><tr><td>Advisor · first (blind) plan</td><td :class="cls(rev?.advisor?.R_adv_v1)" x-text="rev?.advisor?.R_adv_v1 === '' ? '-' : fmt(rev?.advisor?.R_adv_v1)"></td></tr></template>
               <template x-if="rev && rev.advisor"><tr><td>Advisor · latest plan</td><td :class="cls(rev?.advisor?.R_adv_latest)" x-text="rev?.advisor?.R_adv_latest === '' ? '-' : fmt(rev?.advisor?.R_adv_latest)"></td></tr></template>

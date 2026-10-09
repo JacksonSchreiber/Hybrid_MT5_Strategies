@@ -32,7 +32,7 @@
   window.btApp = function () {
     return {
       groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', startMode: 'practice', devN: '', menuFrozen: null, testLeft: {},
-      advTimer: null, aoTimer: null, exps: [], askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
+      advTimer: null, aoTimer: null, exps: [], inverse: false, askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
       sess: null, done: false, brk: null, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '', basePreset: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null, wide: window.innerWidth > 640,
@@ -177,6 +177,8 @@
           if (j.ok === false) { self.err = j.error; return; } self.resume(j.sid); });
       },
       resume: function (sid) { this.sess = { sid: sid }; location.hash = 'sid=' + sid; this.load(); },
+      setInverse: function (ev) { this.inverse = !!ev.target.checked; this.chart(!!this.rev); },   // trader 2026-10-09: redraw, no reload
+      dirShown: function () { var d = this.C.card && this.C.card.direction; if (!d) return ''; return this.inverse ? (d === 'BUY' ? 'SELL' : 'BUY') + ' (inverted)' : d; },
       handOver: function () {            // trader 2026-10-08: the advisor plays the rest of this Test session; its results are shown
         var self = this, left = this.brk.n - this.brk.i;
         if (!confirm('Let the advisor play the rest?\n\nYour session ends here and is graded on the ' + this.brk.i + ' cards you played. The advisor answers the other ' +
@@ -207,7 +209,7 @@
           if (j.block_break) { self.brk = j; self.sess.group = j.group; self.C = { i: j.i, n: j.n, mode: j.mode, tally: j.tally }; self.rev = null; return; }   // Test: between blocks
           self.brk = null;
           self.sess.group = j.card ? (self.groups.filter(function (g) { return g.name === j.card.group; })[0] || {}).key : self.sess.group;
-          self.C = j; self.rev = null; self.done = false;
+          self.C = j; self.rev = null; self.done = false; self.inverse = false;
           self.hist = []; self.histBase = []; self.hpos = -1; self.loadPreset('default');     // per-card history starts at the preloaded plan
           if (j.committed && j.committed.plan) self.fromConfig(j.committed.plan);           // Test, back after a reload: the committed plan
           self.hist = [self.snap()]; self.histBase = ['default']; self.hpos = 0; self.basePreset = 'default';
@@ -216,7 +218,12 @@
         });
       },
       chart: function (reveal) {
-        var C = this.C.card, el = document.getElementById('bt-chart'); if (!C || !el) return;
+        var C0 = this.C.card, el = document.getElementById('bt-chart'); if (!C0 || !el) return;
+        var C = C0, rs = this.sgn();
+        if (this.inverse) {                     // the inverted trade: the same bars, the direction flipped, SL / TP1 / TP2 mirrored round the entry
+          var L = C0.levels, neg = function (v) { return v === null || v === undefined ? v : -v; };
+          C = Object.assign({}, C0, { direction: C0.direction === 'BUY' ? 'SELL' : 'BUY', levels: { entry: L.entry, sl: neg(L.sl), tp1: neg(L.tp1), tp2: neg(L.tp2) } }); rs = -rs;
+        }
         var box = el.querySelector('.hc-box'); box.innerHTML = '';
         var h4 = C.h4.bars.slice(), ema = clone(C.h4.ema), marks = [];
         if (reveal && this.rev && this.rev.post_bars.length) {
@@ -229,11 +236,11 @@
             marks.push({ t: t + 14400 * (this.rev.raw_exit.bar + 1), label: 'raw ' + (this.rev.raw_exit.kind === 'TP2 hit' ? 'TP2 ' : (this.rev.raw_exit.kind === 'stopped out' ? 'stop ' : 'end ')) + this.fmt(this.rev.R_raw) });
         }
         HybridChart.mount(el, { blind: true, live: false, bars_h4: h4, bars_d1: C.d1.bars, ema_h4: ema, ema_d1: C.d1.ema, sig_h4: C.h4.sig, sig_d1: C.d1.sig,
-                                levels: C.levels, strategy: C.detector, overlay: C.overlay || null, marks: marks, rsign: this.sgn() });
+                                levels: C.levels, strategy: C.detector, overlay: C.overlay || null, marks: marks, rsign: rs });
       },
       decide: function (d) {
         var self = this; if (d === 'take' && !self.v.ok) return; self.busy = true;
-        post('/bt/decide', { sid: self.sess.sid, i: self.C.i, decision: d, plan: JSON.stringify(self.toConfig()), loaded_preset: self.basePreset }).then(function (j) {
+        post('/bt/decide', { sid: self.sess.sid, i: self.C.i, decision: d, plan: JSON.stringify(self.toConfig()), loaded_preset: self.basePreset, inverse: self.inverse ? 1 : null }).then(function (j) {
           self.busy = false; if (j.ok === false) { self.err = j.error; return; }
           if (self.isTest()) {                              // Test: nothing revealed - record and move on
             self.stopPoll(); self.flash = 'Card ' + (self.C.i + 1) + ' recorded (' + d + ').'; setTimeout(function () { self.flash = ''; }, 2500);

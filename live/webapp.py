@@ -1849,7 +1849,7 @@ class H(BaseHTTPRequestHandler):
                     sid = form.get("sid", ""); i = BT.card_no(form.get("i"))
                     plan = json.loads(form["plan"]) if form.get("plan") else None
                     if u.path == "/bt/start": rep = BT.start(CFG, form.get("group", ""), form.get("mode", "practice"), research_lock(), form.get("n"))
-                    elif u.path == "/bt/decide": rep = BT.decide(CFG, sid, i, form.get("decision", ""), plan, form.get("loaded_preset", ""))
+                    elif u.path == "/bt/decide": rep = BT.decide(CFG, sid, i, form.get("decision", ""), plan, form.get("loaded_preset", ""), form.get("inverse") == "1")
                     elif u.path == "/bt/commit": rep = BT.commit_first(CFG, sid, i, form.get("decision", ""), plan)
                     elif u.path == "/bt/adv_loaded": rep = BT.mark_adv_loaded(CFG, sid, i)
                     elif u.path == "/bt/next_block": rep = BT.next_block(CFG, sid)
