@@ -31,6 +31,8 @@
       var el = typeof id === 'string' ? document.getElementById(id) : id;
       if (!el) { console.log('HybridChart: container not found', id); return; }
       var tf = 'h4', chart, box = el.querySelector('.hc-box'), bar = el.querySelector('.hc-bar'), status = el.querySelector('.hc-status'), timer = null, gen = 0;
+      if (el._hcStop) { try { el._hcStop(); } catch (e) {} }   // a remount (live plan card: Inverse) stops the previous mount's refresh timer
+      el._hcStop = function () { gen++; if (timer) { clearInterval(timer); timer = null; } };
       if (!box || !(box instanceof Element)) { if (status) { status.textContent = 'chart error: box element missing (' + (el.tagName || typeof el) + ')'; status.style.color = '#f85149'; } return; }
       function api(tf, n) { return fetch('/api/bars/' + encodeURIComponent(d.symbol) + '?tf=' + tf + '&n=' + n, { cache: 'no-store' }).then(function (r) { return r.json(); }); }
       function start() {

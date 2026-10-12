@@ -106,6 +106,12 @@ class Monitor:
                     self.send(f"TEST signal published on {a['symbol']} (#{refs.get('signal_id')}) - approve or skip it: {self.base}/signal/{a['symbol']}-{refs.get('signal_id')}")
                 elif a.get("verb") in ("close", "close50", "sl_be", "ratchet_tp1", "skip", "delay"):
                     self.send(f"{a['verb']} accepted: {tgt} {a['symbol']}")
+                elif a.get("verb") == "plan_add":           # the live plan runner (trader 2026-10-12): adds and banks are news, stop moves are not
+                    self.send(f"PLAN ADD: {a['symbol']} {refs.get('lots')} lots at {refs.get('entry')} · pos {refs.get('posid')} · SL {refs.get('pos_sl')}")
+                elif a.get("verb") == "close_part":
+                    self.send(f"PLAN BANK: {tgt} {a['symbol']} · {refs.get('pos_volume')} lots left")
+            elif a.get("verb") == "set_sl" and str(a.get("reason", "")).startswith(("sl_through_price", "would_loosen")):
+                pass                                        # the plan runner handles these itself (closes the leg / keeps the stop)
             else:
                 self.send(f"TASK {a.get('result', '').upper()}: {a.get('verb')} {tgt} {a['symbol']} — {C.reason_text(a.get('reason'))}")
         self.st["acks"] = sorted(seen)[-2000:]
@@ -685,6 +691,11 @@ class Monitor:
             try: boot_s = float(subprocess.run(["powershell", "-NoProfile", "-Command", "((Get-Date)-(Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds"], capture_output=True, text=True, timeout=30).stdout.strip())
             except Exception: pass
         self.log(f"monitor up (dry={self.dry}); uptime_s={boot_s}")
+        if (self.cfg.get("live_plans") or {}).get("runner", True) and not self.dry:
+            try:                                            # trader 2026-10-12: the live plan runner (docs/live_plans.md), its own thread
+                from live import plan_live
+                plan_live.Runner(self.cfg, log=lambda m: self.log("plans: " + m)).start()
+            except Exception as e: self.guard_error("plan_runner", e)
         # one boot check per boot: a service restart inside the first 15 min must not re-announce a reboot
         boot_key = str(int(time.time() - boot_s)) if boot_s is not None else ""
         self.boot_check_due = (boot_s is not None and boot_s < 900 and abs(int(self.st.get("last_boot_checked", "0") or 0) - int(boot_key or 0)) > 30); self.boot_t0 = time.time()

@@ -16,6 +16,7 @@ from live import charts
 from live import advisor_runner as AR
 from live import verdict_fmt as VF
 from live import eligibility as ELIG
+from live import plan_live as PL
 
 CFG: dict = {}
 LOG = None
@@ -84,7 +85,7 @@ setInterval(function(){tick();utc();els();},1000);tick();utc();els();
  }).catch(function(){});},10000);})();
 (function(){var box=document.getElementById('advisor');if(!box)return;setInterval(function(){
  var typed=[].some.call(box.querySelectorAll('textarea'),function(t){return t.value.trim()!==''||t===document.activeElement;});if(typed)return;
- fetch('/api/advisor/'+encodeURIComponent(box.dataset.key)).then(function(r){return r.json();}).then(function(j){if(j&&j.v&&j.v!==box.dataset.v){box.innerHTML=j.html;box.dataset.v=j.v;els();}}).catch(function(){});},4000);})();
+ fetch('/api/advisor/'+encodeURIComponent(box.dataset.key)).then(function(r){return r.json();}).then(function(j){if(j&&j.v&&j.v!==box.dataset.v){box.innerHTML=j.html;box.dataset.v=j.v;els();var mi=document.getElementById('adv-mini'),bd=box.querySelector('.badge');if(mi&&bd)mi.innerHTML=bd.outerHTML;}}).catch(function(){});},4000);})();
 var meta=document.querySelector('meta[name=autorefresh]');if(meta&&!document.querySelector('textarea:focus')){setTimeout(function(){if(!document.querySelector('textarea:focus'))location.reload();},parseInt(meta.content)*1000);}
 """
 
@@ -1036,6 +1037,97 @@ def spread_cls(sz: dict) -> str:
     return "bad" if r > mx else ("warn" if r > mx / 2 else "ok")
 
 
+def plans_on() -> bool:
+    """config switch for the live plan card (live_config "live_plans": {"enabled": false} brings back the old Decide card)."""
+    return bool((CFG.get("live_plans") or {}).get("enabled", True))
+
+
+def _sp_presets(s: dict) -> list[dict]:
+    """the plan card's presets: today's live rules (preloaded), the raw signal, the Practice menu presets (ruthless / slow / banker /
+    pyramid, described by their levers)."""
+    from live import backtest_engine as BEn
+    cfg, about = PL.live_rules_plan(s, PL.live_json(CFG))
+    out = [{"key": "live", "label": "Today's live rules (preloaded)", "about": about, "cfg": cfg},
+           {"key": "raw", "label": "Raw signal (nothing added)", "about": "In at the signal, out at TP2 or the stop - nothing added.",
+            "cfg": {"schema": BEn.SCHEMA, "entry": {"pct": 100}, "tp2": True, "cap_pct": 200, "trim_to_cap": False, "levers": []}}]
+    try:
+        from live import backtest as BT
+        for pr in BT.menu_view(json.load(open(os.path.join(BT.data_dir(CFG), "menu_v1.json"))))["presets"]:
+            out.append({"key": pr["key"], "label": pr["label"] + " (Practice preset)", "about": pr.get("about", ""), "cfg": pr["cfg"]})
+    except Exception: pass
+    return out
+
+
+def signal_plan_layout(s: dict, key: str, head: list) -> list:
+    """the open signal as the Practice card: left = chart, facts, the full news, the group, FTMO room, correlation; right = the advisor
+    and the plan builder, then skip / delay."""
+    lv = s.get("levels") or {}; rr = s.get("rr") or {}; sz = s.get("sizing") or {}; d = s.get("delay_count", 0)
+    from live import mt5feed
+    try: spec = mt5feed.spec(s["symbol"]) or {}
+    except Exception: spec = {}
+    left, right = [], []
+    left.append(chart_block(s, lv, expose=True).replace('<div class="card" style="padding:6px">', '<div class="card bt-chartcard" style="padding:6px">', 1))
+    left.append(f'<div class="card"><div class="grid2"><div><span class="k">entry</span> <b class="v">{lv.get("entry")}</b>{" (STOP)" if lv.get("stop_entry") else ""}</div><div><span class="k">SL</span> <b class="v bad">{lv.get("sl")}</b> <span class="k">-1R</span></div>'
+                f'<div><span class="k">TP1</span> <b class="v">{lv.get("tp1") or "-"}</b> <span class="k">{rr.get("tp1") or ""}{"R" if rr.get("tp1") else ""}</span></div><div><span class="k">TP2</span> <b class="v">{lv.get("tp2") or lv.get("tp") or "-"}</b> <span class="k">{rr.get("runner")}R</span></div>'
+                f'<div><span class="k">100% =</span> <b class="v">{sz.get("lots")}</b> <span class="k">lots · {E(C.lots_line(sz))}</span></div><div><span class="k">risk</span> <b class="v">{float(sz.get("risk_pct_effective", 0) or 0) * 100:.2f}%</b> <span class="k">x{sz.get("risk_mult_applied")}</span></div>'
+                f'<div><span class="k">spread now</span> <b class="v {spread_cls(sz)}">{float(sz.get("spread_r") or 0):.3f}R</b> <span class="k">({sz.get("spread")} — paid the moment it opens)</span></div></div>'
+                f'<div class="k">delays {d} · implicit streak {s.get("implicit_streak", 0)} · presented {E(s.get("published_at", ""))} · kill switch {"on" if s.get("trading_enabled") else "OFF"}</div></div>')
+    evs = s.get("events") or []
+    ev = ['<div class="card"><h2>News - events (next 14 d)</h2>']
+    for e in evs[:40]:
+        ev.append(f'<div class="ev {ev_cls(e.get("hours_until"), e.get("cls"), e.get("binding"))}">{E(C.fmt_dt(C.parse_iso(e.get("t_utc"))))} · {E(e.get("ccy", ""))} {E(e.get("name", ""))} <span class="k">[{E(e.get("cls", ""))} {E(e.get("label", ""))}]</span>{" BINDING" if e.get("binding") else ""}</div>')
+    if not evs: ev.append('<div class="k">no notable events inside the window</div>')
+    _, cov = C.load_events(CFG); st = C.parse_iso(s.get("signal_time_utc") or s.get("signal_time"))
+    if cov and st and cov < st + timedelta(days=14): ev.append(f'<div class="warn">calendar coverage ends {cov.strftime("%Y-%m-%d")} — later events unknown</div>')
+    eg = s.get("election_gate") or {}
+    if eg.get("hit"): ev.append(f'<div class="bad">election gate: {E(eg.get("event", ""))}</div>')
+    ev.append("</div>")
+    html_adv, v = advisor_section(key)
+    left.append(f'<div class="card" id="adv-card"><h2>Advisor</h2><div id="advisor" data-key="{E(key)}" data-v="{v}">{html_adv}</div></div>')
+    left.append("".join(ev))
+    left.append(ftmo_room_block(s)); left.append(corr_block(s))
+    left.append(f'<details><summary class="k">static EA charts (what the advisor saw)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')
+    m_ = re.search(r'<span class="badge[^"]*">.*?</span>', html_adv)
+    right.append(f'<div class="card sp-advmini"><b>Advisor</b> <span id="adv-mini">{m_.group(0) if m_ else "-"}</span> <a class="k" href="#adv-card">its full read ↓</a></div>')
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "signal_plan.html")
+    right.append('<div id="sp-app" class="sl-theme-dark" x-data="spApp()" x-cloak>' + open(p, encoding="utf-8").read() + '</div>')
+    right.append(f'<div class="card"><form method="post" action="/task" class="row"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code" style="flex:1">'
+                 + "".join(f'<option value="{k}">{k}  {E(v_)}</option>' for k, v_ in C.SKIP_REASONS.items()) + '</select><button class="btn no">SKIP</button></form>'
+                 f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="delay"><button class="btn wait" style="width:100%">DELAY one bar</button></form></div>')
+    data = {"key": key, "symbol": s["symbol"], "direction": s.get("direction"), "levels": {k: lv.get(k) for k in ("entry", "sl", "tp1", "tp2", "tp")},
+            "lots": float(sz.get("lots") or 0), "step": float(spec.get("volume_step") or 0.01), "vmin": float(spec.get("volume_min") or 0.01),
+            "entry_modes": s.get("entry_modes") or ["market"], "presets": _sp_presets(s)}
+    v_ = STATIC_V
+    assets = (f'<link rel="stylesheet" href="/static/vendor/shoelace/themes/dark.css?v={v_}"><link rel="stylesheet" href="/static/backtest.css?v={v_}">'
+              f'<script type="module" src="/static/vendor/shoelace/shoelace-autoloader.js?v={v_}"></script>'
+              f'<script src="/static/vendor/sortable/Sortable.min.js?v={v_}"></script><script src="/static/signal_plan.js?v={v_}"></script>'
+              f'<script defer src="/static/vendor/alpine/alpine.min.js?v={v_}"></script>'
+              f'<script type="application/json" id="sp-data">{json.dumps(data, separators=(",", ":")).replace("</", "<\\/")}</script>')
+    order_l = [1, 2, 6, 7, 8, 9, 10]; order_r = [3, 4, 5]          # left: chart, facts, advisor, news, FTMO, corr, static; right: verdict, plan, skip
+    wrap = lambda html, o: f'<div class="sp-o" style="order:{o}">{html}</div>'
+    return head + [assets, '<div class="bt-grid sp-grid"><div class="bt-left">', *[wrap(h, o) for h, o in zip(left, order_l)], '</div><div class="bt-right">',
+                   *[wrap(h, o) for h, o in zip(right, order_r)], '</div></div>']
+
+
+def plan_panel(rec: dict) -> str:
+    """a live plan's state: the levers, the legs, what the runner did (newest first), and a Stop button."""
+    from live import backtest as BT
+    st = rec.get("status", ""); legs = rec.get("legs") or []
+    cls = {"running": "ok", "approving": "wait", "waiting_fill": "wait", "done": "", "refused": "bad", "stopped": "bad"}.get(st, "")
+    rows = "".join(f'<tr><td>{"first" if L["q"] == 0 else "add " + str(L["q"])}</td><td>{E(str(L.get("posid") or "-"))}</td><td>{E(L.get("status", ""))}</td><td class="k">{E(str(L.get("lots") or ""))} {E(L.get("reason", ""))}</td></tr>' for L in legs)
+    log = "".join(f'<div class="k"><span style="font-variant-numeric:tabular-nums">{E(x["t"][5:16].replace("T", " "))}</span> {E(x["msg"])}</div>' for x in reversed((rec.get("log") or [])[-40:]))
+    m = rec.get("model") or {}
+    stop = (f'<form method="post" action="/plan_stop" style="margin-top:8px" onsubmit="return confirm(\'Stop the plan? The trade keeps its stops and TP; nothing more is banked, added or cut - you manage it by hand.\')">'
+            f'<input type="hidden" name="key" value="{E(rec["signal_key"])}"><button class="btn no">Stop the plan (manage by hand)</button></form>') if st in ("approving", "waiting_fill", "running") else ""
+    try: what = BT.describe(rec["plan"])
+    except Exception: what = ""
+    return (f'<div class="card"><h2>Your plan <span class="pill {cls}">{E(st)}</span>{" <span class=\"pill warn\">INVERSE</span>" if rec.get("inverse") else ""}</h2>'
+            f'<div>{E(what)}{" · every add under a 1R cap on the open risk" if rec["plan"].get("risk_cap") else ""}</div>'
+            + (f'<div class="k">the replay (Practice engine, live prices): {C.r_fmt(m.get("R"))} so far · {m.get("bars")} minutes · {E(m.get("at", ""))}</div>' if m else "")
+            + (f'<table style="margin-top:6px"><tr><th>leg</th><th>pos</th><th>state</th><th></th></tr>{rows}</table>' if rows else "")
+            + f'<details open style="margin-top:6px"><summary class="k">what the plan runner did</summary>{log}</details>{stop}</div>')
+
+
 def signal_page(key: str, q: dict) -> str:
     s = C.signal(CFG, key)
     if not s: return page("Signal", '<div class="card bad">no such signal</div>')
@@ -1049,6 +1141,7 @@ def signal_page(key: str, q: dict) -> str:
     out.append(signal_kids(s))
     if s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
     if s.get("reoffer"): out.append(f'<div class="flash"><span class="pill warn">RE-OFFERED</span> {E(C.reoffer_line(s, CFG))}</div>')   # coach item 26
+    hdr_n = len(out)                 # the live plan layout (trader 2026-10-12) rebuilds the page from here
     d = s.get("delay_count", 0)
     out.append(chart_block(s, lv))
     out.append(f'<details><summary class="k">static EA charts (what the advisor saw)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')
@@ -1085,6 +1178,10 @@ def signal_page(key: str, q: dict) -> str:
                    '<div style="margin-top:8px"><button class="btn go" style="width:100%">ARM INVERSE</button></div></form>'
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
                    + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form></div>')
+    elif is_open and plans_on():
+        # trader 2026-10-12 (docs/live_plans.md): the Practice card on a live signal - chart, facts, the full news, the advisor, the FTMO
+        # room / correlation, and the lever builder; approving sends the plan (live/plan_live.py runs it)
+        out = signal_plan_layout(s, key, out[:hdr_n])
     elif is_open:
         modes = s.get("entry_modes") or ["market"]
         out.append(f'<div class="card"><h2>Decide</h2><form method="post" action="/task"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="approve">'
@@ -1113,6 +1210,8 @@ def signal_page(key: str, q: dict) -> str:
             if pos: out.insert(1, f'<div class="flash ok">pending order has FILLED - <a href="/position/{E(s["symbol"])}-{pos[0]["posid"]}">open position</a></div>')
             elif row.get("decision") == "expired": out.insert(1, f'<div class="flash bad">pending order EXPIRED unfilled (EA cancelled it after {C.PENDING_EXPIRY_BARS} H4 bars)</div>')
             else: out.insert(1, '<div class="flash bad">no resting order found for this signal (filled, cancelled or expired) - check Open positions</div>')
+    rec = PL.load_plan(CFG, key)
+    if rec and not is_open: out.insert(2, plan_panel(rec))
     # acks for this signal
     acks = [a for a in _acks() if a.get("signal_id") == s["signal_id"] and a.get("symbol") == s["symbol"]]
     if acks:
@@ -1123,7 +1222,7 @@ def signal_page(key: str, q: dict) -> str:
     out.append(f'<div id="sigwatch" data-key="{E(key)}" data-status="{E(s.get("status", ""))}" data-delays="{s.get("delay_count", 0)}"></div>')
     return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home")   # no full-page refresh: /api/signal state poll + banner
 
-def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None) -> str:
+def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None, expose: bool = False) -> str:
     """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load."""
     ov = C.clean_overlay(sig.get("overlay"), (sig.get("levels") or {}).get("entry"))   # never let garbage geometry rescale the chart
     from live import mt5feed
@@ -1137,7 +1236,9 @@ def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None
     return (f'<div class="card" style="padding:6px"><div class="hc" id="{cid}"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
             f'<span class="k">EMA <span style="color:#ffd700">20</span> <span style="color:#00bfff">50</span> <span style="color:#ee82ee">200</span> · zone · <span style="color:#9370db">imbalances</span> · swings · fib (DeepFib)</span>'
             f'<span class="k hc-status" style="margin-left:auto"></span><a href="{link}" target="_blank">TradingView ↗</a></div><div class="hc-box" style="width:100%"></div></div>'
-            f'<script src="/static/lw.js?v={STATIC_V}"></script><script src="/static/hybrid_chart.js?v={STATIC_V}"></script><script>window.addEventListener("DOMContentLoaded", function () {{ HybridChart.mount("{cid}", {json.dumps(data, separators=(",", ":"))}); }});</script></div>')
+            f'<script src="/static/lw.js?v={STATIC_V}"></script><script src="/static/hybrid_chart.js?v={STATIC_V}"></script><script>'
+            + (f'window.SP_CHART = {{id: "{cid}", data: {json.dumps(data, separators=(",", ":"))}}};' if expose else "")   # the live plan card redraws it (Inverse)
+            + f'window.addEventListener("DOMContentLoaded", function () {{ HybridChart.mount("{cid}", {json.dumps(data, separators=(",", ":"))}); }});</script></div>')
 
 def tv_block(symbol: str, interval: int = 240, levels: dict | None = None) -> str:
     """TradingView Advanced Chart widget (loads from tradingview.com on the viewer's device) + deep link to the TV app."""
@@ -1338,6 +1439,8 @@ def position_page(key: str, q: dict) -> str:
                f'<div><span class="k">lots</span> <b id="p-lots_live" class="v">{p.get("lots_live")}</b> <span class="k">of {p.get("lots_init")}</span></div><div><span class="k">bars open</span> <b id="p-bars_open" class="v">{p.get("bars_open")}</b></div></div>'
                f'<div class="k" id="p-flags">{E(pos_flags(p, closed))}</div></div>')
     out.append(position_kids(p))
+    prec = PL.load_plan(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
+    if prec and any(int(L.get("posid") or 0) == int(p["posid"]) for L in prec.get("legs", [])): out.append(plan_panel(prec))
     out.append(staged_block(p))
     plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
     if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None))
@@ -1631,6 +1734,27 @@ def settings_page(q: dict) -> str:
     return page("Settings", "".join(out), "settings")
 
 # ----------------------------------------------------------------------------- actions
+def signal_plan_post(form: dict) -> dict:
+    """trader 2026-10-12: approve an open signal with the plan built on its page (plan_live.approve validates it again and writes the
+    approve task + the plan record); waits up to 12 s for the EA's answer."""
+    key = form.get("key", ""); s = C.signal(CFG, key)
+    if not s: return {"ok": False, "error": "unknown signal"}
+    if s.get("status") != "open": return {"ok": False, "error": f"signal is {s.get('status')}, not open"}
+    if s.get("strategy") == "Inverse": return {"ok": False, "error": "an Inverse card is armed, not planned"}
+    em = form.get("entry_mode", "market")
+    if em not in (s.get("entry_modes") or ["market"]): return {"ok": False, "error": "entry mode not offered"}
+    try: plan = json.loads(form.get("plan") or "")
+    except ValueError: return {"ok": False, "error": "the plan is not valid JSON"}
+    ok, msg, rec = PL.approve(CFG, s, plan, form.get("inverse") == "1", em)
+    if not ok: return {"ok": False, "error": msg}
+    C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan|{key}|preset={form.get('preset', '')}|inverse={form.get('inverse')}|{json.dumps(rec['plan'], separators=(',', ':'))}")
+    a = C.wait_ack(CFG, rec["approve_task"], 12.0)
+    if not a: return {"ok": True, "msg": "plan saved and the approve sent - no answer from the EA within 12 s yet; this page shows it when it comes"}
+    if a.get("result") != "accepted": return {"ok": False, "error": f"the EA refused the approve: {C.reason_text(a.get('reason'))}"}
+    refs = a.get("refs") or {}
+    return {"ok": True, "msg": f"approved with your plan - {refs.get('lots')} lots" + (" (pending order placed)" if not refs.get("posid") else f", position {refs.get('posid')}") + "; the plan runner takes it from here"}
+
+
 def do_task(form: dict) -> tuple[str, bool, str]:
     key = form.get("key", ""); verb = form.get("verb", "")
     if verb in C.VERBS_SIGNAL:
@@ -1699,7 +1823,7 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlsplit(self.path); q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}; parts = [p for p in u.path.split("/") if p]
         try:
             if not parts: return self._send(dashboard(q))
-            if parts[0] == "static" and len(parts) >= 2 and (parts[1] == "vendor" or parts[1] in ("backtest.js", "backtest.css")):   # backtest tab (self-hosted libs)
+            if parts[0] == "static" and len(parts) >= 2 and (parts[1] == "vendor" or parts[1] in ("backtest.js", "backtest.css", "signal_plan.js")):   # backtest tab + the live plan card (self-hosted libs)
                 base = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static"))
                 fp = os.path.realpath(os.path.join(base, *parts[1:]))
                 if not fp.startswith(base + os.sep) or not os.path.isfile(fp) or (parts[1] == "vendor" and not fp.startswith(os.path.join(base, "vendor") + os.sep)):
@@ -1801,13 +1925,21 @@ class H(BaseHTTPRequestHandler):
             return self._send(page("error", f'<div class="card bad">{E(repr(e))}</div>'), code=500)
     def do_POST(self):
         u = urllib.parse.urlsplit(self.path); n = int(self.headers.get("Content-Length") or 0)
-        if u.path.startswith("/bt/") and n > 64 * 1024:              # review 2026-10-04: the backtest endpoints take small plans only
+        if (u.path.startswith("/bt/") or u.path == "/signal_plan") and n > 64 * 1024:   # review 2026-10-04: the plan endpoints take small plans only
             self.close_connection = True
             return self._send(json.dumps({"ok": False, "error": "request too large (64 KB max)"}), "application/json", 413)
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
         try:
             if u.path == "/task":
                 back, ok, msg = do_task(form); return self._redirect(back, msg, ok)
+            if u.path == "/signal_plan":                                      # trader 2026-10-12: approve with a custom plan
+                return self._send(json.dumps(signal_plan_post(form)), "application/json")
+            if u.path == "/plan_stop":
+                key = form.get("key", ""); rec = PL.load_plan(CFG, key)
+                if not rec or rec.get("status") not in ("approving", "waiting_fill", "running"): return self._redirect("/", "no running plan", False)
+                rec["status"] = "stopped"; PL.logline(rec, "stopped by you - the trade keeps its stops and TP; manage it by hand"); PL.save_plan(CFG, rec)
+                C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan_stop|{key}|by=web")
+                return self._redirect(f"/signal/{key}", "plan stopped - the trade is yours to manage", True)
             if u.path == "/reply":
                 key = form.get("key", ""); text = (form.get("text") or "").strip(); mid = form.get("model") or AR.models(CFG)[0]["id"]
                 m = AR.model_cfg(CFG, mid)

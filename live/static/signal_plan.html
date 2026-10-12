@@ -1,0 +1,121 @@
+<!-- signal_plan.html - trader 2026-10-12 (docs/live_plans.md): the live signal page's plan card - the Practice card's lever builder (same
+     markup as backtest.html, Alpine component spApp() in signal_plan.js). Approving sends the plan; the plan runner (live/plan_live.py)
+     carries it out on the account. Served inside webapp.signal_page(). -->
+<template x-if="err"><sl-alert variant="danger" open closable @sl-after-hide="err=''" class="bt-err"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon><span x-text="err"></span></sl-alert></template>
+<div class="card bt-plan">
+  <div class="bt-planhead">
+    <div class="bt-h3">Your plan</div>
+    <sl-select size="small" placeholder="Load a preset…" :value="presetSel" @sl-change="loadPreset($event.target.value)" class="bt-preset" hoist>
+      <template x-for="p in D.presets" :key="p.key"><sl-option :value="p.key" x-text="p.label"></sl-option></template>
+    </sl-select>
+    <sl-tooltip content="Undo (Ctrl+Z)"><sl-icon-button name="arrow-counterclockwise" label="Undo" @click="undo()" :disabled="hpos <= 0"></sl-icon-button></sl-tooltip>
+    <sl-tooltip content="Redo (Ctrl+Shift+Z)"><sl-icon-button name="arrow-clockwise" label="Redo" @click="redo()" :disabled="hpos >= hist.length - 1"></sl-icon-button></sl-tooltip>
+  </div>
+  <div class="k bt-small" x-show="presetAbout" x-text="presetAbout"></div>
+  <div class="bt-row" style="margin:4px 0 8px"><sl-checkbox :checked="inverse" @sl-change="setInverse($event)">Inverse - trade the opposite direction</sl-checkbox>
+    <span class="k bt-small" x-show="inverse" x-text="'Live: a ' + dirShown() + ' at market; the stop and targets mirrored round the entry at the same distances (chart redrawn)'"></span></div>
+          <!-- entry (always first) -->
+          <div class="bt-lever fixed">
+            <span class="bt-lt">Entry</span>
+            <div class="bt-sent">Enter <sl-input type="number" size="small" class="bt-n" :value="plan.entry" min="1" max="100" step="5" @sl-change="setEntry($event)"><span slot="suffix">%</span></sl-input> at the signal</div>
+          </div>
+
+          <div id="bt-stack" class="bt-stack">
+            <template x-for="(L, idx) in plan.levers" :key="L.id">
+              <div class="bt-lever" :data-id="L.id">
+                <span class="bt-grip" title="drag to reorder" ><sl-icon name="grip-vertical"></sl-icon></span>
+                <span class="bt-lt" :class="kindOf(L.type)" x-text="typeLabel(L.type)"></span>
+                <div class="bt-sent">
+                  <template x-if="L.type === 'add_reach'"><span>Add <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="1" max="200" step="5" @sl-change="setF(L,'pct',$event)" ><span slot="suffix">%</span></sl-input>
+                    if <sl-input type="number" size="small" class="bt-n" :value="L.at" step="0.25" @sl-change="setF(L,'at',$event)" ><span slot="suffix">R</span></sl-input> is reached
+                    within <sl-input type="number" size="small" class="bt-n" :value="L.within_h === null ? '' : L.within_h" placeholder="any" step="1" @sl-change="setF(L,'within_h',$event,true)" ><span slot="suffix">h</span></sl-input>,
+                    its stop at <sl-select size="small" class="bt-s" :value="String(L.stop)" @sl-change="setStop(L,$event)"  hoist><sl-option value="trade">the trade's stop</sl-option><sl-option value="-1">-1R (signal stop)</sl-option><sl-option value="-0.5">-0.5R</sl-option><sl-option value="0">entry</sl-option><sl-option value="0.25">+0.25R</sl-option><sl-option value="0.5">+0.5R</sl-option><sl-option value="1">+1R</sl-option><sl-option value="2">+2R</sl-option></sl-select><span class="bt-hint" x-show="!['trade','-1','-0.5','0','0.25','0.5','1','2'].includes(String(L.stop))" x-text="'(' + fmtR(L.stop) + ')'"></span></span></template>
+                  <template x-if="L.type === 'add_bar'"><span>Add <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="1" max="200" step="5" @sl-change="setF(L,'pct',$event)" ><span slot="suffix">%</span></sl-input>
+                    at the bar <sl-input type="number" size="small" class="bt-n" :value="L.bar" min="1" max="60" step="1" @sl-change="setF(L,'bar',$event)" ></sl-input> close
+                    <span class="k" x-text="'(' + (L.bar * 4) + ' h)'"></span>, its stop at <sl-select size="small" class="bt-s" :value="String(L.stop)" @sl-change="setStop(L,$event)"  hoist><sl-option value="trade">the trade's stop</sl-option><sl-option value="-1">-1R (signal stop)</sl-option><sl-option value="-0.5">-0.5R</sl-option><sl-option value="0">entry</sl-option><sl-option value="0.25">+0.25R</sl-option><sl-option value="0.5">+0.5R</sl-option><sl-option value="1">+1R</sl-option><sl-option value="2">+2R</sl-option></sl-select><span class="bt-hint" x-show="!['trade','-1','-0.5','0','0.25','0.5','1','2'].includes(String(L.stop))" x-text="'(' + fmtR(L.stop) + ')'"></span>
+                    <div class="bt-sub"><sl-checkbox size="small" :checked="L.early_at !== null" @sl-change="toggleEarly(L,$event)" >go in early at</sl-checkbox>
+                      <sl-input type="number" size="small" class="bt-n" :value="L.early_at === null ? '' : L.early_at" step="0.25" @sl-change="setF(L,'early_at',$event,true)" :disabled="L.early_at === null"><span slot="suffix">R</span></sl-input>
+                      <sl-checkbox size="small" :checked="L.hold_avg !== null" @sl-change="toggleHold(L,$event)" :disabled="L.early_at === null">and hold that early add while the average R is below</sl-checkbox>
+                      <sl-input type="number" size="small" class="bt-n bt-neg" :value="L.hold_avg === null ? '' : L.hold_avg" step="0.25" @sl-change="setF(L,'hold_avg',$event,true)" :disabled="L.hold_avg === null"><button type="button" slot="prefix" class="bt-pm" title="flip the sign (+/-)" @click.stop.prevent="flip(L,'hold_avg')" :disabled="L.hold_avg === null">±</button><span slot="suffix">R</span></sl-input></div>
+                    <div class="bt-sub"><sl-checkbox size="small" :checked="L.wait_avg != null" @sl-change="toggleWait(L,$event)" >wait at the bar close while the average R is below</sl-checkbox>
+                      <sl-input type="number" size="small" class="bt-n bt-neg" :value="L.wait_avg == null ? '' : L.wait_avg" step="0.25" @sl-change="setF(L,'wait_avg',$event,true)" :disabled="L.wait_avg == null"><button type="button" slot="prefix" class="bt-pm" title="flip the sign (+/-)" @click.stop.prevent="flip(L,'wait_avg')" :disabled="L.wait_avg == null">±</button><span slot="suffix">R</span></sl-input>
+                      <span class="k" x-text="L.wait_avg != null ? 'then it goes in the first minute the average gets there (never, if it never does)' : 'off: the add goes in at the bar close whatever the average'"></span></div>
+                    <div class="bt-sub"><sl-checkbox size="small" :checked="L.risk_cap != null" @sl-change="toggleCap(L,$event)" >when it goes in, keep the total risk at or below</sl-checkbox>
+                      <sl-input type="number" size="small" class="bt-n" :value="L.risk_cap == null ? '' : L.risk_cap" min="0.1" max="10" step="0.25" @sl-change="setF(L,'risk_cap',$event,true)" :disabled="L.risk_cap == null"><span slot="suffix">R</span></sl-input>
+                      <span class="k" x-text="L.risk_cap != null ? 'over it, the stop on everything open is raised just enough (never lowered; no add if it cannot fit)' : 'off: the stop stays where it is, whatever the add does to the risk'"></span></div></span></template>
+                  <template x-if="L.type === 'add_tp1'"><span>Add <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="1" max="200" step="5" @sl-change="setF(L,'pct',$event)" ><span slot="suffix">%</span></sl-input>
+                    at TP1 (if TP1 is above <sl-input type="number" size="small" class="bt-n" :value="L.min_R" step="0.25" @sl-change="setF(L,'min_R',$event)" ><span slot="suffix">R</span></sl-input>),
+                    its stop at <sl-select size="small" class="bt-s" :value="String(L.stop)" @sl-change="setStop(L,$event)"  hoist><sl-option value="trade">the trade's stop</sl-option><sl-option value="-1">-1R (signal stop)</sl-option><sl-option value="-0.5">-0.5R</sl-option><sl-option value="0">entry</sl-option><sl-option value="0.25">+0.25R</sl-option><sl-option value="0.5">+0.5R</sl-option><sl-option value="1">+1R</sl-option><sl-option value="2">+2R</sl-option></sl-select><span class="bt-hint" x-show="!['trade','-1','-0.5','0','0.25','0.5','1','2'].includes(String(L.stop))" x-text="'(' + fmtR(L.stop) + ')'"></span></span></template>
+                  <template x-if="L.type === 'bank'"><span>Bank <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="0" max="100" step="5" @sl-change="setF(L,'pct',$event)" ><span slot="suffix">%</span></sl-input>
+                    at <sl-input type="number" size="small" class="bt-n" :value="L.at" step="0.25" @sl-change="setF(L,'at',$event)" ><span slot="suffix">R</span></sl-input>
+                    <sl-checkbox size="small" :checked="L.tp1" @sl-change="setB(L,'tp1',$event)" >or TP1 if nearer</sl-checkbox></span></template>
+                  <template x-if="L.type === 'move'"><span>Move the stop to <sl-input type="number" size="small" class="bt-n bt-neg" :value="L.to" step="0.25" min="-1" @sl-change="setF(L,'to',$event)" ><button type="button" slot="prefix" class="bt-pm" title="flip the sign (+/-)" @click.stop.prevent="flip(L,'to')" >±</button><span slot="suffix">R</span></sl-input><span class="bt-hint" x-show="L.to === 0">(entry)</span>
+                    when <sl-input type="number" size="small" class="bt-n bt-neg" :value="L.when" step="0.25" @sl-change="setF(L,'when',$event)" ><button type="button" slot="prefix" class="bt-pm" title="flip the sign (+/-)" @click.stop.prevent="flip(L,'when')" >±</button><span slot="suffix">R</span></sl-input> is reached
+                    <sl-checkbox size="small" :checked="L.tp1" @sl-change="setB(L,'tp1',$event)" >or TP1 if nearer</sl-checkbox>
+                    · applies to <sl-select size="small" class="bt-s" :value="L.legs" @sl-change="setS(L,'legs',$event)"  hoist><sl-option value="all">all legs</sl-option><sl-option value="original">the first entry</sl-option><sl-option value="adds">the adds</sl-option></sl-select></span></template>
+                  <template x-if="L.type === 'cut_avg'"><span>Close at <sl-input type="number" size="small" class="bt-n" :value="L.at_h" step="0.5" min="0.25" @sl-change="setF(L,'at_h',$event)" ><span slot="suffix">h</span></sl-input>
+                    if the average R is below <sl-input type="number" size="small" class="bt-n bt-neg" :value="L.below" step="0.05" @sl-change="setF(L,'below',$event)" ><button type="button" slot="prefix" class="bt-pm" title="flip the sign (+/-)" @click.stop.prevent="flip(L,'below')" >±</button><span slot="suffix">R</span></sl-input>
+                    <sl-checkbox size="small" :checked="L.window_h != null" @sl-change="toggleWin(L,$event)" >over the last 12 h only</sl-checkbox>
+                    <span class="k" x-text="L.window_h != null ? '(the average of the last 12 trading hours, not since the entry)' : ''"></span></span></template>
+                  <template x-if="L.type === 'trail'"><span>Every <sl-input type="number" size="small" class="bt-n" :value="L.every_h" min="0.25" step="1" @sl-change="setF(L,'every_h',$event)" ><span slot="suffix">h</span></sl-input>,
+                    move the stop to <sl-input type="number" size="small" class="bt-n" :value="L.dist" min="0.1" step="0.25" @sl-change="setF(L,'dist',$event)" ><span slot="suffix">R</span></sl-input> below the highest price since the last move
+                    <sl-checkbox size="small" :checked="L.lower" @sl-change="setB(L,'lower',$event)" >also lower it to that distance</sl-checkbox>
+                    <span class="k" x-text="L.lower ? '(follows the price both ways, never below the signal stop)' : '(raise only - it never moves down)'"></span></span></template>
+                  <template x-if="L.type === 'cut_unless'"><span>Close at <sl-input type="number" size="small" class="bt-n" :value="L.at_h" step="1" min="0.25" @sl-change="setF(L,'at_h',$event)" ><span slot="suffix">h</span></sl-input>
+                    unless <sl-input type="number" size="small" class="bt-n" :value="L.reach" step="0.25" @sl-change="setF(L,'reach',$event)" ><span slot="suffix">R</span></sl-input> was reached</span></template>
+                </div>
+                <sl-icon-button name="x-lg" label="Remove" class="bt-x" @click="remove(idx)" ></sl-icon-button>
+              </div>
+            </template>
+            <div class="k bt-empty" x-show="!plan.levers.length">No levers - the raw signal: in at the signal, out at TP2 or the stop.</div>
+          </div>
+
+          <!-- target (always last) -->
+          <div class="bt-lever fixed">
+            <span class="bt-lt tgt">Target</span>
+            <div class="bt-sent">Exit at TP2 <sl-switch size="small" :checked="plan.tp2" @sl-change="setTp2($event)" ></sl-switch>
+              <span class="k" x-text="plan.tp2 ? 'on' : 'off - runs until a stop, a cut or the 40-day frame end'"></span></div>
+          </div>
+
+          <!-- palette -->
+          <div class="bt-palette" >
+            <div class="bt-palhead k">Add a lever</div>
+            <div class="bt-palgrid">
+              <template x-for="grp in palette" :key="grp.name">
+                <div class="bt-palgrp"><div class="bt-palname" x-text="grp.name"></div>
+                  <template x-for="it in grp.items" :key="it.type + it.label"><button class="bt-palbtn" :class="kindOf(it.type)" @click="add(it)" :title="it.help"><sl-icon name="plus-lg"></sl-icon><span x-text="it.label"></span></button></template>
+                </div>
+              </template>
+            </div>
+            <sl-dropdown class="bt-palmenu" hoist><sl-button slot="trigger" size="small" caret><sl-icon slot="prefix" name="plus-lg"></sl-icon>Add lever</sl-button>
+              <sl-menu @sl-select="addByKey($event.detail.item.value)"><template x-for="grp in palette"><div><sl-menu-label x-text="grp.name"></sl-menu-label>
+                <template x-for="it in grp.items"><sl-menu-item :value="it.type + '|' + it.label" x-text="it.label"></sl-menu-item></template></div></template></sl-menu></sl-dropdown>
+          </div>
+
+          <!-- size meter -->
+          <div class="bt-meter">
+            <div class="bt-row bt-meterrow"><span class="k">Size if every add fires</span><b :class="v.over && !plan.trim ? 'dn' : (v.over ? 'warn' : '')" x-text="v.worst + '% of 200%'"></b>
+              <sl-switch size="small" :checked="plan.trim" @sl-change="setTrim($event)" >trim adds to fit the cap</sl-switch></div>
+            <div class="bt-bar"><div class="bt-barfill" :class="v.over ? (plan.trim ? 'warn' : 'dn') : ''" :style="'width:' + Math.min(100, v.worst / 2) + '%'"></div><div class="bt-barcap"></div></div>
+            <template x-for="m in v.msgs"><div class="bt-msg" :class="m.level" x-text="m.text"></div></template>
+          </div>
+
+  <!-- live: what the plan means in lots on this account -->
+  <div class="bt-meter sp-live">
+    <div class="bt-row bt-meterrow"><span class="k">On this account</span><b x-text="'100% = ' + D.lots.toFixed(2) + ' lots · entry ' + lotsOf(plan.entry) + ' lots'"></b></div>
+    <template x-for="m in liveNotes()"><div class="bt-msg" :class="m.level" x-text="m.text"></div></template>
+  </div>
+  <!-- decide -->
+  <div class="sp-decide">
+    <div class="bt-row" style="justify-content:space-between">
+      <sl-select size="small" :value="entryMode" @sl-change="entryMode = $event.target.value" class="sp-em" hoist>
+        <sl-option value="market">Enter now at market</sl-option>
+        <template x-if="D.entry_modes.indexOf('pending') >= 0"><sl-option value="pending" x-text="'Pending order at the original entry ' + D.levels.entry"></sl-option></template>
+      </sl-select>
+      <sl-button size="large" variant="primary" @click="approve()" :disabled="!v.ok || busy" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon><span x-text="inverse ? 'Approve the INVERSE with this plan' : 'Approve with this plan'"></span></sl-button>
+    </div>
+    <div class="k bt-small">The EA opens the first leg; the plan runner on the box then carries out every lever on the live price (a few seconds behind it) and the
+      EA's own rules stay off for this trade. Every leg always has its stop at the broker.</div>
+    <template x-if="done"><div class="bt-flash" x-text="done"></div></template>
+  </div>
+</div>

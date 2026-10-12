@@ -1,7 +1,7 @@
 """
 feedd.py - the MetaTrader5 feed in its own process (127.0.0.1:8081). The MetaTrader5 package can block the calling
 process while the terminal is busy/restarting; isolating it here means the web app only ever waits on a short HTTP
-timeout. Endpoints: /bars?symbol=&tf=&n=  /tick?symbol=  /positions  /orders  /status  /health
+timeout. Endpoints: /bars?symbol=&tf=&n=  /bars_sp (with spreads)  /spec?symbol=  /tick?symbol=  /positions  /orders  /status  /health
 """
 from __future__ import annotations
 import json, os, sys, urllib.parse
@@ -24,6 +24,18 @@ class H(BaseHTTPRequestHandler):
                 if not C.safe_key(sym) or tf not in mt5feed.TF: return self._j({"error": "bad request"}, 400)
                 return self._j({"bars": mt5feed.bars(sym, tf, n), "tick": mt5feed.tick(sym)})
             if u.path == "/tick": return self._j({"tick": mt5feed.tick(q.get("symbol", ""))})
+            if u.path == "/bars_sp":                     # plan runner (trader 2026-10-12): bars with each bar's own spread
+                sym = q.get("symbol", ""); tf = q.get("tf", "m1")
+                if not C.safe_key(sym) or tf not in mt5feed.TF: return self._j({"error": "bad request"}, 400)
+                if "n" in q: return self._j({"bars": mt5feed.bars_sp(sym, tf, n=max(1, min(5000, int(q.get("n") or 5))))})
+                try: a_, b_ = int(q.get("from", "0")), int(q.get("to", "0"))
+                except ValueError: return self._j({"error": "bad request"}, 400)
+                if b_ <= a_ or b_ - a_ > 120 * 86400: return self._j({"error": "bad request"}, 400)
+                return self._j({"bars": mt5feed.bars_sp(sym, tf, a_, b_)})
+            if u.path == "/spec":
+                sym = q.get("symbol", "")
+                if not C.safe_key(sym): return self._j({"error": "bad request"}, 400)
+                return self._j({"spec": mt5feed.spec(sym)})
             if u.path == "/positions": return self._j({"positions": mt5feed.positions()})
             if u.path == "/spreads":
                 sym = q.get("symbol", "")

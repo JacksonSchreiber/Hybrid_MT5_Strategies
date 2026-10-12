@@ -34,3 +34,24 @@ All user-approved decisions, newest first.
   0.01-lot position cannot split -> 0). Positions already banked at 50% stay as they are. Other detectors stay at 50%.
   Guards: the MT5 tester reproduction (EURUSD, US100, EA exit code, within +-0.02R of the replay) - fail = revert to
   50%; the bank shadow log (`web/shadow_bank.csv`, hourly) - 30 in-tolerance stop-to-entry fills is a revisit point.
+
+## 2026-10-12 — Live custom plans (trader: "i want all the options just like how the practice is ... built it custom")
+
+- **The live signal page is the Practice card.** Chart, levels, the advisor (full read + a verdict line by the plan), the full
+  news, FTMO room, correlation, and the lever builder (every Practice lever: banks, stop moves, trail, average cuts with the
+  12 h window, cut-unless, adds at a level / bar close / TP1 with early / hold / wait / risk cap, TP2 on/off, Inverse). The
+  page preloads today's EA rules for that signal as levers (the +1R bank and stop to entry, the bloc's T+L1.0, the shorts'
+  raise), so a plan starts from what would have run. `live_config "live_plans": {"enabled": false}` brings back the old card.
+- **Execution:** the EA got generic primitives (approve with `plan` / `entry_pct` / `tp2` / `inverse`; `plan_add`, `set_sl`,
+  `close_part`; `close` with a plan reason) and switches its own management OFF for plan rows (bank / BE, pyramid, shorts raise,
+  bloc cut / lock, staged add, day-2 rules, min-lot guard, Inverse offers). The plan runner (live/plan_live.py, a thread in the
+  monitor) replays the Practice kernel on the live M1 path and sends the primitives. docs/live_plans.md has the contract.
+- **Live limits (CLAUDE.md 1% rule, hard):** the entry is at most 100% of the ruled size; every add runs under a 1R cap on the
+  open risk (the plan's risk cap raises the stops first; the EA refuses any add over 1R x 1.05).
+- **Verification:** kernel copy = Practice kernel on 109,350 runs (4,374 box frames x 25 plans, 0 mismatches,
+  pipeline/plan_live_parity.py); the runner against a fake broker on 60 frames x 4 plans x BUY/SELL tracks the kernel to a
+  median 0.000R / p90 0.03R (execution timing; pipeline/plan_live_sim.py); EA gate chain PASS (tester parity byte-identical,
+  live self-test covering every new verb and the inverse).
+- **Coach flags:** a custom plan overrides the doctrine per trade (v2 bank, bloc T+L1.0, shorts raise are only the preloaded
+  default); live fills lag Practice by a poll (seconds) and round to the lot step; plan rows' journal R is per leg (weight by
+  lots / full_lots, as staged adds).

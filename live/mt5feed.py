@@ -101,6 +101,40 @@ def bars_range(symbol: str, tf: str, t_from: int, t_to: int) -> list[list] | Non
         if r is None: return None
         return [[int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), int(x[5])] for x in r]
 
+def bars_sp(symbol: str, tf: str, t_from: int | None = None, t_to: int | None = None, n: int | None = None) -> list[list] | None:
+    """[[t,o,h,l,c,v,spread_price]] oldest first - the plan runner (live/plan_live.py, trader 2026-10-12) needs each M1 bar's own spread
+    (MT5 records one per bar) so a replayed minute is the same on every poll. Either a server-clock range (t_from, t_to) or the last n."""
+    if FEED_URL:
+        q = f"/bars_sp?symbol={symbol}&tf={tf}" + (f"&from={int(t_from)}&to={int(t_to)}" if n is None else f"&n={int(n)}")
+        r = _remote(q, 20.0); return (r or {}).get("bars")
+    from datetime import datetime as _dt, timezone as _tz
+    with _lock:
+        if not _ensure(): return None
+        try:
+            _mt5.symbol_select(symbol, True); si = _mt5.symbol_info(symbol)
+            if n is not None: r = _mt5.copy_rates_from_pos(symbol, getattr(_mt5, TF[tf]), 0, int(n))
+            else: r = _mt5.copy_rates_range(symbol, getattr(_mt5, TF[tf]), _dt.fromtimestamp(int(t_from), _tz.utc), _dt.fromtimestamp(int(t_to), _tz.utc))
+        except Exception:
+            _reset(); return None
+        if r is None or si is None: return None
+        pt = float(si.point)
+        return [[int(x["time"]), float(x["open"]), float(x["high"]), float(x["low"]), float(x["close"]), int(x["tick_volume"]), int(x["spread"]) * pt] for x in r]
+
+def spec(symbol: str) -> dict | None:
+    """the symbol's trading spec: point, digits, volume min / step / max, stops level (points), tick size / value."""
+    if FEED_URL:
+        r = _remote(f"/spec?symbol={symbol}", 4.0); return (r or {}).get("spec")
+    with _lock:
+        if not _ensure(): return None
+        try:
+            _mt5.symbol_select(symbol, True); si = _mt5.symbol_info(symbol)
+        except Exception:
+            _reset(); return None
+        if si is None: return None
+        return {"point": float(si.point), "digits": int(si.digits), "volume_min": float(si.volume_min), "volume_step": float(si.volume_step),
+                "volume_max": float(si.volume_max), "stops_level": int(si.trade_stops_level), "tick_size": float(si.trade_tick_size),
+                "tick_value": float(si.trade_tick_value)}
+
 def tick(symbol: str) -> dict | None:
     if FEED_URL:
         r = _remote(f"/tick?symbol={symbol}", 3.0); return (r or {}).get("tick")

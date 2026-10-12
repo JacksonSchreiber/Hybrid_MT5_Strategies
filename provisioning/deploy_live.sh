@@ -40,7 +40,7 @@ $SCP "$REPO"/live/*.py "$HOST:$APP/live/"
 $SCP "$REPO"/live/static/lw.js "$REPO"/live/static/hybrid_chart.js "$REPO"/live/static/rpaths.js "$REPO"/live/static/rpaths.json "$REPO"/live/static/rpaths.json.gz "$HOST:$APP/live/static/"
 # backtest tab (2026-10-05): its page files + the self-hosted lever-builder libraries (Alpine, SortableJS, Shoelace); its DATA goes up
 # separately with provisioning/upload_backtest_data.sh
-$SCP "$REPO"/live/static/backtest.js "$REPO"/live/static/backtest.css "$REPO"/live/static/backtest.html "$HOST:$APP/live/static/"
+$SCP "$REPO"/live/static/backtest.js "$REPO"/live/static/backtest.css "$REPO"/live/static/backtest.html "$REPO"/live/static/signal_plan.js "$REPO"/live/static/signal_plan.html "$HOST:$APP/live/static/"   # + the live plan card (2026-10-12)
 $SCP -r "$REPO"/live/static/vendor "$HOST:$APP/live/static/"
 $SCP "$REPO"/provisioning/live_config.vps.json "$HOST:$APP/live_config.json"
 $SCP "$REPO"/config/symbol_rules.json "$HOST:$APP/symbol_rules.json"      # per-symbol doctrine flags (class + suspended session rules) for the advisor card

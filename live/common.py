@@ -14,6 +14,7 @@ VERBS_SIGNAL = ("approve", "skip", "delay")
 VERBS_POSITION = ("close", "close50", "sl_be", "ratchet_tp1", "promote")   # promote: coach item 22 (staged -> full now)
 VERBS_ADMIN = ("test_signal",)          # trader-issued synthetic signal (live only)
 VERBS_PENDING = ("cancel_pending", "fill_now")   # cancel a resting order, or take it at the market now (target: signal_id)
+VERBS_PLAN = ("plan_add", "set_sl", "close_part")   # the live plan runner only (live/plan_live.py, docs/live_plans.md; target: position_id)
 SKIP_REASONS = {1: "Counter-trend", 2: "News / event", 3: "Ugly structure", 4: "Target blocked", 5: "Correlated", 6: "Gut / other"}
 SKIP_REASON_CODES = {8: "no response (expired; a TAKE is not charged since 2026-09-21)", 7: "legacy", 9: "superseded (another signal approved)", 10: "EA auto-reject: FTMO headroom"}
 EVENT_LABEL = {"W": "NO-HOLD (election)", "V": "NO ENTRY <6h (big release)", "C": "caution", "H": "holiday/thin"}
@@ -372,7 +373,7 @@ def safe_key(s: str) -> bool:
 
 # ----------------------------------------------------------------------------- tasks (S6: typed verbs only, ids the EA reported)
 def write_task(cfg: dict, symbol: str, verb: str, params: dict, signal_id: int | None = None, position_id: int | None = None, issued_by: str = "web") -> str:
-    if verb not in VERBS_SIGNAL + VERBS_POSITION + VERBS_ADMIN + VERBS_PENDING: raise ValueError("unknown verb")
+    if verb not in VERBS_SIGNAL + VERBS_POSITION + VERBS_ADMIN + VERBS_PENDING + VERBS_PLAN: raise ValueError("unknown verb")
     tid = uuid.uuid4().hex
     t = {"schema_version": SCHEMA_VERSION, "task_id": tid, "symbol": symbol, "verb": verb, "params": params,
          "issued_at": now_iso(), "issued_by": issued_by}
