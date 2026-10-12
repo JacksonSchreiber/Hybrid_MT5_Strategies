@@ -383,9 +383,8 @@ def order_fail_text(reason, refs: dict | None = None, symbol: str = "", still_op
     gap, reo = num("gap_min"), num("reopen_min")
     if gap is not None and reo is not None and gap >= 15 and 0 <= reo <= 90:
         ctx.append(f"{root} had reopened {int(reo)} min earlier after a {int(gap)}-minute break")
-    t1 = num("ticks_1m")
-    if t1 is not None and 0 <= t1 <= 10:
-        ctx.append("no price updates in the last minute" if int(t1) == 0 else f"only {int(t1)} price update{'' if int(t1) == 1 else 's'} in the last minute")
+    t1 = num("ticks_1m")      # 0 also means the terminal has not loaded that symbol's M1 history: a stale price shows as tick_age_s
+    if t1 is not None and 1 <= t1 <= 10: ctx.append(f"only {int(t1)} price update{'' if int(t1) == 1 else 's'} in the last minute")
     age = num("tick_age_s")
     if age is not None and age >= 30: ctx.append(f"no new price for {int(age)} s")
     sp = num("spread_r")
