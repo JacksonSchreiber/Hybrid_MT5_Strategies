@@ -542,7 +542,7 @@ class Runner:
         if not bars or opens is None: return ch
         F, ctx = frame(bars, rec, t0, rec["fill"]["px"], opens)
         if F["n"] < 1: return ch
-        P = BE.compile_cfg(rec["plan"], ctx)
+        P = BE.compile_cfg(self.capped(rec), ctx)
         res = run_state(F, ctx, P)
         acts = self.actions(rec, res, P, bp, tk, spec)
         rec["model"] = {"R": round(float(res[0][0]), 3), "kind": int(res[0][1]), "minute": int(res[0][2]), "at": C.now_iso(), "bars": int(F["n"])}
@@ -551,6 +551,17 @@ class Runner:
             rec.setdefault("pending", {})[tid] = {"verb": x["verb"], "posid": x["posid"], "what": x["what"], "at": time.time(), "q": x.get("q"), "sl": x["params"].get("sl")}
             logline(rec, "sent: " + x["what"])
         return True
+
+    @staticmethod
+    def capped(rec: dict) -> dict:
+        """the plan with its 1R cap in the EA's terms: the EA measures 1R from the FIRST FILL to the signal stop (full lots x that distance),
+        the replay in the card's R - a fill better than the card entry makes the EA's 1R smaller, so the cap shrinks with it (an add the
+        replay fits under the cap must also fit under the EA's, which refuses anything over 1R x 1.05)."""
+        cfg = rec["plan"]
+        if cfg.get("risk_cap") is None or not rec.get("fill"): return cfg
+        ratio = abs(float(rec["fill"]["px"]) - float(rec["card"]["sl"])) / float(rec["card"]["R"])
+        if ratio >= 1.0: return cfg
+        return dict(cfg, risk_cap=round(min(float(cfg["risk_cap"]), max(0.01, ratio * 0.99)), 4))
 
     def actions(self, rec: dict, res, P: dict, bp: dict, tk: dict, spec: dict) -> list[dict]:
         (Rv, kind, jx, gross, nbf, naf, cut), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done) = res
@@ -602,7 +613,7 @@ class Runner:
         known = {L["q"] for L in rec["legs"]}; L0 = rec["legs"][0]
         for q in range(1, int(nl)):
             if q in known: continue
-            n_l = lots(float(sz0[q]) * float(rec["full_lots"]))
+            n_l = round(math.floor(float(sz0[q]) * float(rec["full_lots"]) / step + 1e-9) * step, 2)   # adds round DOWN: never over the cap
             L = {"q": q, "src": int(src[q]), "status": "sending", "posid": None}
             rec["legs"].append(L)
             if n_l < vmin - 1e-9:
