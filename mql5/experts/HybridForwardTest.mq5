@@ -381,6 +381,11 @@ void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0
                               r.ro=0; r.ro_held_min=0; r.ro_spread0=0.0; r.ro_spread1=0.0; r.ro_drift=0.0; r.d2_state=0;
                               r.bl_state=0; r.bl_lock=0; r.bl_time=0; r.bl_tries=0; }
 JournalRow g_rows[];
+//--- LIVE CUSTOM PLANS (trader 2026-10-12, docs/live_plans.md): a plan row's entry_mode starts with "plan" (plan_market,
+//--- plan_market_now, plan_pending_frozen, plan_add; "_inv" appended for an inverse). The plan runner (Python, live/plan_live.py)
+//--- manages it through the plan_add / set_sl / close_part / close tasks; the EA's own management never touches it.
+bool IsPlanMode(string em){ return (StringFind(em,"plan")==0); }
+bool IsPlan(int i){ return (i>=0 && i<ArraySize(g_rows) && StringFind(g_rows[i].entry_mode,"plan")==0); }
 
 //--- mid-trade management panel state
 bool   g_can_panel = false;   // interactive + visual + DLLs + InpManagePanel
@@ -553,6 +558,10 @@ double   g_cfg_df_bank=0.5;       // live.json deepfib_bank_frac: the same for D
 //--- the live bank share per detector (SweepMSS / EMArevQ stay 50%); 0 = not a configurable detector
 bool     g_cfg_staged=false;      // live.json staged_entry: coach item 18 (trader override 2026-09-30)
 string   g_size_choice="";        // coach item 22: the approve task's params.size ("full" = enter in full now; else staged)
+bool     g_plan_on=false;         // live approve params.plan=1 (docs/live_plans.md): the row is plan-managed
+double   g_plan_pct=100.0;        // params.entry_pct: first position as % of the ruled lots (1-100)
+bool     g_plan_tp2=true;         // params.tp2: false = no broker TP on the order
+bool     g_plan_inv=false;        // params.inverse: the candidate was mirrored round its entry before validation
 int      g_promote_sid=0;         // coach item 22: the signal whose staged add is promoted NOW by the trader
 string   g_promote_note="";
 double   g_cfg_st_f0=0.25;        // live.json staged_first_frac: first tranche share of the ruled lots
@@ -1638,7 +1647,7 @@ void ExpireStalePendings()
 //+------------------------------------------------------------------+
 void MinLotSplitGuard(int n)
   {
-   if(g_rows[n].partial_frac<=0.0) return;
+   if(g_rows[n].partial_frac<=0.0 || IsPlan(n)) return;
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0)step=0.01;
    double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0)vmin=0.01;
    double pv=MathFloor((g_rows[n].partial_frac*g_rows[n].lots)/step)*step;
@@ -2331,7 +2340,11 @@ void LivePresent(int id,SignalCandidate &cand,double lots,bool is_replay,
 string g_live_alerts[];            // persistent heartbeat alerts (adopt_orphan, restore mismatch, ...)
 void LiveAlert(string a){ int n=ArraySize(g_live_alerts); for(int i=0;i<n;i++) if(g_live_alerts[i]==a) return; ArrayResize(g_live_alerts,n+1); g_live_alerts[n]=a; }
 string RowStatePath(int id){ return LivePath(StringFormat("state\\%s\\%d.json",_Symbol,id)); }
-string RowStatePathOf(JournalRow &r){ return (r.st_tranche>=2 ? LivePath(StringFormat("state\\%s\\%d_t%d.json",_Symbol,r.id,r.st_tranche)) : RowStatePath(r.id)); }
+string RowStatePathOf(JournalRow &r)
+  {   //--- a plan can carry several adds (all tranche 5): each keeps its own file, keyed by its position id
+   if(r.st_tranche==5) return LivePath(StringFormat("state\\%s\\%d_t5_%I64d.json",_Symbol,r.id,r.posid));
+   return (r.st_tranche>=2 ? LivePath(StringFormat("state\\%s\\%d_t%d.json",_Symbol,r.id,r.st_tranche)) : RowStatePath(r.id));
+  }
 
 //--- one row -> flat JSON (the parser supports one nested level: actions live under "actions")
 void LiveSaveRowState(int i)
@@ -2371,7 +2384,7 @@ void LiveSaveRowState(int i)
    for(int a=0;a<ArraySize(g_actions);a++)
      {
       if(g_actions[a].id!=r.id) continue;
-      if(r.st_tranche>0 && g_actions[a].posid!=0 && g_actions[a].posid!=r.posid) continue;   // staged: each tranche keeps its own actions
+      if((r.st_tranche>0 || IsPlanMode(r.entry_mode)) && g_actions[a].posid!=0 && g_actions[a].posid!=r.posid) continue;   // staged / plan: each leg keeps its own actions
       string px=StringFormat("%d_",na);
       j.KInt(px+"posid",g_actions[a].posid); j.KInt(px+"bar_time",(long)g_actions[a].bar_time); j.KStr(px+"action",g_actions[a].action);
       j.KNum(px+"price",g_actions[a].price,_Digits); j.KNum(px+"lots_before",g_actions[a].lots_before,2); j.KNum(px+"lots_after",g_actions[a].lots_after,2);
@@ -2429,6 +2442,7 @@ void LiveWritePositions()
       j.KBool("banked",g_rows[i].banked); j.KBool("tp1_done",g_rows[i].tp1_done); j.KBool("ratcheted",g_rows[i].ratcheted);
       //--- coach item 18: staged entry (tranche 1 = first, 2 = the add); add_due = the bar close that triggers the add
       j.KInt("tranche",g_rows[i].st_tranche); j.KInt("staged_state",g_rows[i].st_state); j.KNum("full_lots",g_rows[i].st_full_lots,2);
+      j.KStr("entry_mode",g_rows[i].entry_mode);                 // plan_* = a live custom plan (docs/live_plans.md); tranche 5 = a plan add
       if(g_rows[i].st_tranche==1) j.KTime("add_due",g_rows[i].time+(datetime)((g_cfg_st_n+1)*PeriodSeconds(PERIOD_H4)));
       j.KStr("staged_note",g_rows[i].reject_why);
       j.KInt("d2_state",g_rows[i].d2_state);
@@ -2800,6 +2814,157 @@ bool LiveWaitClosed(long posid){ for(int i=0;i<10;i++){ if(!PositionSelectByTick
 bool LiveWaitVolBelow(long posid,double vol0){ for(int i=0;i<10;i++){ if(PositionSelectByTicket((ulong)posid) && PositionGetDouble(POSITION_VOLUME)<vol0-1e-9) return true; if(!PositionSelectByTicket((ulong)posid)) return true; if((bool)MQLInfoInteger(MQL_TESTER)) break; Sleep(200); } return false; }
 bool LiveWaitSL(long posid,double sl){ for(int i=0;i<10;i++){ if(PositionSelectByTicket((ulong)posid) && MathAbs(PositionGetDouble(POSITION_SL)-sl)<=_Point*1.5) return true; if((bool)MQLInfoInteger(MQL_TESTER)) break; Sleep(200); } return false; }
 
+//+------------------------------------------------------------------+
+//| LIVE CUSTOM PLANS (trader 2026-10-12, docs/live_plans.md): the plan runner's primitives. The lever logic lives in   |
+//| Python (live/plan_live.py, the Practice rule engine); the EA only places / moves / closes, with every account gate. |
+//+------------------------------------------------------------------+
+//--- the signal's open plan legs: their summed risk to the CURRENT stop (money; a stop on the profit side of its fill = 0,
+//--- a leg without a stop = its distance to the signal stop)
+double PlanOpenRisk(int sid,int dir,double ts,double tv)
+  {
+   double rk=0.0;
+   for(int q=0;q<ArraySize(g_rows);q++)
+     {
+      if(g_rows[q].id!=sid || g_rows[q].symbol!=_Symbol || !IsPlan(q) || g_rows[q].closed || g_rows[q].posid<=0) continue;
+      if(!PositionSelectByTicket((ulong)g_rows[q].posid)) continue;
+      double po=PositionGetDouble(POSITION_PRICE_OPEN), cs=PositionGetDouble(POSITION_SL), vol=PositionGetDouble(POSITION_VOLUME);
+      double stp=(cs>0.0 ? cs : g_rows[q].sl);
+      double d=(dir>0 ? po-stp : stp-po);
+      if(d>0.0) rk+=(d/ts)*tv*vol;
+     }
+   return rk;
+  }
+//--- plan_add: a new leg (its own position + row, st_tranche 5) on the plan whose first leg is row pidx
+string PlanAddTask(string &k[],string &v[],string task_id,int pidx,string &reason,int &row_idx)
+  {
+   int sid=g_rows[pidx].id, dir=g_rows[pidx].direction;
+   bool any_open=false;
+   for(int q=0;q<ArraySize(g_rows) && !any_open;q++)
+      if(g_rows[q].id==sid && g_rows[q].symbol==_Symbol && IsPlan(q) && !g_rows[q].closed && g_rows[q].posid>0 && PositionSelectByTicket((ulong)g_rows[q].posid)) any_open=true;
+   if(!any_open){ reason="position_closed"; return "rejected"; }
+   double lots_req=StringToDouble(JGet(k,v,"params.lots","0"));
+   double sl=StringToDouble(JGet(k,v,"params.sl","0")), tp=StringToDouble(JGet(k,v,"params.tp","0"));
+   int leg=(int)StringToInteger(JGet(k,v,"params.leg","0"));
+   if(lots_req<=0.0 || sl<=0.0 || tp<0.0){ reason="bad_params"; return "rejected"; }
+   sl=NormPrice(sl); tp=(tp>0.0 ? NormPrice(tp) : 0.0);
+   if(!g_trading_enabled || !(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !(bool)MQLInfoInteger(MQL_TRADE_ALLOWED)){ reason="trading_disabled"; return "rejected"; }
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
+   double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0) vmin=0.01;
+   double lots=NormalizeDouble(MathFloor(lots_req/step+1e-9)*step,2);
+   if(lots<vmin-1e-9){ reason=StringFormat("below_min_lot:%.2f",lots_req); return "rejected"; }
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double ar=AnchorRisk(pidx);
+   if(g_cfg_max_spread_r>0.0 && ar>0.0 && (ask-bid)/ar>g_cfg_max_spread_r){ reason=StringFormat("spread_too_wide:%.3fR (max %.3fR)",(ask-bid)/ar,g_cfg_max_spread_r); return "rejected"; }
+   double px=(dir>0 ? ask : bid);
+   double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(tick<=0.0) tick=_Point;
+   if(dir>0 ? (sl>=bid-stops) : (sl<=ask+stops)){ reason="sl_through_price"; return "rejected"; }
+   if(dir>0 ? (sl<g_rows[pidx].sl-0.5*tick) : (sl>g_rows[pidx].sl+0.5*tick)){ reason="beyond_signal_stop"; return "rejected"; }
+   if(tp>0.0 && (dir>0 ? (tp<=ask+stops) : (tp>=bid-stops))){ reason="tp_invalid"; return "rejected"; }
+   //--- the 1R cap (CLAUDE.md 1% rule): the signal's open risk after the add stays within the ruled 1R (+5% for lot rounding)
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE), tv=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   if(ts<=0.0 || tv<=0.0){ reason="bad_params:no_tick_value"; return "rejected"; }
+   double full=(g_rows[pidx].st_full_lots>0.0 ? g_rows[pidx].st_full_lots : g_rows[pidx].lots);
+   double one_r=(MathAbs(AnchorEntry(pidx)-g_rows[pidx].sl)/ts)*tv*full;
+   double open_rk=PlanOpenRisk(sid,dir,ts,tv);
+   double new_rk=(MathMax(0.0,(dir>0 ? px-sl : sl-px))/ts)*tv*lots;
+   if(one_r<=0.0 || open_rk+new_rk>one_r*1.05+1e-9)
+     { reason=StringFormat("risk_over_1R:%.2fR",(one_r>0.0 ? (open_rk+new_rk)/one_r : 0.0)); return "rejected"; }
+   string why="";
+   if(!FtmoHeadroomOK(lots,px,sl,why,task_id)){ reason=why; return "rejected"; }
+   string cap=StringFormat("Signal #%d plan add %d",sid,leg);
+   bool ok=(dir>0 ? g_trade.Buy(lots,_Symbol,0.0,sl,tp,cap) : g_trade.Sell(lots,_Symbol,0.0,sl,tp,cap));
+   if(!ok){ reason=StringFormat("order_failed:%d",(int)g_trade.ResultRetcode()); return "rejected"; }
+   long pid=0; double fill=px;
+   ulong deal=g_trade.ResultDeal();
+   for(int t=0;t<10 && pid<=0;t++)
+     {
+      if(deal>0 && HistoryDealSelect(deal))
+        { pid=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID); double f=HistoryDealGetDouble(deal,DEAL_PRICE); if(f>0.0) fill=f; }
+      if(pid<=0 && !(bool)MQLInfoInteger(MQL_TESTER)) Sleep(200); else break;
+     }
+   if(pid<=0)
+      for(int q=PositionsTotal()-1;q>=0 && pid<=0;q--)
+        {
+         ulong tk=PositionGetTicket(q); if(tk==0) continue;
+         if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+         if(PositionGetString(POSITION_COMMENT)!=cap) continue;
+         pid=(long)PositionGetInteger(POSITION_IDENTIFIER); fill=PositionGetDouble(POSITION_PRICE_OPEN);
+        }
+   int n=ArraySize(g_rows); ArrayResize(g_rows,n+1);
+   g_rows[n]=g_rows[pidx];                                  // the signal's levels, decision and provenance
+   g_rows[n].posid=pid; g_rows[n].lots=lots; g_rows[n].entry=fill; g_rows[n].tp=tp;
+   g_rows[n].risk_px=ar; g_rows[n].sl=g_rows[pidx].sl;     // R in the first leg's 1R; the ORIGINAL stop stays the risk basis
+   g_rows[n].st_anchor_entry=AnchorEntry(pidx); g_rows[n].st_anchor_risk=ar; g_rows[n].st_full_lots=full;
+   g_rows[n].st_state=0; g_rows[n].st_tranche=5; g_rows[n].st_fill_time=TimeCurrent(); g_rows[n].st_pyr=0;
+   g_rows[n].entry_mode="plan_add"; g_rows[n].reject_why=StringFormat("plan leg %d",leg);
+   g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=TimeCurrent();
+   g_rows[n].closed=false; g_rows[n].closed_vol=0.0; g_rows[n].pnl=0.0; g_rows[n].r_multiple=0.0;
+   g_rows[n].exit_time=0; g_rows[n].exit_price=0.0; g_rows[n].terminal=""; g_rows[n].ratcheted=false;
+   g_rows[n].banked=false; g_rows[n].tp1_done=true; g_rows[n].partial_frac=0.0;
+   g_rows[n].mfe_r=0.0; g_rows[n].pre_dip_r=0.0; g_rows[n].post_dip_r=0.0; g_rows[n].dipped=0;
+   g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0; g_rows[n].rt_bankr=-99.0;
+   g_rows[n].sr_state=0; g_rows[n].sr_tries=0; g_rows[n].bl_lock=0; g_rows[n].bl_tries=0; g_rows[n].d2_state=0; g_rows[n].inv_state=2;
+   row_idx=n;
+   AuditLine("plan_add",task_id,"plan_add",StringFormat("sig:%d",sid),"ok","",
+             StringFormat("leg=%d lots=%.2f fill=%s sl=%s tp=%s posid=%I64d first_posid=%I64d open_risk=%.2fR",leg,lots,DoubleToString(fill,_Digits),
+                          DoubleToString(sl,_Digits),DoubleToString(tp,_Digits),pid,g_rows[pidx].posid,(one_r>0.0 ? (open_rk+new_rk)/one_r : 0.0)));
+   Print("Signal #",sid," PLAN ADD leg ",leg," -> ",DoubleToString(lots,2)," lots @ ",DoubleToString(fill,_Digits)," posid=",pid);
+   WriteJournal(g_journal_part); LiveWritePositions();
+   reason=(pid>0 ? "ok" : "ok_unconfirmed"); return "accepted";
+  }
+//--- set_sl: any leg's stop to a price (tighten; loosen only with params.loosen=1; never past the signal stop or through the price)
+string PlanSetSlTask(string &k[],string &v[],string task_id,int idx,string &reason)
+  {
+   long posid=g_rows[idx].posid; int dir=g_rows[idx].direction;
+   double sl=StringToDouble(JGet(k,v,"params.sl","0"));
+   string lz=JGet(k,v,"params.loosen","0"); bool loosen=(lz=="1" || lz=="true");
+   if(sl<=0.0){ reason="bad_params"; return "rejected"; }
+   sl=NormPrice(sl);
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(tick<=0.0) tick=_Point;
+   double sl0=PositionGetDouble(POSITION_SL), tp0=PositionGetDouble(POSITION_TP), vol=PositionGetDouble(POSITION_VOLUME);
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   if(dir>0 ? (sl>=bid-stops) : (sl<=ask+stops)){ reason="sl_through_price"; return "rejected"; }
+   if(dir>0 ? (sl<g_rows[idx].sl-0.5*tick) : (sl>g_rows[idx].sl+0.5*tick)){ reason="beyond_signal_stop"; return "rejected"; }
+   if(sl0>0.0 && MathAbs(sl-sl0)<=0.5*tick){ reason="ok_unchanged"; return "accepted"; }
+   bool looser=(sl0>0.0 && (dir>0 ? sl<sl0 : sl>sl0));
+   if(looser && !loosen){ reason="would_loosen"; return "rejected"; }
+   g_trade.PositionModify((ulong)posid,sl,tp0);
+   bool ok=LiveWaitSL(posid,sl);
+   if(!ok && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+   LogManualAction(idx,"PLAN_SL",(dir>0 ? bid : ask),vol,vol,sl);     // an EA move: ExHold keeps the external-edit detector quiet
+   AuditLine("plan_sl",task_id,"set_sl",StringFormat("pos:%I64d",posid),"ok","",
+             StringFormat("sig:%d %s -> %s%s",g_rows[idx].id,DoubleToString(sl0,_Digits),DoubleToString(sl,_Digits),(looser ? " (loosened)" : "")));
+   reason=(ok ? "ok" : "ok_unconfirmed"); return "accepted";
+  }
+//--- close_part: bank part of a leg (floored to the step; leaving less than a min lot closes the whole leg)
+string PlanClosePartTask(string &k[],string &v[],string task_id,int idx,string &reason)
+  {
+   long posid=g_rows[idx].posid; int dir=g_rows[idx].direction;
+   double req=StringToDouble(JGet(k,v,"params.lots","0"));
+   if(req<=0.0){ reason="bad_params"; return "rejected"; }
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
+   double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0) vmin=0.01;
+   double vol0=PositionGetDouble(POSITION_VOLUME), sl=PositionGetDouble(POSITION_SL);
+   double pv=NormalizeDouble(MathFloor(req/step+1e-9)*step,2);
+   if(pv<vmin-1e-9){ reason=StringFormat("below_min_lot:%.2f",req); return "rejected"; }
+   double px=(dir>0 ? SymbolInfoDouble(_Symbol,SYMBOL_BID) : SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+   if(vol0-pv<vmin-1e-9)
+     {   //--- what would be left is under a min lot: the whole leg goes
+      ManualClose(idx,"PLAN_BANK");
+      if(!LiveWaitClosed(posid) && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+      AuditLine("plan_bank",task_id,"close_part",StringFormat("pos:%I64d",posid),"ok","whole_leg",StringFormat("sig:%d asked %.2f of %.2f lots",g_rows[idx].id,req,vol0));
+      reason=(PositionSelectByTicket((ulong)posid) ? "ok_unconfirmed" : "ok"); return "accepted";
+     }
+   LogManualAction(idx,"PLAN_BANK",px,vol0,vol0-pv,sl);
+   g_trade.PositionClosePartial((ulong)posid,pv);
+   bool ok=LiveWaitVolBelow(posid,vol0);
+   if(!ok && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
+   AuditLine("plan_bank",task_id,"close_part",StringFormat("pos:%I64d",posid),"ok","",StringFormat("sig:%d %.2f of %.2f lots @ %s",g_rows[idx].id,pv,vol0,DoubleToString(px,_Digits)));
+   reason=(ok ? "ok" : "ok_unconfirmed"); return "accepted";
+  }
+
 string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string &reason,int &row_idx)
   {
    reason=""; row_idx=-1;
@@ -2849,6 +3014,34 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
         }
       if(HasActiveOrderOrPosition()){ reason="setup_lock"; return "rejected"; }
       g_size_choice=JGet(k,v,"params.size","staged");   // coach item 22: staged (default) | full
+      //--- live custom plan params (trader 2026-10-12, docs/live_plans.md): validated here, applied by CommitDecision via g_plan_*
+      string ppl=JGet(k,v,"params.plan","0");
+      bool p_on=(ppl=="1" || ppl=="true");
+      double p_pct=100.0; bool p_tp2=true, p_inv=false;
+      double o_e=g_park.orig_entry, o_sl=g_park.orig_sl, o_tp=g_park.orig_tp, o_tp1=g_park.orig_tp1, o_tp2=g_park.orig_tp2;
+      string wt_saved=g_sig_with_trend;                 // an inverse flips with_trend for its own row only (restored after the commit)
+      string wt_inv=(g_sig_with_trend=="1" ? "0" : (g_sig_with_trend=="0" ? "1" : g_sig_with_trend));
+      if(p_on)
+        {
+         p_pct=StringToDouble(JGet(k,v,"params.entry_pct","100"));
+         if(!(p_pct>=1.0 && p_pct<=100.0)){ reason="bad_params:entry_pct"; return "rejected"; }
+         string ptp=JGet(k,v,"params.tp2","1"); p_tp2=!(ptp=="0" || ptp=="false");
+         string pin=JGet(k,v,"params.inverse","0"); p_inv=(pin=="1" || pin=="true");
+         if(p_inv)
+           {   //--- trade the opposite direction: every level mirrored round the parked candidate's entry, BEFORE the market
+               //--- validation and the sizing (so the risk basis, the R:R floor and the journal all see the inverted trade)
+            double e0=cand.entry;
+            cand.direction=-cand.direction;
+            cand.sl=NormPrice(2.0*e0-cand.sl);
+            if(cand.tp>0.0)  cand.tp =NormPrice(2.0*e0-cand.tp);
+            if(cand.tp1>0.0) cand.tp1=NormPrice(2.0*e0-cand.tp1);
+            if(cand.tp2>0.0) cand.tp2=NormPrice(2.0*e0-cand.tp2);
+            if(o_sl>0.0)  o_sl =NormPrice(2.0*e0-o_sl);          // the proposal mirrored the same way, so `edited` still means an operator edit
+            if(o_tp>0.0)  o_tp =NormPrice(2.0*e0-o_tp);
+            if(o_tp1>0.0) o_tp1=NormPrice(2.0*e0-o_tp1);
+            if(o_tp2>0.0) o_tp2=NormPrice(2.0*e0-o_tp2);
+           }
+        }
       string em=JGet(k,v,"params.entry_mode",(g_delay_count>0 ? "pending" : "market"));
       if(em=="market_now") em="market";
       string entry_mode;
@@ -2881,16 +3074,18 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
          WriteSignalJson("auto_skipped","EA_AUTO_REJECT "+fwhy);
          AuditLine("auto_skip",task_id,"approve",StringFormat("sig:%d",sid),"skipped",ftag,StringFormat("EA_AUTO_REJECT code=10 class=%s %s",g_sig_class,fwhy));
          Print("Signal #",sid," AUTO-REJECTED by the EA (code 10, ",ftag,"): ",fwhy);
-         g_live_auto=1;
-         CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
+         g_live_auto=1; if(p_inv) g_sig_with_trend=wt_inv;
+         CommitDecision(sid,cand,caption,o_e,o_sl,o_tp,o_tp1,o_tp2,
                         false,10,DecisionMs(),false,false,"auto_skip");
-         g_live_auto=0;
+         g_live_auto=0; g_sig_with_trend=wt_saved;
          LiveUnpark(); row_idx=RowIdxBySid(sid);
          reason=fwhy; return "rejected";
         }
       //--- commit exactly as the tester would after an Accept click
-      CommitDecision(sid,cand,caption,g_park.orig_entry,g_park.orig_sl,g_park.orig_tp,g_park.orig_tp1,g_park.orig_tp2,
+      g_plan_on=p_on; g_plan_pct=p_pct; g_plan_tp2=p_tp2; g_plan_inv=p_inv; if(p_inv) g_sig_with_trend=wt_inv;
+      CommitDecision(sid,cand,caption,o_e,o_sl,o_tp,o_tp1,o_tp2,
                      true,0,DecisionMs(),false,false,entry_mode);
+      g_plan_on=false; g_plan_inv=false; g_plan_pct=100.0; g_plan_tp2=true; g_sig_with_trend=wt_saved;
       g_size_choice="";
       row_idx=RowIdxBySid(sid);
       if(row_idx>=0 && g_rows[row_idx].decision=="approved" && g_rows[row_idx].posid==0 && g_rows[row_idx].order_ticket==0)
@@ -2956,9 +3151,17 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
         { reason=StringFormat("spread_too_wide:%.3fR of the stop (max %.3fR)",spr,g_cfg_max_spread_r); return "rejected"; }
       double lots=SizeByRisk(mk,sl);
       if(lots<=0.0){ reason="lots_zero"; return "rejected"; }
+      bool fplan=IsPlan(idx); double ffull=lots;
+      if(fplan && g_rows[idx].st_full_lots>0.0)
+        {   //--- live custom plan: the same entry share of the re-sized ruled lots (docs/live_plans.md)
+         double fstp=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(fstp<=0) fstp=0.01;
+         double fvmn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(fvmn<=0) fvmn=0.01;
+         double fl=MathFloor(ffull*MathMin(1.0,g_rows[idx].lots/g_rows[idx].st_full_lots)/fstp+1e-9)*fstp;
+         lots=NormalizeDouble(MathMin(ffull,MathMax(fvmn,fl)),2);
+        }
       string fwhy="";
       if(!FtmoHeadroomOK(lots,mk,sl,fwhy,task_id)){ reason=fwhy; return "rejected"; }
-      double rr=(dir>0 ? (tp-mk)/(mk-sl) : (mk-tp)/(sl-mk));
+      double rr=(tp>0.0 ? (dir>0 ? (tp-mk)/(mk-sl) : (mk-tp)/(sl-mk)) : 0.0);
       double planned=g_rows[idx].entry;
       if(!OrderSelect((ulong)g_rows[idx].order_ticket)){ reason="order_not_found"; return "rejected"; }
       if(!g_trade.OrderDelete((ulong)g_rows[idx].order_ticket) && !LiveDone())
@@ -2967,7 +3170,9 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       bool ok=(dir>0 ? g_trade.Buy(lots,_Symbol,0.0,sl,tp,caption) : g_trade.Sell(lots,_Symbol,0.0,sl,tp,caption));
       if(!ok){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); g_rows[idx].order_ticket=0; g_rows[idx].is_pending=false;
                g_rows[idx].decision="cancelled"; g_rows[idx].terminal="cancelled"; g_rows[idx].closed=true; WriteJournal(g_journal_part); return "rejected"; }
-      g_rows[idx].is_pending=false; g_rows[idx].order_ticket=0; g_rows[idx].lots=lots; g_rows[idx].entry_mode="market_now_from_pending";
+      g_rows[idx].is_pending=false; g_rows[idx].order_ticket=0; g_rows[idx].lots=lots;
+      if(fplan){ g_rows[idx].entry_mode="plan_market_now_from_pending"+(StringFind(g_rows[idx].entry_mode,"_inv")>=0 ? "_inv" : ""); g_rows[idx].st_full_lots=ffull; }
+      else g_rows[idx].entry_mode="market_now_from_pending";
       ulong deal=g_trade.ResultDeal(); bool bound=false;
       for(int tries=0;tries<10 && !bound;tries++)
         {
@@ -3070,6 +3275,19 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       AuditLine("promote",task_id,verb,StringFormat("pos:%I64d",posid),"accepted","ok",StringFormat("bar=%d open_r=%+.2f add=%.2f",sh,oR,add));
       reason="ok"; return "accepted";
      }
+   //--- live custom plans (docs/live_plans.md): plan rows only
+   if(verb=="plan_add" || verb=="set_sl" || verb=="close_part")
+     {
+      long posid=StringToInteger(JGet(k,v,"position_id","0"));
+      if(posid<=0){ reason="bad_params"; return "rejected"; }
+      int idx=(verb=="plan_add" ? RowIdxByPosidAny(posid) : RowIdxByPosid(posid)); row_idx=idx;   // an add may follow a first leg already stopped
+      if(idx<0){ reason="unknown_position"; return "rejected"; }
+      if(!IsPlan(idx)){ reason="not_a_plan"; return "rejected"; }
+      if(verb=="plan_add") return PlanAddTask(k,v,task_id,idx,reason,row_idx);
+      if(!PositionSelectByTicket((ulong)posid)){ reason="position_closed"; return "rejected"; }
+      if(verb=="set_sl") return PlanSetSlTask(k,v,task_id,idx,reason);
+      return PlanClosePartTask(k,v,task_id,idx,reason);
+     }
    //--- position verbs --------------------------------------------------------
    if(verb=="close" || verb=="close50" || verb=="sl_be" || verb=="ratchet_tp1")
      {
@@ -3081,7 +3299,8 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       double vol0=PositionGetDouble(POSITION_VOLUME), sl0=PositionGetDouble(POSITION_SL);
       if(verb=="close")
         {
-         ManualClose(idx);
+         string cwhy=JGet(k,v,"params.why","");
+         ManualClose(idx,(StringFind(cwhy,"plan")==0 ? "PLAN_CLOSE" : "CLOSE"));   // the plan runner's cuts / exits are tagged as such
          if(!LiveWaitClosed(posid) && !LiveDone()){ reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
          reason=(PositionSelectByTicket((ulong)posid) ? "ok_unconfirmed" : "ok"); return "accepted";
         }
@@ -3175,11 +3394,12 @@ void LiveProcessTasks()
         { AuditLine("duplicate",task_id,verb,"","ignored","already_acked",""); continue; }
       AuditLine("claimed",task_id,verb,JGet(k,v,"signal_id",JGet(k,v,"position_id","")),"","",names[i]);
       string result,reason; int row_idx=-1;
-      string target_key=(verb=="close"||verb=="close50"||verb=="sl_be"||verb=="ratchet_tp1") ? "position_id" : "signal_id";
+      string target_key=(verb=="close"||verb=="close50"||verb=="sl_be"||verb=="ratchet_tp1"||verb=="plan_add"||verb=="set_sl"||verb=="close_part") ? "position_id" : "signal_id";
       long target_id=StringToInteger(JGet(k,v,target_key,"0"));
       if(JGet(k,v,"schema_version","")!=(string)LIVE_SCHEMA_VERSION){ result="rejected"; reason="schema_version_unsupported"; }
       else if(tsym!=_Symbol){ result="rejected"; reason="symbol_mismatch"; }
-      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"&&verb!="cancel_pending"&&verb!="fill_now"&&verb!="promote"){ result="rejected"; reason="unknown_verb"; }
+      else if(verb!="approve"&&verb!="skip"&&verb!="delay"&&verb!="close"&&verb!="close50"&&verb!="sl_be"&&verb!="ratchet_tp1"&&verb!="test_signal"&&verb!="cancel_pending"&&verb!="fill_now"&&verb!="promote"
+              &&verb!="plan_add"&&verb!="set_sl"&&verb!="close_part"){ result="rejected"; reason="unknown_verb"; }
       else
         {
          datetime issued=IsoToTime(JGet(k,v,"issued_at",""));
@@ -3230,6 +3450,81 @@ void SelfTestWriteTask(string task_id,string target_key,long target_id,string ve
                             LIVE_SCHEMA_VERSION,task_id,_Symbol,target_key,target_id,verb,params_json,IsoTime(TimeCurrent()));
    AtomicWriteText(LivePath("tasks\\"+task_id+".json"),body);
   }
+//--- live custom plans (trader 2026-10-12, docs/live_plans.md): from signal 17 on, the first approvable signal is a PLAN approve
+//--- (entry 50%, no broker TP), then plan_add / set_sl / close_part / close why=plan_cut on it; after that, the next approvable
+//--- signal is an INVERSE plan (direction flipped, levels mirrored) - checked, then cut. A refused approve retries on a later signal.
+int      st_plan_state=0;        // 0 not sent, 1 approve sent, 2 running, 3 done
+int      st_plan_sid=0, st_plan_stage=0;
+datetime st_plan_last=0;
+double   st_plan_sl0=0.0;
+int      st_inv_state=0, st_inv_sid=0, st_inv_dir0=0;
+double   st_inv_e0=0.0, st_inv_sl0=0.0;
+datetime st_inv_t0=0;
+int PlanLeg0Row(int sid){ for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].id==sid && IsPlan(i) && g_rows[i].entry_mode!="plan_add" && g_rows[i].posid>0) return i; return -1; }
+int PlanAddRow(int sid){ for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].id==sid && g_rows[i].entry_mode=="plan_add" && g_rows[i].posid>0 && !g_rows[i].closed) return i; return -1; }
+void SelfTestPlanTick(datetime now)
+  {
+   if(now-st_plan_last<2*InpTaskPollSec) return;                       // one stage per >= 2 polls
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE); if(tick<=0.0) tick=_Point;
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID), ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   //--- the plan scenario
+   if(st_plan_state==2)
+     {
+      int i0=PlanLeg0Row(st_plan_sid);
+      bool open0=(i0>=0 && !g_rows[i0].closed && PositionSelectByTicket((ulong)g_rows[i0].posid));
+      if(!open0){ st_plan_state=3; AuditLine("plan_selftest","","","",StringFormat("stage%d",st_plan_stage),"leg0_closed",""); return; }
+      long p0=g_rows[i0].posid; int d=g_rows[i0].direction;
+      double sl0=PositionGetDouble(POSITION_SL), vol0=PositionGetDouble(POSITION_VOLUME), px=(d>0 ? bid : ask);
+      double full=g_rows[i0].st_full_lots;
+      double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
+      double vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmin<=0) vmin=0.01;
+      bool wrote=true;
+      if(st_plan_stage==0 && now-(datetime)PositionGetInteger(POSITION_TIME)>=60)
+        {
+         double al=MathMax(vmin,MathFloor(0.25*full/step+1e-9)*step);
+         SelfTestWriteTask("st-plan-add","position_id",p0,"plan_add",StringFormat("{\"lots\":%.2f,\"sl\":%s,\"tp\":0,\"leg\":1}",al,DoubleToString(sl0,_Digits)));
+         SelfTestWriteTask("st-plan-add-over","position_id",p0,"plan_add",StringFormat("{\"lots\":%.2f,\"sl\":%s,\"tp\":0,\"leg\":2}",full,DoubleToString(sl0,_Digits)));
+         st_plan_sl0=sl0; st_plan_stage=1;
+        }
+      else if(st_plan_stage==1)
+        { double t=NormPrice(sl0+0.25*(px-sl0));
+          SelfTestWriteTask("st-plan-sl-tight","position_id",p0,"set_sl",StringFormat("{\"sl\":%s}",DoubleToString(t,_Digits))); st_plan_stage=2; }
+      else if(st_plan_stage==2)
+        { SelfTestWriteTask("st-plan-sl-loosen-refused","position_id",p0,"set_sl",StringFormat("{\"sl\":%s}",DoubleToString(st_plan_sl0,_Digits))); st_plan_stage=3; }
+      else if(st_plan_stage==3)
+        { SelfTestWriteTask("st-plan-sl-loosen-ok","position_id",p0,"set_sl",StringFormat("{\"sl\":%s,\"loosen\":1}",DoubleToString(st_plan_sl0,_Digits)));
+          SelfTestWriteTask("st-plan-sl-beyond","position_id",p0,"set_sl",StringFormat("{\"sl\":%s,\"loosen\":1}",DoubleToString(NormPrice(st_plan_sl0-0.5*(px-st_plan_sl0)),_Digits)));
+          st_plan_stage=4; }
+      else if(st_plan_stage==4)
+        { SelfTestWriteTask("st-plan-bank","position_id",p0,"close_part",StringFormat("{\"lots\":%.2f}",vmin)); st_plan_stage=5; }
+      else if(st_plan_stage==5)
+        { int ia=PlanAddRow(st_plan_sid);
+          if(ia>=0) SelfTestWriteTask("st-plan-cut-add","position_id",g_rows[ia].posid,"close","{\"why\":\"plan_cut selftest\"}");
+          SelfTestWriteTask("st-plan-cut","position_id",p0,"close","{\"why\":\"plan_cut selftest\"}"); st_plan_stage=6; st_plan_state=3; }
+      else wrote=false;
+      if(wrote) st_plan_last=now;
+      return;
+     }
+   //--- the inverse scenario: the row must carry the mirrored levels and the opposite direction; then cut
+   if(st_inv_state==2)
+     {
+      int iv=PlanLeg0Row(st_inv_sid);
+      if(iv<0 || g_rows[iv].closed || !PositionSelectByTicket((ulong)g_rows[iv].posid)){ st_inv_state=3; return; }
+      if(st_inv_t0==0)
+        {
+         st_inv_t0=now;
+         double want_sl=NormPrice(2.0*st_inv_e0-st_inv_sl0);
+         bool ok=(g_rows[iv].direction==-st_inv_dir0 && MathAbs(g_rows[iv].sl-want_sl)<=0.5*tick && StringFind(g_rows[iv].entry_mode,"_inv")>0
+                  && MathAbs(PositionGetDouble(POSITION_SL)-want_sl)<=0.5*tick);
+         AuditLine("plan_inv_check","","",StringFormat("pos:%I64d",g_rows[iv].posid),(ok?"ok":"mismatch"),"",
+                   StringFormat("sig:%d dir %d -> %d sl %s (want %s) pos_sl %s mode=%s",st_inv_sid,st_inv_dir0,g_rows[iv].direction,DoubleToString(g_rows[iv].sl,_Digits),
+                                DoubleToString(want_sl,_Digits),DoubleToString(PositionGetDouble(POSITION_SL),_Digits),g_rows[iv].entry_mode));
+         st_plan_last=now; return;
+        }
+      SelfTestWriteTask("st-plan-inv-cut","position_id",g_rows[iv].posid,"close","{\"why\":\"plan_cut selftest\"}");
+      st_inv_state=3; st_plan_last=now;
+     }
+  }
 void SelfTestTick()
   {
    datetime now=TimeCurrent();
@@ -3260,6 +3555,12 @@ void SelfTestTick()
          else if(kk==13)  // C2 risk multiplier: 0.5 for this symbol -> journal risk_mult_applied=0.500, lots halved
            { AtomicWriteText(LivePath("config\\risk_mult.json"),StringFormat("{\"%s\":0.5}",SymbolRoot()));
              SelfTestWriteTask(StringFormat("st-%d-approve-half",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
+         else if(kk>=17 && st_plan_state==0 && !HasActiveOrderOrPosition())   // live custom plan: entry 50%, no broker TP
+           { SelfTestWriteTask(StringFormat("st-%d-approve-plan",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\",\"plan\":1,\"entry_pct\":50,\"tp2\":0}");
+             st_plan_state=1; st_plan_sid=kk; st_sid_done=kk; }
+         else if(kk>=17 && st_plan_state==3 && st_inv_state==0 && !HasActiveOrderOrPosition())   // live custom plan, INVERSE
+           { SelfTestWriteTask(StringFormat("st-%d-approve-plan-inv",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\",\"plan\":1,\"inverse\":1,\"entry_pct\":100,\"tp2\":1}");
+             st_inv_state=1; st_inv_sid=kk; st_inv_dir0=g_delayed.direction; st_inv_e0=g_delayed.entry; st_inv_sl0=g_delayed.sl; st_sid_done=kk; }
          else { SelfTestWriteTask(StringFormat("st-%d-approve",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
         }
       else if(m==2) { SelfTestWriteTask(StringFormat("st-%d-skip",kk),"signal_id",kk,"skip","{\"reason_code\":3}"); st_sid_done=kk; }
@@ -3299,8 +3600,17 @@ void SelfTestTick()
    //--- duplicate task_id: re-issue the FIRST approve after it was acked (expect audit `duplicate`, no 2nd ack/exec)
    if(ack_poll && !st_dup_done && st_sid_done>=1 && FileIsExist(LivePath("acks\\st-1-approve.json"),FILE_COMMON))
      { st_dup_done=true; SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\"}"); }
-   //--- position management on the first open graded position
+   //--- live custom plans: the approve's ack decides (refused -> retry on a later signal)
+   if(ack_poll && st_plan_state==1)
+     { string ap=ReadTextFile(LivePath(StringFormat("acks\\st-%d-approve-plan.json",st_plan_sid)));
+       if(ap!="") { st_plan_state=(StringFind(ap,"\"result\":\"accepted\"")>=0 && PlanLeg0Row(st_plan_sid)>=0 ? 2 : 0); st_plan_stage=0; st_plan_last=now; } }
+   if(ack_poll && st_inv_state==1)
+     { string ap=ReadTextFile(LivePath(StringFormat("acks\\st-%d-approve-plan-inv.json",st_inv_sid)));
+       if(ap!="") { st_inv_state=(StringFind(ap,"\"result\":\"accepted\"")>=0 && PlanLeg0Row(st_inv_sid)>=0 ? 2 : 0); st_inv_t0=0; st_plan_last=now; } }
+   if(st_plan_state==2 || st_inv_state==2) SelfTestPlanTick(now);
+   //--- position management on the first open graded position (a plan row is the plan scenario's, above)
    int idx=ActiveRowIdx();
+   if(idx>=0 && IsPlan(idx)) return;
    if(idx>=0 && g_rows[idx].posid!=st_pos_posid){ st_pos_posid=g_rows[idx].posid; st_pos_stage=0; st_pos_t0=now; st_pos_last=now; }
    if(idx>=0 && st_pos_posid==g_rows[idx].posid && now-st_pos_last>=2*InpTaskPollSec)   // one stage per >=2 polls
      {
@@ -3617,6 +3927,9 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                         ? (MathAbs(cand.tp1-orig_tp1)>etol || MathAbs(cand.tp2-orig_tp2)>etol)
                         : MathAbs(cand.tp-orig_tp)>etol));
    double order_tp=(two_target? cand.tp2 : cand.tp);
+   //--- live custom plan (docs/live_plans.md): set by the approve task, live only - the tester never sets g_plan_on
+   bool plan=(InpLiveMode && approved && g_plan_on && !want_inv && cand.strategy!="Inverse");
+   if(plan && !g_plan_tp2) order_tp=0.0;                  // params.tp2=0: no broker TP at all (also on a two-target card)
 
    int n=ArraySize(g_rows); ArrayResize(g_rows,n+1); StagedInit(g_rows[n]);
    g_rows[n].id=id; g_rows[n].time=cand.zone_to; g_rows[n].symbol=_Symbol;
@@ -3649,6 +3962,11 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
      { g_rows[n].ro=1; g_rows[n].ro_held_min=g_park.ro_held_min; g_rows[n].ro_spread0=g_park.ro_spread0; g_rows[n].ro_spread1=g_park.ro_spread1; g_rows[n].ro_drift=g_park.ro_drift; }
    g_rows[n].stop_pre_floor=g_floor_pre; g_rows[n].stop_post_floor=g_floor_post; g_rows[n].floor_applied=g_floor_applied;
    g_rows[n].weekend_candle=WeekendCandle(g_rows[n].time); g_rows[n].reject_why="";
+   if(plan)
+     {   //--- the plan runner manages it: no EA bank / scale-out, the ruled 100% kept for the runner's sizing
+      g_rows[n].entry_mode="plan_"+entry_mode+(g_plan_inv ? "_inv" : "");
+      g_rows[n].partial_frac=0.0; g_rows[n].tp1_done=true; g_rows[n].st_full_lots=lots;
+     }
 
    if(want_inv)
      {
@@ -3685,6 +4003,18 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
         }
       else
         {
+         if(plan)
+           {   //--- params.entry_pct: the first position = ruled lots x pct, floored to the step, at least the min lot
+            double pstp=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(pstp<=0) pstp=0.01;
+            double pvmn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(pvmn<=0) pvmn=0.01;
+            double pl=MathFloor(lots*g_plan_pct/100.0/pstp+1e-9)*pstp;
+            if(pl<pvmn) pl=pvmn;
+            if(pl>lots) pl=lots;
+            lots=NormalizeDouble(pl,2); g_rows[n].lots=lots;
+            AuditLine("plan_entry","","approve",StringFormat("sig:%d",id),"ok","",
+                      StringFormat("mode=%s entry_pct=%.0f lots=%.2f full=%.2f tp=%s inverse=%d dir=%s sl=%s",g_rows[n].entry_mode,g_plan_pct,lots,
+                                   g_rows[n].st_full_lots,DoubleToString(order_tp,_Digits),(int)g_plan_inv,DirStr(cand.direction),DoubleToString(cand.sl,_Digits)));
+           }
          //--- decide market vs pending. Entry edited far enough from the market
          //--- => pending (limit on the favourable side, stop on the breakout
          //--- side). Untouched (or edited back to ~market) => market fill as today.
@@ -3727,7 +4057,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
             //--- The ruled risk is the FULL position's at the original stop; a position that cannot split (under 0.05 lots,
             //--- or either tranche under the minimum lot) enters in full as before.
             bool staged=false; double full_lots=lots;
-            if((InpLiveMode || InpStaged) && g_cfg_staged && (entry_mode=="market" || entry_mode=="market_now") && g_size_choice!="full")
+            if((InpLiveMode || InpStaged) && g_cfg_staged && (entry_mode=="market" || entry_mode=="market_now") && g_size_choice!="full" && !plan)
               {
                double stp=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(stp<=0) stp=0.01;
                double vmn=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);  if(vmn<=0) vmn=0.01;
@@ -3770,7 +4100,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                      bound=true; AuditLine("fill_bound","","",StringFormat("sig:%d",id),"ok","by_comment",StringFormat("posid=%I64d",g_rows[n].posid));
                     }
                  }
-               if(InpLiveMode && g_size_choice=="full")
+               if(InpLiveMode && g_size_choice=="full" && !plan)
                  {   // coach item 22: the trader chose FULL NOW on the approve dialog
                   g_rows[n].entry_mode="manual_full"; g_rows[n].reject_why="promote=manual_full bar=0 open_r=+0.00";
                  }
@@ -3783,7 +4113,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                      if(InpLiveMode) AuditLine("staged_first","","",StringFormat("sig:%d",id),"ok","",StringFormat("first=%.2f full=%.2f add_after_bar=%d",lots,full_lots,g_cfg_st_n));
                     }
                  }
-               if(two_target) MinLotSplitGuard(n);
+               if(two_target && !plan) MinLotSplitGuard(n);
                Print("Signal #",id," APPROVED -> ",cand.strategy," ",DirStr(cand.direction)," ",
                      DoubleToString(lots,2)," lots posid=",g_rows[n].posid,
                      (two_target?"  [scale-out TP1/TP2]":"  [single TP]"));
@@ -3857,6 +4187,7 @@ void ManageOpenPositions()
      {
       if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending")
          || g_rows[i].posid<=0) continue;
+      if(IsPlan(i)) continue;                                   // live custom plan: the plan runner manages it (docs/live_plans.md)
 
       //--- STUDY-ONLY (InpV2Exit==false): reproduce the PRE-v2 exit (2026-09-08
       //--- scale-at-tp1, UNPADDED POSITION_PRICE_OPEN BE) EXACTLY, so the frozen signal
@@ -6243,7 +6574,7 @@ void StagedAddTick()
    int nrows=ArraySize(g_rows);
    for(int i=0;i<nrows;i++)
      {
-      if((g_rows[i].st_state!=1 && g_rows[i].st_state!=4) || g_rows[i].st_tranche!=1 || g_rows[i].symbol!=_Symbol) continue;
+      if((g_rows[i].st_state!=1 && g_rows[i].st_state!=4) || g_rows[i].st_tranche!=1 || g_rows[i].symbol!=_Symbol || IsPlan(i)) continue;
       int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
       if(sh<0) continue;
       if(g_rows[i].st_state==4)
@@ -6425,7 +6756,7 @@ void Day2Tick()
    int nrows=ArraySize(g_rows);
    for(int i=0;i<nrows;i++)
      {
-      if((g_rows[i].d2_state!=0 && g_rows[i].d2_state!=5) || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) continue;   // 5 = cut waiting (trading disabled / close failed)
+      if((g_rows[i].d2_state!=0 && g_rows[i].d2_state!=5) || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol || IsPlan(i)) continue;   // 5 = cut waiting (trading disabled / close failed)
       if(!QueueRuleRow(i)) continue;
       if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending") || g_rows[i].posid<=0) continue;
       int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
@@ -6547,7 +6878,7 @@ bool ImprovingAdd(int i,double step,double vmin,double a1,double a2)
 void PyramidCheck(int i,double bid,double ask,double step,double vmin)
   {
    bool on=(InpLiveMode ? g_cfg_pyr : InpPyramid);
-   if(!on || g_rows[i].st_pyr!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) return;
+   if(!on || g_rows[i].st_pyr!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol || IsPlan(i)) return;
    if(g_rows[i].strategy=="Inverse" && InpLiveMode && !g_cfg_pyr_inverse) return;   // coach item 21 B9
    double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR), frac=(InpLiveMode ? g_cfg_pyr_f : InpPyramidFrac);
    int dir=g_rows[i].direction;
@@ -6619,7 +6950,7 @@ void PyramidCheck(int i,double bid,double ask,double step,double vmin)
 void ShortRaiseCheck(int i,double ask)
   {
    double L=(InpLiveMode ? g_cfg_short_raise_r : InpShortRaiseR);
-   if(L<=0.0 || g_rows[i].direction>=0 || g_rows[i].strategy=="Inverse" || g_rows[i].sr_state!=0) return;
+   if(L<=0.0 || g_rows[i].direction>=0 || g_rows[i].strategy=="Inverse" || g_rows[i].sr_state!=0 || IsPlan(i)) return;
    if(BlocTL(i)) return;                                                            // commodity bloc: BlocLockCheck moves every stop to +1R instead
    if(g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) return;
    double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR);
@@ -6704,7 +7035,7 @@ void BlocTick()
    int nrows=ArraySize(g_rows);
    for(int i=0;i<nrows;i++)
      {
-      if((g_rows[i].bl_state!=0 && g_rows[i].bl_state!=5) || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol) continue;
+      if((g_rows[i].bl_state!=0 && g_rows[i].bl_state!=5) || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol || IsPlan(i)) continue;
       if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending") || g_rows[i].posid<=0) continue;
       int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
       if(sh<N+1) continue;                                           // the bar-N close has not passed yet
@@ -6750,7 +7081,7 @@ void BlocTick()
   }
 void BlocLockCheck(int i,double bid,double ask)
   {
-   if(g_rows[i].bl_lock!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol || !BlocTL(i)) return;
+   if(g_rows[i].bl_lock!=0 || g_rows[i].st_tranche>=2 || g_rows[i].symbol!=_Symbol || !BlocTL(i) || IsPlan(i)) return;
    double trigR=(InpLiveMode ? g_cfg_pyr_r : InpPyramidR);
    int dir=g_rows[i].direction;
    double ae=AnchorEntry(i), ar=AnchorRisk(i);
@@ -6891,6 +7222,7 @@ void InverseArmTick()
       if(g_rows[i].symbol!=_Symbol || g_rows[i].strategy=="Inverse" || g_rows[i].strategy=="TEST" || g_rows[i].strategy=="ADOPTED") continue;
       if(g_rows[i].inv_state!=0 || g_rows[i].st_tranche>=2) continue;
       if((g_rows[i].decision!="approved" && g_rows[i].decision!="approved_pending") || g_rows[i].posid<=0) continue;
+      if(IsPlan(i)) { g_rows[i].inv_state=2; continue; }       // live custom plan: never an Inverse parent (its stops move; it never banks)
       if(g_rows[i].closed || g_rows[i].banked) { g_rows[i].inv_state=2; continue; }
       if(!PositionSelectByTicket((ulong)g_rows[i].posid)) continue;
       int sh=iBarShift(_Symbol,PERIOD_H4,g_rows[i].time,false);
@@ -6925,6 +7257,7 @@ void InverseFireTick()
       if(g_rows[i].strategy!="Inverse" || g_rows[i].inv_state!=1 || g_rows[i].closed || g_rows[i].symbol!=_Symbol) continue;
       int p=RowIdxByPosidAny(g_rows[i].inv_parent_posid);
       if(p<0){ InverseCancel(i,"parent_not_found"); changed=true; continue; }
+      if(IsPlan(p)){ InverseCancel(i,"parent_is_plan"); changed=true; continue; }   // live custom plan: never an Inverse parent
       if(g_rows[p].banked){ InverseCancel(i,"parent_banked"); changed=true; continue; }
       int shs=iBarShift(_Symbol,PERIOD_H4,g_rows[p].time,false);
       if(!g_rows[p].closed && PositionSelectByTicket((ulong)g_rows[p].posid))

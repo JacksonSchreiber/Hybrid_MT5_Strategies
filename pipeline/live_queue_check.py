@@ -32,7 +32,10 @@ REASON_ENUM = ["ok","schema_version_unsupported","malformed_json","bad_task_id",
   "unknown_signal","signal_not_open","unknown_position","position_closed","already_filled","not_pending","stale_task","restart_during_execution",
   "trading_disabled","events_not_loaded","election_gate","setup_lock","geom_invalid","rr_below_floor","stop_too_tight",
   "lots_zero","ftmo_daily_headroom","ftmo_max_headroom","be_floor","be_stops_level","be_would_loosen","ratchet_not_banked",
-  "ratchet_already_used","ratchet_no_tp1","ratchet_not_past_tp1","ratchet_would_loosen","min_lot_split","order_failed","weekend_flat"]
+  "ratchet_already_used","ratchet_no_tp1","ratchet_not_past_tp1","ratchet_would_loosen","min_lot_split","order_failed","weekend_flat",
+  # live custom plans (docs/live_plans.md, trader 2026-10-12): plan_add / set_sl / close_part
+  "ok_unchanged","ok_unconfirmed","not_a_plan","below_min_lot","sl_through_price","beyond_signal_stop","would_loosen","tp_invalid",
+  "risk_over_1R","spread_too_wide"]
 SIGNAL_STATUS = {"open","approved","approved_pending","skipped","auto_skipped","expired","rejected"}
 
 fails=[]; warns=[]; info=[]
@@ -260,6 +263,55 @@ def main():
         for vb in ("sl_be","ratchet_tp1"):
             if cnt(lambda x,vb=vb:x["verb"]==vb and x["result"]=="accepted")<1: warn(f"selftest: {vb} accept path not exercised in this window")
         info.append(f"selftest gate lines checked: {len(gate_lines)}; sl_be accepted: {cnt(lambda x:x['verb']=='sl_be' and x['result']=='accepted')}  ratchet_tp1 accepted: {cnt(lambda x:x['verb']=='ratchet_tp1' and x['result']=='accepted')}")
+    # --- live custom plans (docs/live_plans.md): the plan scenario + the inverse plan scenario ---
+    if a.expect_selftest:
+        def ackr(tid): return acks.get(tid)
+        pa=[x for t,x in acks.items() if re.fullmatch(r"st-\d+-approve-plan",t)]
+        if not pa: fail("selftest: no plan approve was issued (no free signal from #17 on?)")
+        acc=[x for x in pa if x["result"]=="accepted"]
+        if pa and not acc: fail(f"selftest: no plan approve accepted ({[(x['task_id'],x['reason']) for x in pa]})")
+        for x in acc:
+            sid=str(x["signal_id"]); row=next((r for r in all_rows if r.get("signal_id")==sid and (r.get("entry_mode") or "").startswith("plan_") and r.get("entry_mode")!="plan_add"),None)
+            if not row: fail(f"selftest: plan approve #{sid} accepted but no journal row with a plan_ entry_mode"); continue
+            try: lots,full=float(row["lots"]),float(row.get("full_lots") or 0)
+            except ValueError: lots,full=0.0,0.0
+            if not full or abs(lots-max(0.01,int(full*0.5/0.01+1e-9)*0.01))>0.0051: fail(f"selftest: plan #{sid} lots {row.get('lots')} vs full {row.get('full_lots')} (expected 50%)")
+            info.append(f"plan #{sid}: {row.get('entry_mode')} lots {row.get('lots')} of {row.get('full_lots')} tp {row.get('tp')}")
+            if (row.get("tp") or "0") not in ("0","0.0","") and float(row.get("tp") or 0)!=0.0: fail(f"selftest: plan #{sid} asked tp2=0 but the row has tp {row.get('tp')}")
+            adds=[r for r in all_rows if r.get("signal_id")==sid and r.get("entry_mode")=="plan_add"]
+            ak=ackr("st-plan-add")
+            if ak is None: warn("selftest: plan_add not exercised (the plan leg closed first?)")
+            elif ak["result"]!="accepted": fail(f"selftest: st-plan-add -> {ak['result']}/{ak['reason']} (expected accepted)")
+            elif not adds or adds[0].get("tranche")!="5": fail(f"selftest: plan_add accepted but no tranche-5 plan_add journal row for #{sid}")
+            elif str(ak["refs"].get("posid"))!=adds[0].get("posid"): fail(f"selftest: plan_add ack refs posid {ak['refs'].get('posid')} != the new row's {adds[0].get('posid')}")
+            for tid,want in (("st-plan-add-over","rejected/risk_over_1R"),("st-plan-sl-tight","accepted/ok"),("st-plan-sl-loosen-refused","rejected/would_loosen"),
+                             ("st-plan-sl-loosen-ok","accepted/ok"),("st-plan-sl-beyond","rejected/beyond_signal_stop"),("st-plan-bank","accepted/ok"),("st-plan-cut","accepted/ok")):
+                ak=ackr(tid); res,rsn=want.split("/")
+                if ak is None: warn(f"selftest: {tid} not exercised (the plan leg closed first?)"); continue
+                if ak["result"]!=res or not (ak["reason"]==rsn or ak["reason"].startswith(rsn)): fail(f"selftest: {tid} -> {ak['result']}/{ak['reason']} (expected {want})")
+            acts=[l for p_ in glob.glob(os.path.join(R,"journal",f"{S}_*.actions.csv")) for l in open(p_,encoding="ascii",errors="replace")]
+            if ackr("st-plan-cut") and ackr("st-plan-cut")["result"]=="accepted" and not any(",PLAN_CLOSE," in l for l in acts): fail("selftest: plan cut accepted but no PLAN_CLOSE action row")
+            if ackr("st-plan-bank") and ackr("st-plan-bank")["result"]=="accepted" and not any(",PLAN_BANK," in l for l in acts): fail("selftest: close_part accepted but no PLAN_BANK action row")
+        ia=[x for t,x in acks.items() if re.fullmatch(r"st-\d+-approve-plan-inv",t)]
+        if not ia: warn("selftest: inverse plan not exercised (no free signal after the plan scenario)")
+        for x in ia:
+            if x["result"]!="accepted": info.append(f"inverse plan #{x['signal_id']}: {x['result']} - {x['reason']}"); continue
+            sid=str(x["signal_id"]); row=next((r for r in all_rows if r.get("signal_id")==sid and (r.get("entry_mode") or "").startswith("plan_")),None)
+            sig=sigs.get(int(sid)) or {}
+            if not row or not row.get("entry_mode","").endswith("_inv"): fail(f"selftest: inverse plan #{sid} accepted but its journal row is not *_inv ({row and row.get('entry_mode')})")
+            elif sig and row.get("direction")==sig.get("direction"): fail(f"selftest: inverse plan #{sid} journaled in the signal's own direction {row.get('direction')}")
+            chk=[l for l in open(ap_,encoding="ascii",errors="replace") if "|plan_inv_check|" in l and f"sig:{sid} " in l]
+            if not chk: warn(f"selftest: inverse plan #{sid} mirror check not reached (closed first?)")
+            elif "|ok|" not in chk[-1]: fail(f"selftest: inverse plan mirror check: {chk[-1].strip()[:200]}")
+            else: info.append(f"inverse plan #{sid}: mirror check ok ({row.get('direction')} vs signal {sig.get('direction')})")
+        # a plan row is never an Inverse parent (coordinator 2026-10-12): no `inverse ... published` line for a plan signal
+        plan_sids={str(x["signal_id"]) for x in pa+ia if x["result"]=="accepted"}
+        for l in open(ap_,encoding="ascii",errors="replace"):
+            f=l.rstrip("\r\n").split("|")
+            if len(f)==9 and f[2]=="inverse" and f[6]=="published" and f[5].startswith("sig:") and f[5][4:] in plan_sids:
+                fail(f"selftest: an Inverse was published for plan signal {f[5]}")
+        pv={v_:sum(1 for x in acks.values() if x["verb"]==v_) for v_ in ("plan_add","set_sl","close_part")}
+        info.append(f"selftest plan verbs acked: {pv}")
     # --- report ---
     print("== live_queue_check ==")
     for m in info: print("  ",m)
