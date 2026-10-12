@@ -1058,6 +1058,14 @@ def _sp_presets(s: dict) -> list[dict]:
     return out
 
 
+def _plan_layout_safe(s: dict, key: str, head: list) -> list | None:
+    try: return signal_plan_layout(s, key, head)
+    except Exception as e:
+        try: LOG(f"plan layout failed for {key}: {e!r} - the old Decide card is shown")
+        except Exception: pass
+        return None
+
+
 def signal_plan_layout(s: dict, key: str, head: list) -> list:
     """the open signal as the Practice card: left = chart, facts, the full news, the group, FTMO room, correlation; right = the advisor
     and the plan builder, then skip / delay."""
@@ -1178,10 +1186,11 @@ def signal_page(key: str, q: dict) -> str:
                    '<div style="margin-top:8px"><button class="btn go" style="width:100%">ARM INVERSE</button></div></form>'
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
                    + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form></div>')
-    elif is_open and plans_on():
+    elif is_open and plans_on() and (plan_out := _plan_layout_safe(s, key, out[:hdr_n])):
         # trader 2026-10-12 (docs/live_plans.md): the Practice card on a live signal - chart, facts, the full news, the advisor, the FTMO
-        # room / correlation, and the lever builder; approving sends the plan (live/plan_live.py runs it)
-        out = signal_plan_layout(s, key, out[:hdr_n])
+        # room / correlation, and the lever builder; approving sends the plan (live/plan_live.py runs it). A render error falls back to
+        # the old Decide card below - a page bug must never take away approve / skip / delay.
+        out = plan_out
     elif is_open:
         modes = s.get("entry_modes") or ["market"]
         out.append(f'<div class="card"><h2>Decide</h2><form method="post" action="/task"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="approve">'
