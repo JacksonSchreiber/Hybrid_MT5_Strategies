@@ -1092,7 +1092,9 @@ def signal_page(key: str, q: dict) -> str:
                    + (('<div style="margin-top:8px"><span class="k">Size (market entries):</span> <select name="size">'
                        '<option value="staged" selected>Staged - 25% now, the rest at the bar-6 close (default)</option>'
                        '<option value="full">Full now - the whole ruled size at once</option></select></div>')
-                      if float((sz.get("lots") or 0)) >= 0.02 else '<input type="hidden" name="size" value="staged">')
+                      if _f_live("staged_entry") and float((sz.get("lots") or 0)) >= 0.02 else '<input type="hidden" name="size" value="staged">'
+                      if _f_live("staged_entry") else   # trader 2026-10-09: staged entry off -> every position 100% at entry, no size choice
+                      '<div class="k" style="margin-top:8px">Size: 100% at entry (staged entry and the +1.5R add are off)</div><input type="hidden" name="size" value="full">')
                    + '<div style="margin-top:8px"><button class="btn go" style="width:100%">APPROVE</button></div></form>'
                    f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code">'
                    + "".join(f'<option value="{k}">{k}  {E(v)}</option>' for k, v in C.SKIP_REASONS.items()) + '</select><div style="margin-top:8px"><button class="btn no" style="width:100%">SKIP</button></div></form>'

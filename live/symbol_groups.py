@@ -29,10 +29,11 @@ GROUPS = [
 
 # trader 2026-10-04: every trade screen labels the symbol with its group, and shows the group's brief strategy (+ advice where
 # the trader gave one). Only the commodity bloc has its own management so far; every other group runs the standard stack.
-STANDARD = "Standard management: 25% at the signal, the rest at the 6th H4 bar close; bank at +1R, +50% at +1.5R."
+# trader 2026-10-09: staged entry and the +1.5R pyramid add are off - every position is 100% at entry for its whole life.
+STANDARD = "Standard management: 100% at the signal (no staged entry, no +1.5R add); bank at +1R."
 STRATEGY = {
-    "com": "Commodity-bloc T+L1.0: 25% at the signal. At the 6th H4 bar close (~24h of trading) everything is closed unless "
-           "+1.5R was reached; survivors get the add, and at +1.5R every stop moves to +1R. A-grade setups only.",
+    "com": "Commodity-bloc T+L1.0: 100% at the signal. At the 6th H4 bar close (~24h of trading) the trade is closed unless "
+           "+1.5R was reached, and at +1.5R the stop moves to +1R. A-grade setups only.",
 }
 ADVICE = {
     "com": "Slow commodity-bloc trades are dead trades. Winners win fast or not at all - ruthlessly cut negative or slow trades "
