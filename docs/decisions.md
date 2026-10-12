@@ -55,3 +55,20 @@ All user-approved decisions, newest first.
 - **Coach flags:** a custom plan overrides the doctrine per trade (v2 bank, bloc T+L1.0, shorts raise are only the preloaded
   default); live fills lag Practice by a poll (seconds) and round to the lot step; plan rows' journal R is per leg (weight by
   lots / full_lots, as staged adds).
+
+## 2026-10-12 — A refused approve retries, stays open, and says why (trader: "yes let's do that ... make sure the error actually is descriptive")
+
+- **Trigger:** US500 #6 was approved with a plan at 22:24 UTC. The broker refused the market buy with 10021 "no quotes",
+  24 minutes after US indices reopened from their daily break, with 1-4 price updates a minute. The EA had consumed the
+  signal (approved, no position), so it could not be approved again.
+- **Now:**
+  - *Retries:* the EA retries the broker's "try again" answers for about 8 s (live only; the tester is unchanged).
+  - *Stays open:* if every attempt fails, the signal stays OPEN and can be approved again (no journal row, nothing decided).
+  - *Says why:* the web page, Telegram and the plan log say in plain words what the broker said, what the market looked
+    like, what was tried and what to do. The refused plan is preloaded for the next try.
+  - *1% rule:* a retry never re-sends at a stop distance more than 1.05x the sized risk.
+- **Verification:** EA gate chain PASS (tester parity byte-identical on both builds; the live self-test adds a synthetic
+  refusal that fills on the retry, plus a refusal on every attempt that leaves signal #5 open, then re-approved).
+- **Coach flag:** a refused-then-re-approved signal journals once, at the fill that happened. The refusal itself lives in the
+  audit log (`order_retry`, `order_failed_open`), not in the journal.
+

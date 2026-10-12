@@ -562,6 +562,18 @@ bool     g_plan_on=false;         // live approve params.plan=1 (docs/live_plans
 double   g_plan_pct=100.0;        // params.entry_pct: first position as % of the ruled lots (1-100)
 bool     g_plan_tp2=true;         // params.tp2: false = no broker TP on the order
 bool     g_plan_inv=false;        // params.inverse: the candidate was mirrored round its entry before validation
+//--- live order retries + a refused approve keeps its signal open (trader 2026-10-12): set by OrderSendRetry / CommitDecision,
+//--- read by the approve handler and WriteAck. The tester sends once and never rolls back (parity).
+int      g_of_n=0;                // attempts the last failed send made (0 = no failure recorded for this task)
+uint     g_of_rc=0;               // the broker's retcode on the last attempt
+string   g_of_broker="";          // the broker's own comment on the last attempt (printable ASCII)
+string   g_of_stop="";            // why the retries stopped early: price_through_sl / past_target / moved_<x>R ("" = none)
+double   g_of_secs=0.0, g_of_bid=0.0, g_of_ask=0.0, g_of_spread_r=0.0;
+int      g_of_tick_age=-1, g_of_ticks_1m=-1, g_of_gap_min=-1, g_of_reopen_min=-1;
+int      g_of_tries_ok=1;         // attempts the last successful send took
+bool     g_of_rolled=false;       // CommitDecision dropped the refused approve's row: nothing traded, the signal stays open
+bool     g_of_open=false;         // the approve handler kept the signal open after a refusal (ack refs.signal_open)
+int      g_st_fail_k=0;           // TESTER self-test only (params.selftest_fail): the first K sends return a synthetic 10021
 int      g_promote_sid=0;         // coach item 22: the signal whose staged add is promoted NOW by the trader
 string   g_promote_note="";
 double   g_cfg_st_f0=0.25;        // live.json staged_first_frac: first tranche share of the ruled lots
@@ -2796,6 +2808,14 @@ void WriteAck(string task_id,string verb,string target_key,long target_id,string
    j.KInt(target_key,target_id); j.KStr("result",result); j.KStr("reason",reason); j.KTime("executed_at",LiveNow());
    j.Key("refs"); j.BeginObj();
    if(row_idx<0 && verb=="test_signal" && g_live_parked) j.KInt("signal_id",g_park.sid);   // the synthetic signal just published
+   if(verb=="approve" && row_idx<0 && g_of_n>0)
+     {   //--- trader 2026-10-12: a broker refusal says what the market looked like, so the web app can explain it
+      j.KInt("signal_id",target_id); j.KInt("retcode",(long)g_of_rc); j.KStr("broker",g_of_broker); j.KInt("attempts",g_of_n);
+      j.KNum("secs",g_of_secs,1); j.KNum("bid",g_of_bid,_Digits); j.KNum("ask",g_of_ask,_Digits); j.KNum("spread_r",g_of_spread_r,3);
+      j.KInt("tick_age_s",g_of_tick_age); j.KInt("ticks_1m",g_of_ticks_1m); j.KInt("gap_min",g_of_gap_min); j.KInt("reopen_min",g_of_reopen_min);
+      j.KStr("stopped",g_of_stop); j.KInt("signal_open",(g_of_open ? 1 : 0));
+     }
+   if(verb=="approve" && row_idx>=0 && g_of_tries_ok>1) j.KInt("attempts",g_of_tries_ok);
    if(row_idx>=0)
      { j.KInt("signal_id",g_rows[row_idx].id); j.KInt("posid",g_rows[row_idx].posid); j.KInt("order_ticket",g_rows[row_idx].order_ticket);
        j.KNum("lots",g_rows[row_idx].lots,2); j.KStr("decision",g_rows[row_idx].decision); j.KNum("entry",g_rows[row_idx].entry,_Digits);
@@ -2968,6 +2988,7 @@ string PlanClosePartTask(string &k[],string &v[],string task_id,int idx,string &
 string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string &reason,int &row_idx)
   {
    reason=""; row_idx=-1;
+   g_of_n=0; g_of_tries_ok=1; g_of_open=false; g_of_rolled=false; g_st_fail_k=0;   // per task: WriteAck reads them after this returns
    datetime now=LiveNow();
    //--- signal verbs --------------------------------------------------------
    if(verb=="approve" || verb=="skip" || verb=="delay")
@@ -3083,10 +3104,24 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
         }
       //--- commit exactly as the tester would after an Accept click
       g_plan_on=p_on; g_plan_pct=p_pct; g_plan_tp2=p_tp2; g_plan_inv=p_inv; if(p_inv) g_sig_with_trend=wt_inv;
+      if(InpLiveSelfTest && (bool)MQLInfoInteger(MQL_TESTER)) g_st_fail_k=(int)StringToInteger(JGet(k,v,"params.selftest_fail","0"));
       CommitDecision(sid,cand,caption,o_e,o_sl,o_tp,o_tp1,o_tp2,
                      true,0,DecisionMs(),false,false,entry_mode);
       g_plan_on=false; g_plan_inv=false; g_plan_pct=100.0; g_plan_tp2=true; g_sig_with_trend=wt_saved;
-      g_size_choice="";
+      g_size_choice=""; g_st_fail_k=0;
+      if(g_of_rolled)
+        {   //--- trader 2026-10-12: the broker refused every attempt and nothing traded, so the signal stays OPEN (still parked,
+            //--- no journal row, no state file) and can be approved again. The refusal counts as this bar's response (as a
+            //--- delay does), so the deadline cannot run out at the next bar close. The ack + the signal JSON say why.
+         g_of_rolled=false; g_of_open=true;
+         reason=StringFormat("order_failed:%u",g_of_rc);
+         g_park.explicit_this_bar=true;
+         LiveSaveParked(); ParkStoreCurrent();
+         WriteSignalJson("open",OrderFailNote());
+         AuditLine("order_failed_open",task_id,"approve",StringFormat("sig:%d",sid),"open",reason,OrderFailNote());
+         Print("Signal #",sid," approve REFUSED by the broker (",reason,", ",g_of_n," attempts) - nothing traded, the signal stays open.");
+         row_idx=-1; return "rejected";
+        }
       row_idx=RowIdxBySid(sid);
       if(row_idx>=0 && g_rows[row_idx].decision=="approved" && g_rows[row_idx].posid==0 && g_rows[row_idx].order_ticket==0)
         { WriteSignalJson("approved","order_failed"); LiveUnpark(); reason=StringFormat("order_failed:%d",g_trade.ResultRetcode()); return "rejected"; }
@@ -3561,6 +3596,8 @@ void SelfTestTick()
          else if(kk>=17 && st_plan_state==3 && st_inv_state==0 && !HasActiveOrderOrPosition())   // live custom plan, INVERSE
            { SelfTestWriteTask(StringFormat("st-%d-approve-plan-inv",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\",\"plan\":1,\"inverse\":1,\"entry_pct\":100,\"tp2\":1}");
              st_inv_state=1; st_inv_sid=kk; st_inv_dir0=g_delayed.direction; st_inv_e0=g_delayed.entry; st_inv_sl0=g_delayed.sl; st_sid_done=kk; }
+         else if(kk==1)   // order retry (trader 2026-10-12): the broker refuses the first send (synthetic 10021), the retry fills
+           { SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\",\"selftest_fail\":1}"); st_sid_done=kk; }
          else { SelfTestWriteTask(StringFormat("st-%d-approve",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
         }
       else if(m==2) { SelfTestWriteTask(StringFormat("st-%d-skip",kk),"signal_id",kk,"skip","{\"reason_code\":3}"); st_sid_done=kk; }
@@ -3578,7 +3615,25 @@ void SelfTestTick()
    //--- kill-switch cleanup: once the refused approve is acked, switch ON and approve for real (must be accepted)
    if(!st_kill_restored && g_live_parked && g_park.sid==5 && FileIsExist(LivePath("acks\\st-5-approve-killed.json"),FILE_COMMON))
      { st_kill_restored=true; AtomicWriteText(LivePath("config\\trading_enabled.json"),"{\"trading_enabled\":true}");
-       SelfTestWriteTask("st-5-approve","signal_id",5,"approve","{\"entry_mode\":\"market\"}"); }
+       SelfTestWriteTask("st-5-approve-refused","signal_id",5,"approve","{\"entry_mode\":\"market\",\"selftest_fail\":99}"); }
+   //--- broker refusal (trader 2026-10-12): every attempt of st-5-approve-refused gets a synthetic 10021 -> rejected, and the
+   //--- signal must still be open (parked, no journal row, no row state file, parked_5.json on disk, signal JSON open with
+   //--- the refusal note); then the real approve must be accepted (checked by live_queue_check)
+   static bool st_of_done=false;
+   if(ack_poll && !st_of_done && st_kill_restored && FileIsExist(LivePath("acks\\st-5-approve-refused.json"),FILE_COMMON))
+     {
+      st_of_done=true;
+      string ak=ReadTextFile(LivePath("acks\\st-5-approve-refused.json"));
+      string sj=ReadTextFile(LivePath(StringFormat("signals\\%s-5.json",_Symbol)));
+      bool a1=(StringFind(ak,"\"result\":\"rejected\"")>=0 && StringFind(ak,"\"reason\":\"order_failed:10021\"")>=0
+               && StringFind(ak,"\"signal_open\":1")>=0 && StringFind(ak,"\"attempts\":4")>=0);
+      bool a2=(ParkIndexBySid(5)>=0), a3=(RowIdxBySid(5)<0), a4=!FileIsExist(RowStatePath(5),FILE_COMMON);
+      bool a5=FileIsExist(LivePath(StringFormat("state\\%s\\parked_5.json",_Symbol)),FILE_COMMON);
+      bool a6=(StringFind(sj,"\"status\":\"open\"")>=0 && StringFind(sj,"order_failed:10021")>=0);
+      AuditLine("ofail_check","","","sig:5",((a1&&a2&&a3&&a4&&a5&&a6)?"ok":"FAIL"),"",
+                StringFormat("ack=%d parked=%d no_row=%d no_state=%d parked_file=%d signal_open=%d",(int)a1,(int)a2,(int)a3,(int)a4,(int)a5,(int)a6));
+      SelfTestWriteTask("st-5-approve","signal_id",5,"approve","{\"entry_mode\":\"market\"}");
+     }
    //--- risk_mult cleanup: after the halved approve is acked, restore 1.0 (the multiplier is sizing-only, C2)
    if(ack_poll && !st_mult_restored && FileIsExist(LivePath("acks\\st-13-approve-half.json"),FILE_COMMON))
      { st_mult_restored=true; AtomicWriteText(LivePath("config\\risk_mult.json"),StringFormat("{\"%s\":1.0}",SymbolRoot())); }
@@ -3599,7 +3654,7 @@ void SelfTestTick()
      }
    //--- duplicate task_id: re-issue the FIRST approve after it was acked (expect audit `duplicate`, no 2nd ack/exec)
    if(ack_poll && !st_dup_done && st_sid_done>=1 && FileIsExist(LivePath("acks\\st-1-approve.json"),FILE_COMMON))
-     { st_dup_done=true; SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\"}"); }
+     { st_dup_done=true; SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\",\"selftest_fail\":1}"); }
    //--- live custom plans: the approve's ack decides (refused -> retry on a later signal)
    if(ack_poll && st_plan_state==1)
      { string ap=ReadTextFile(LivePath(StringFormat("acks\\st-%d-approve-plan.json",st_plan_sid)));
@@ -3879,6 +3934,115 @@ void HandleSignal(SignalCandidate &cand)
   }
 
 //+------------------------------------------------------------------+
+//| LIVE order send with retries (trader 2026-10-12, US500 #6 refused  |
+//| "no quotes" 24 min after the index reopen). The broker's "try      |
+//| again" answers are re-sent up to 3 more times over ~8 s; every     |
+//| attempt is audited; a refusal records what the market looked like  |
+//| (spread, tick age, ticks in the last minute, the last session gap) |
+//| so the web app can say WHY. The tester sends exactly once (parity).|
+//+------------------------------------------------------------------+
+bool OrderRetryable(uint rc,bool mkt)
+  {
+   if(rc==TRADE_RETCODE_PRICE_OFF || rc==TRADE_RETCODE_REQUOTE || rc==TRADE_RETCODE_PRICE_CHANGED
+      || rc==TRADE_RETCODE_CONNECTION || rc==TRADE_RETCODE_TOO_MANY_REQUESTS) return true;
+   //--- timeout / processing error: the request may have reached the broker - market orders only, and only after the
+   //--- by-caption check below finds nothing (never a second position)
+   return (mkt && (rc==TRADE_RETCODE_TIMEOUT || rc==TRADE_RETCODE_ERROR));
+  }
+bool OrderSendOnce(ENUM_ORDER_TYPE ot,double lots,double price,double sl,double tp,string caption)
+  {
+   switch(ot)
+     {
+      case ORDER_TYPE_BUY:        return g_trade.Buy (lots,_Symbol,0.0,sl,tp,caption);
+      case ORDER_TYPE_SELL:       return g_trade.Sell(lots,_Symbol,0.0,sl,tp,caption);
+      case ORDER_TYPE_BUY_LIMIT:  return g_trade.BuyLimit (lots,price,_Symbol,sl,tp,ORDER_TIME_GTC,0,caption);
+      case ORDER_TYPE_BUY_STOP:   return g_trade.BuyStop  (lots,price,_Symbol,sl,tp,ORDER_TIME_GTC,0,caption);
+      case ORDER_TYPE_SELL_LIMIT: return g_trade.SellLimit(lots,price,_Symbol,sl,tp,ORDER_TIME_GTC,0,caption);
+      case ORDER_TYPE_SELL_STOP:  return g_trade.SellStop (lots,price,_Symbol,sl,tp,ORDER_TIME_GTC,0,caption);
+     }
+   return false;
+  }
+//--- a position of ours carrying this signal's caption (an attempt that timed out but did reach the broker)
+bool OrderLandedByCaption(int sid)
+  {
+   for(int p=PositionsTotal()-1;p>=0;p--)
+     {
+      ulong tk=PositionGetTicket(p); if(tk==0) continue;
+      if(PositionGetString(POSITION_SYMBOL)!=_Symbol || PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT),StringFormat("Signal #%d ",sid))==0) return true;
+     }
+   return false;
+  }
+void OrderFailContext(double risk0)
+  {
+   MqlTick tk; ZeroMemory(tk);
+   bool have=SymbolInfoTick(_Symbol,tk);
+   g_of_bid=(have ? tk.bid : 0.0); g_of_ask=(have ? tk.ask : 0.0);
+   g_of_spread_r=(risk0>0.0 && g_of_bid>0.0 && g_of_ask>g_of_bid ? (g_of_ask-g_of_bid)/risk0 : 0.0);
+   datetime srv=TimeTradeServer();
+   g_of_tick_age=(have && tk.time>0 ? (int)MathMax(0,(long)(srv-tk.time)) : -1);
+   g_of_ticks_1m=(int)iTickVolume(_Symbol,PERIOD_M1,1);            // the last full minute's price updates
+   g_of_gap_min=-1; g_of_reopen_min=-1;                             // the newest pause of 15+ min between M1 bars (3 h back)
+   datetime tm[]; int nb=CopyTime(_Symbol,PERIOD_M1,0,180,tm);
+   for(int i=nb-1;i>=1;i--)
+      if(tm[i]-tm[i-1]>=15*60){ g_of_gap_min=(int)((tm[i]-tm[i-1])/60); g_of_reopen_min=(int)MathMax(0,(long)(srv-tm[i])/60); break; }
+  }
+string OrderFailNote()
+  {
+   return StringFormat("order_failed:%u attempts=%d secs=%.1f spread_r=%.3f tick_age_s=%d ticks_1m=%d gap_min=%d reopen_min=%d stop=%s broker=%s",
+                       g_of_rc,g_of_n,g_of_secs,g_of_spread_r,g_of_tick_age,g_of_ticks_1m,g_of_gap_min,g_of_reopen_min,
+                       (g_of_stop=="" ? "-" : g_of_stop),g_of_broker);
+  }
+bool OrderSendRetry(ENUM_ORDER_TYPE ot,double lots,double price,double sl,double tp,string caption,int sid,double risk0)
+  {
+   bool live=(InpLiveMode && !(bool)MQLInfoInteger(MQL_TESTER));
+   bool st=(InpLiveMode && g_st_fail_k>0 && (bool)MQLInfoInteger(MQL_TESTER));
+   bool mkt=(ot==ORDER_TYPE_BUY || ot==ORDER_TYPE_SELL);
+   int maxn=((live || st) ? 4 : 1);
+   uint t0=GetTickCount();
+   g_of_n=0; g_of_stop=""; g_of_tries_ok=1;
+   for(int a=1;;a++)
+     {
+      bool fake=(st && a<=g_st_fail_k);
+      bool ok=(fake ? false : OrderSendOnce(ot,lots,price,sl,tp,caption));
+      uint rc=(fake ? (uint)TRADE_RETCODE_PRICE_OFF : g_trade.ResultRetcode());
+      if(ok)
+        {
+         g_of_tries_ok=a;
+         if(a>1 && InpLiveMode) AuditLine("order_retry","","approve",StringFormat("sig:%d",sid),"ok","",StringFormat("filled on attempt %d of %d",a,maxn));
+         return true;
+        }
+      g_of_n=a; g_of_rc=rc;
+      g_of_broker=(fake ? "selftest synthetic refusal" : CsvSafe(g_trade.ResultComment()));
+      if(InpLiveMode)
+         AuditLine("order_retry","","approve",StringFormat("sig:%d",sid),"failed",StringFormat("order_failed:%u",rc),
+                   StringFormat("attempt %d of %d broker=%s bid=%s ask=%s",a,maxn,g_of_broker,
+                                DoubleToString(SymbolInfoDouble(_Symbol,SYMBOL_BID),_Digits),DoubleToString(SymbolInfoDouble(_Symbol,SYMBOL_ASK),_Digits)));
+      if(a>=maxn || !OrderRetryable(rc,mkt)) break;
+      if(live) Sleep(a==1 ? 2000 : 3000);
+      if(mkt && OrderLandedByCaption(sid))
+        {   //--- an earlier attempt did reach the broker: bind that position (the fill binder's by-comment fallback), never send twice
+         g_of_tries_ok=a;
+         AuditLine("order_retry","","approve",StringFormat("sig:%d",sid),"ok","landed",StringFormat("attempt %d had reached the broker",a));
+         return true;
+        }
+      if(mkt)
+        {   //--- the retry must still be the trade that was sized: not through the stop, not past the target, risk within 1.05x
+         double px=(ot==ORDER_TYPE_BUY ? SymbolInfoDouble(_Symbol,SYMBOL_ASK) : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         if(px>0.0)
+           {
+            if(ot==ORDER_TYPE_BUY ? px<=sl : px>=sl){ g_of_stop="price_through_sl"; break; }
+            if(tp>0.0 && (ot==ORDER_TYPE_BUY ? px>=tp : px<=tp)){ g_of_stop="past_target"; break; }
+            if(risk0>0.0 && MathAbs(px-sl)>1.05*risk0){ g_of_stop=StringFormat("moved_%.2fR",MathAbs(px-sl)/risk0-1.0); break; }
+           }
+        }
+     }
+   g_of_secs=(GetTickCount()-t0)/1000.0;
+   if(InpLiveMode) OrderFailContext(risk0);
+   return false;
+  }
+
+//+------------------------------------------------------------------+
 //| COMMIT half of HandleSignal, extracted VERBATIM (Phase 3 M1 Slice 2)  |
 //| so the live task consumer can resume a PARKED signal on a later     |
 //| timer tick with exactly the code the tester runs: edit-detect ->    |
@@ -3891,7 +4055,10 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                     bool approved,int skip_reason,long decision_ms,bool entry_edited,bool want_inv,
                     string entry_mode)
   {
-   if(g_delay_count>0 && approved) WriteDelayLog(id,g_delay_count,cand,entry_mode);   // journal the final entry mode
+   //--- live: written once the approve is known to stand (a broker refusal rolls it back - trader 2026-10-12)
+   bool dl_defer=(InpLiveMode && g_delay_count>0 && approved); SignalCandidate cand_dl=cand;
+   g_of_rolled=false;
+   if(g_delay_count>0 && approved && !dl_defer) WriteDelayLog(id,g_delay_count,cand,entry_mode);   // journal the final entry mode
    //--- decision resolved to a FADE or SKIP (not delay, not inverse): drop the orange
    //--- INVERSE preview lines so they never linger on a chart where a graded fade is
    //--- now open (would read as live orders). Kept when INVERSE was chosen - there the
@@ -3974,6 +4141,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
       //--- took-inverse); the inverse trade lives ONLY in the isolated .inv journal.
       //--- No graded position -> no one-setup lock, no graded R. Schema byte-identical.
       g_rows[n].decision="skip"; g_rows[n].skip_reason=7;
+      if(dl_defer) WriteDelayLog(id,g_delay_count,cand_dl,entry_mode);
       WriteJournal(g_journal_part);
       PlaceInverse(id,cand);
       return;
@@ -3986,6 +4154,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
       InverseParseComment(cand.comment,g_rows[n].inv_parent_sid,g_rows[n].inv_parent_posid,g_rows[n].inv_parent_strategy);
       if(InpLiveMode) AuditLine("inverse_armed","","approve",StringFormat("sig:%d",id),"ok","",
                                 StringFormat("parent=#%d posid=%I64d stop-entry %s",g_rows[n].inv_parent_sid,g_rows[n].inv_parent_posid,DoubleToString(cand.entry,_Digits)));
+      if(dl_defer) WriteDelayLog(id,g_delay_count,cand_dl,entry_mode);
       WriteJournal(g_journal_part);
       return;
      }
@@ -4068,9 +4237,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                if(first>=vmn-1e-9 && (lots-first)>=vmn-1e-9)
                  { staged=true; lots=NormalizeDouble(first,2); g_rows[n].lots=lots; }
               }
-            bool ok=(cand.direction>0)
-                    ? g_trade.Buy(lots,_Symbol,0.0,cand.sl,order_tp,caption)
-                    : g_trade.Sell(lots,_Symbol,0.0,cand.sl,order_tp,caption);
+            bool ok=OrderSendRetry(cand.direction>0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,lots,0.0,cand.sl,order_tp,caption,id,MathAbs(cand.entry-cand.sl));
             if(ok)
               {
                ulong deal=g_trade.ResultDeal();
@@ -4119,8 +4286,11 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                      (two_target?"  [scale-out TP1/TP2]":"  [single TP]"));
               }
             else
+              {
                Print("Signal #",id," order FAILED: ",g_trade.ResultRetcode()," ",
                      g_trade.ResultRetcodeDescription());
+               if(InpLiveMode) g_of_rolled=true;   // trader 2026-10-12: rolled back at the end - the signal stays open
+              }
            }
          else
            {
@@ -4129,14 +4299,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
             ENUM_ORDER_TYPE ot;
             if(cand.direction>0) ot=(pend_price<mkt? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_BUY_STOP);
             else                 ot=(pend_price>mkt? ORDER_TYPE_SELL_LIMIT: ORDER_TYPE_SELL_STOP);
-            bool ok=false;
-            switch(ot)
-              {
-               case ORDER_TYPE_BUY_LIMIT:  ok=g_trade.BuyLimit (lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
-               case ORDER_TYPE_BUY_STOP:   ok=g_trade.BuyStop  (lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
-               case ORDER_TYPE_SELL_LIMIT: ok=g_trade.SellLimit(lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
-               case ORDER_TYPE_SELL_STOP:  ok=g_trade.SellStop (lots,pend_price,_Symbol,cand.sl,order_tp,ORDER_TIME_GTC,0,caption); break;
-              }
+            bool ok=OrderSendRetry(ot,lots,pend_price,cand.sl,order_tp,caption,id,MathAbs(pend_price-cand.sl));
             if(ok)
               {
                g_rows[n].is_pending=true;
@@ -4151,8 +4314,11 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                      " ticket=",g_rows[n].order_ticket," (expires in ",InpPendingExpiryBars," H4 bars)");
               }
             else
+              {
                Print("Signal #",id," pending ",OrderTypeName(ot)," FAILED: ",g_trade.ResultRetcode(),
                      " ",g_trade.ResultRetcodeDescription());
+               if(InpLiveMode) g_of_rolled=true;   // trader 2026-10-12: rolled back at the end - the signal stays open
+              }
            }
         }
      }
@@ -4164,6 +4330,14 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
             ", decided in ",decision_ms," ms)");
      }
 
+   if(g_of_rolled && n==ArraySize(g_rows)-1 && g_rows[n].posid==0 && g_rows[n].order_ticket==0)
+     {   //--- live (trader 2026-10-12): the broker refused every attempt - nothing traded, so nothing is decided. The row is
+         //--- dropped before it is journaled or saved, and the approve handler keeps the signal open for another try.
+      ArrayResize(g_rows,n);
+      return;
+     }
+   g_of_rolled=false;
+   if(dl_defer) WriteDelayLog(id,g_delay_count,cand_dl,entry_mode);
    WriteJournal(g_journal_part);
   }
 

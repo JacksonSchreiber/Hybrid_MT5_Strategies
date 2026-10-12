@@ -99,7 +99,8 @@ class Monitor:
             if a.get("result") == "accepted":
                 if a.get("verb") == "approve":
                     kind = "PENDING ORDER placed" if refs.get("entry_mode", "").startswith("pending") else "FILLED"
-                    self.send(f"{kind}: {tgt} {a['symbol']} {refs.get('lots')} lots · posid {refs.get('posid')} ticket {refs.get('order_ticket')} · SL {refs.get('sl')} TP {refs.get('tp')}")
+                    self.send(f"{kind}: {tgt} {a['symbol']} {refs.get('lots')} lots · posid {refs.get('posid')} ticket {refs.get('order_ticket')} · SL {refs.get('sl')} TP {refs.get('tp')}"
+                              + (f" (the broker refused the first {int(refs['attempts']) - 1} attempt(s); filled on attempt {refs['attempts']})" if refs.get("attempts") else ""))
                 elif a.get("verb") == "cancel_pending":
                     self.send(f"PENDING ORDER CANCELLED by you: #{a.get('signal_id')} {a['symbol']} (order ticket {refs.get('order_ticket')})")
                 elif a.get("verb") == "test_signal":
@@ -112,6 +113,8 @@ class Monitor:
                     self.send(f"PLAN BANK: {tgt} {a['symbol']} · {refs.get('pos_volume')} lots left")
             elif a.get("verb") == "set_sl" and str(a.get("reason", "")).startswith(("sl_through_price", "would_loosen")):
                 pass                                        # the plan runner handles these itself (closes the leg / keeps the stop)
+            elif a.get("verb") == "approve" and str(a.get("reason", "")).startswith("order_failed"):   # trader 2026-10-12: why, in words
+                self.send(f"ORDER NOT FILLED: approve {tgt} {a['symbol']} — {C.order_fail_text(a.get('reason'), a.get('refs'), a['symbol'])}\n{self.base}/signal/{a['symbol']}-{a.get('signal_id')}")
             else:
                 self.send(f"TASK {a.get('result', '').upper()}: {a.get('verb')} {tgt} {a['symbol']} — {C.reason_text(a.get('reason'))}")
         self.st["acks"] = sorted(seen)[-2000:]

@@ -82,6 +82,29 @@ the Telegram task line — runs it through `common.reason_text()`, which appends
 `order_failed:10018 (market closed)`. Unknown codes and worded reasons pass through unchanged. New codes go in
 `common.RETCODE`: display-only, no EA change and no journal change.
 
+**A refused approve (trader 2026-10-12, after US500 #6 `order_failed:10021` 24 min after the index reopen).**
+- *Retries (live only; the tester sends once):* the EA re-sends the broker's "try again" answers up to 3 more times,
+  2 s, then 3 s, then 3 s apart (about 8 s in all). These are 10004 requote, 10020 price changed, 10021 no quotes,
+  10024 too many requests and 10031 no connection.
+  - 10011 and 10012 are retried on market orders only, and only after a check that no position of ours already carries
+    the signal's caption (a timed-out request may have reached the broker). If one does, it is bound instead of sent again.
+  - A market retry stops early if price is through the stop or past the target, or if the stop distance has grown past
+    1.05x the sized risk (the 1% rule).
+  - Every attempt is audited as `order_retry` (`failed` or `ok`).
+- *The signal stays open:* when every attempt fails, nothing traded, so nothing is decided.
+  - The approve's journal row is dropped before it is written. There is no row state file, and the deferred delay-log
+    line is not written.
+  - The signal stays parked, with `explicit_this_bar` set as for a delay. Its signal JSON stays `open`, with `auto_reason`
+    set to the note `order_failed:<rc> attempts= secs= spread_r= tick_age_s= ticks_1m= gap_min= reopen_min= stop= broker=<text>`.
+  - Audit line: `order_failed_open`.
+  - The ack is `rejected order_failed:<rc>`, and its `refs` carry `retcode, broker, attempts, secs, bid, ask, spread_r,
+    tick_age_s, ticks_1m, gap_min, reopen_min, stopped, signal_open`.
+  - An approve that filled on a retry has `refs.attempts`.
+- *What the trader sees:* the web app, Telegram (`ORDER NOT FILLED`) and the plan log show
+  `common.order_fail_text()`. It says what the broker said, what the market looked like (a recent session reopen, the
+  price updates in the last minute, a stale price, a wide spread), what was tried, and what to do. An open signal whose
+  last approve was refused shows it in a banner, and the plan card preloads the refused plan.
+
 ### Verb × state legality (the EA is the authority; the UI mirrors it)
 
 | verb | requires | re-checked at execution |

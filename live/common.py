@@ -319,6 +319,89 @@ def reason_text(reason) -> str:
     t = RETCODE.get(int(m.group(1)))
     return r if not t else r[:m.end()] + f" ({t})" + r[m.end():]
 
+# --- a refused approve, in words (trader 2026-10-12, after US500 #6 "order_failed:10021": "make sure the error actually is
+# descriptive so i know why its not filling"). The EA retries the broker's "try again" answers for ~8 s, keeps the signal open
+# when every attempt fails, and reports what the market looked like (ack refs / the signal JSON's auto_reason note).
+ORDER_FAIL_WHY = {
+    10004: ("the broker requoted - the price moved while the order was on its way", "again"),
+    10020: ("the price moved while the order was on its way", "again"),
+    10021: ("the broker had no price it would fill at - the market was too thin to quote", "again"),
+    10024: ("too many requests reached the broker at once", "again"),
+    10006: ("the broker's dealer rejected the order", "again"),
+    10011: ("the broker hit an error processing the request", "again"),
+    10012: ("the request timed out at the broker", "again"),
+    10031: ("the box's MT5 had lost its connection to the broker", "connection"),
+    10018: ("the market is closed right now (session break, weekend or holiday)", "open"),
+    10019: ("not enough free margin on the account for this size", "margin"),
+    10014: ("the broker refused the lot size", "fix"),
+    10015: ("the broker refused the order price", "levels"),
+    10016: ("the broker refused the stop or the target - too close to the price", "levels"),
+    10017: ("trading is disabled on this symbol at the broker", "fix"),
+    10026: ("autotrading is disabled on the broker's server", "fix"),
+    10027: ("AutoTrading is switched off in the box's MT5", "terminal"),
+    10030: ("the broker does not accept this fill type on this symbol", "fix"),
+    10034: ("the broker's volume limit for this symbol is reached", "fix"),
+    10040: ("the account's open-position limit is reached", "fix"),
+    10044: ("the broker has this symbol on close-only - no new positions", "fix"),
+}
+ORDER_FAIL_NEXT = {
+    "again": "approve again in a few minutes; a thin market usually fills once a few more prices come in.",
+    "open": "approve again once the market reopens.",
+    "connection": "check the box's MT5 connection, then approve again.",
+    "margin": "free some margin, or skip it.",
+    "levels": "check the levels on the card.",
+    "fix": "this needs a fix on the setup or broker side - flag it.",
+    "terminal": "turn AutoTrading back on in the box's MT5, then approve again.",
+}
+
+def order_fail_info(reason, refs: dict | None = None) -> dict:
+    """'order_failed:10021' + the ack refs, or the signal JSON note 'order_failed:10021 attempts=4 secs=8.1 ... broker=No prices',
+    as one dict (retcode, attempts, secs, spread_r, tick_age_s, ticks_1m, gap_min, reopen_min, stop, broker, signal_open). {} if neither."""
+    m = re.match(r"\s*order_failed:(\d{4,6})(.*)$", str(reason or ""), re.S)
+    if not m: return {}
+    out = {k: v for k, v in (refs or {}).items()}
+    out.setdefault("retcode", int(m.group(1)))
+    tail = m.group(2)
+    if "broker=" in tail:
+        tail, br = tail.split("broker=", 1); out.setdefault("broker", br.strip())
+    for k, v in re.findall(r"(\w+)=(\S+)", tail): out.setdefault(k, v)
+    return out
+
+def order_fail_text(reason, refs: dict | None = None, symbol: str = "", still_open: bool | None = None) -> str:
+    """the refused approve in plain words: what the broker said, what the market looked like, what was tried, what to do."""
+    d = order_fail_info(reason, refs)
+    if not d: return reason_text(reason)
+    def num(k):
+        try: return float(d.get(k))
+        except (TypeError, ValueError): return None
+    rc = int(d["retcode"])
+    why, nxt = ORDER_FAIL_WHY.get(rc, (RETCODE.get(rc, "the broker refused it"), "again"))
+    br = str(d.get("broker") or "").strip()
+    out = [f"Not filled: {why} (broker code {rc}" + (f", \"{br}\"" if br and br not in ("-", "selftest synthetic refusal") else "") + ")."]
+    root = (symbol or "").split(".")[0] or "the market"
+    ctx = []
+    gap, reo = num("gap_min"), num("reopen_min")
+    if gap is not None and reo is not None and gap >= 15 and 0 <= reo <= 90:
+        ctx.append(f"{root} had reopened {int(reo)} min earlier after a {int(gap)}-minute break")
+    t1 = num("ticks_1m")
+    if t1 is not None and 0 <= t1 <= 10:
+        ctx.append("no price updates in the last minute" if int(t1) == 0 else f"only {int(t1)} price update{'' if int(t1) == 1 else 's'} in the last minute")
+    age = num("tick_age_s")
+    if age is not None and age >= 30: ctx.append(f"no new price for {int(age)} s")
+    sp = num("spread_r")
+    if sp is not None and sp >= 0.10: ctx.append(f"the spread was {sp:.2f}R")
+    if ctx: out.append("At the time, " + "; ".join(ctx) + ".")
+    n, secs = num("attempts"), num("secs")
+    if n and n > 1: out.append(f"Tried {int(n)} times over {secs:.0f} s." if secs is not None else f"Tried {int(n)} times.")
+    stp = str(d.get("stop") or d.get("stopped") or "")
+    if stp.startswith("moved_"): out.append(f"Stopped retrying: price had moved away (the stop was {stp[6:]} further than sized), so the trade would have risked more than ruled; approving again re-sizes it.")
+    elif stp == "price_through_sl": out.append("Stopped retrying: price had gone through the stop.")
+    elif stp == "past_target": out.append("Stopped retrying: price had gone past the target.")
+    is_open = still_open if still_open is not None else str(d.get("signal_open", "")) == "1"
+    nx = ORDER_FAIL_NEXT[nxt]
+    out.append("Nothing was opened. " + (f"The signal is still open: {nx}" if is_open else nx[0].upper() + nx[1:]))
+    return " ".join(out)
+
 def row_state(cfg: dict, symbol: str, signal_id) -> dict | None:
     """the EA's own state for a journal row (state/<SYM>/<id>.json): decision, placed_time, order_ticket, posid..."""
     try: sid = int(signal_id)

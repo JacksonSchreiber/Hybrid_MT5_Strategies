@@ -1055,6 +1055,11 @@ def _sp_presets(s: dict) -> list[dict]:
         for pr in BT.menu_view(json.load(open(os.path.join(BT.data_dir(CFG), "menu_v1.json"))))["presets"]:
             out.append({"key": pr["key"], "label": pr["label"] + " (Practice preset)", "about": pr.get("about", ""), "cfg": pr["cfg"]})
     except Exception: pass
+    old = PL.load_plan(CFG, s.get("signal_key", ""))
+    if old and old.get("status") == "refused" and old.get("plan"):   # trader 2026-10-12: the refused plan, ready to approve again
+        out[0]["label"] = "Today's live rules"
+        out.insert(0, {"key": "last", "label": "Your last plan - did not go through (preloaded)" + (" - it was an INVERSE" if old.get("inverse") else ""),
+                       "about": "The plan you approved at " + str(old.get("created_at", ""))[11:16] + " UTC; it did not go through, so nothing was opened.", "cfg": old["plan"]})
     return out
 
 
@@ -1147,7 +1152,9 @@ def signal_page(key: str, q: dict) -> str:
                + (f'<span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span>' if is_open else "") + f'<span class="k">{E(s.get("sigtime_text", ""))} · {E(s.get("session", ""))}</span></div>'
                f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>' + grp_box(s["symbol"]) + signal_parent_line(s))
     out.append(signal_kids(s))
-    if s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
+    if is_open and str(s.get("auto_reason", "")).startswith("order_failed"):   # trader 2026-10-12: a refused approve leaves the signal open
+        out.append(f'<div class="flash bad"><b>Your last approve did not fill.</b> {E(C.order_fail_text(s["auto_reason"], None, s["symbol"], still_open=True))}</div>')
+    elif s.get("auto_reason"): out.append(f'<div class="flash bad">auto: {E(s["auto_reason"])}</div>')
     if s.get("reoffer"): out.append(f'<div class="flash"><span class="pill warn">RE-OFFERED</span> {E(C.reoffer_line(s, CFG))}</div>')   # coach item 26
     hdr_n = len(out)                 # the live plan layout (trader 2026-10-12) rebuilds the page from here
     d = s.get("delay_count", 0)
@@ -1743,6 +1750,9 @@ def settings_page(q: dict) -> str:
     return page("Settings", "".join(out), "settings")
 
 # ----------------------------------------------------------------------------- actions
+APPROVE_ACK_S = 25.0   # the EA retries a refused order for ~8 s (trader 2026-10-12) on top of its <=5 s task poll
+
+
 def signal_plan_post(form: dict) -> dict:
     """trader 2026-10-12: approve an open signal with the plan built on its page (plan_live.approve validates it again and writes the
     approve task + the plan record); waits up to 12 s for the EA's answer."""
@@ -1757,9 +1767,12 @@ def signal_plan_post(form: dict) -> dict:
     ok, msg, rec = PL.approve(CFG, s, plan, form.get("inverse") == "1", em)
     if not ok: return {"ok": False, "error": msg}
     C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan|{key}|preset={form.get('preset', '')}|inverse={form.get('inverse')}|{json.dumps(rec['plan'], separators=(',', ':'))}")
-    a = C.wait_ack(CFG, rec["approve_task"], 12.0)
-    if not a: return {"ok": True, "msg": "plan saved and the approve sent - no answer from the EA within 12 s yet; this page shows it when it comes"}
-    if a.get("result") != "accepted": return {"ok": False, "error": f"the EA refused the approve: {C.reason_text(a.get('reason'))}"}
+    a = C.wait_ack(CFG, rec["approve_task"], APPROVE_ACK_S)
+    if not a: return {"ok": True, "msg": f"plan saved and the approve sent - no answer from the EA within {APPROVE_ACK_S:.0f} s yet; this page shows it when it comes"}
+    if a.get("result") != "accepted":
+        if str(a.get("reason", "")).startswith("order_failed"):   # trader 2026-10-12: why it did not fill, and that the signal is still open
+            return {"ok": False, "error": C.order_fail_text(a.get("reason"), a.get("refs"), s["symbol"])}
+        return {"ok": False, "error": f"the EA refused the approve: {C.reason_text(a.get('reason'))}"}
     refs = a.get("refs") or {}
     return {"ok": True, "msg": f"approved with your plan - {refs.get('lots')} lots" + (" (pending order placed)" if not refs.get("posid") else f", position {refs.get('posid')}") + "; the plan runner takes it from here"}
 
@@ -1813,11 +1826,15 @@ def do_task(form: dict) -> tuple[str, bool, str]:
         return "/settings", False, f"test_signal: {a.get('result')} - {C.reason_text(a.get('reason'))}"
     else:
         return "/", False, "unknown verb"
-    a = C.wait_ack(CFG, tid, 12.0)
-    if not a: return back, False, f"{verb}: task written, no ack within 12 s (EA busy or stopped?) — check again shortly"
+    wait_s = APPROVE_ACK_S if verb == "approve" else 12.0
+    a = C.wait_ack(CFG, tid, wait_s)
+    if not a: return back, False, f"{verb}: task written, no ack within {wait_s:.0f} s (EA busy or stopped?) — check again shortly"
     ok = a.get("result") == "accepted"
     refs = a.get("refs") or {}
-    return back, ok, f"{verb}: {a.get('result')} — {C.reason_text(a.get('reason'))}" + (f" · posid {refs.get('posid')} ticket {refs.get('order_ticket')}" if ok and verb == "approve" else "")
+    if verb == "approve" and not ok and str(a.get("reason", "")).startswith("order_failed"):
+        return back, False, "approve: " + C.order_fail_text(a.get("reason"), refs, a.get("symbol", ""))
+    return back, ok, f"{verb}: {a.get('result')} — {C.reason_text(a.get('reason'))}" + (f" · posid {refs.get('posid')} ticket {refs.get('order_ticket')}" if ok and verb == "approve" else "") \
+        + (f" (filled on attempt {refs.get('attempts')})" if ok and verb == "approve" and refs.get("attempts") else "")
 
 class H(BaseHTTPRequestHandler):
     server_version = "hybrid-live/1"

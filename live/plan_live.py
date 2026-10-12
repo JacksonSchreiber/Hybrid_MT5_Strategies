@@ -330,6 +330,9 @@ def approve(cfg: dict, sig: dict, plan_in: dict, inverse: bool, entry_mode: str)
     try: plan, warn = live_validate(plan_in)
     except ValueError as e: return False, f"plan not valid: {e}", None
     old = load_plan(cfg, sig["signal_key"])
+    if old and old.get("status") == "approving":                     # its approve already refused (a broker refusal leaves the signal
+        a = C.ack(cfg, old.get("approve_task") or "")                # open, 2026-10-12) but the runner has not marked it yet
+        if a and a.get("result") != "accepted": old["status"] = "refused"
     if old and old.get("status") in ("approving", "running"): return False, "this signal already has a running plan", None
     if old:                                                          # an earlier refused attempt: kept beside it
         os.makedirs(os.path.join(plans_dir(cfg), "archive"), exist_ok=True)
@@ -500,7 +503,10 @@ class Runner:
                     rec["status"] = "refused"; logline(rec, "the EA never answered the approve (15 min) - plan closed"); return True
                 return ch
             if a.get("result") != "accepted":
-                rec["status"] = "refused"; logline(rec, f"the EA refused the approve: {C.reason_text(a.get('reason'))}"); return True
+                rsn = a.get("reason")
+                rec["status"] = "refused"
+                logline(rec, C.order_fail_text(rsn, a.get("refs"), sym) if str(rsn or "").startswith("order_failed") else f"the EA refused the approve: {C.reason_text(rsn)}")
+                return True
             pid = self.leg0(rec)
             if not pid:
                 s = C.signal(cfg, rec["signal_key"]) or {}

@@ -312,6 +312,31 @@ def main():
                 fail(f"selftest: an Inverse was published for plan signal {f[5]}")
         pv={v_:sum(1 for x in acks.values() if x["verb"]==v_) for v_ in ("plan_add","set_sl","close_part")}
         info.append(f"selftest plan verbs acked: {pv}")
+    # --- order retries + a refused approve keeps its signal open (trader 2026-10-12) ---
+    if a.expect_selftest:
+        al=[l.rstrip("\r\n") for l in open(ap_,encoding="ascii",errors="replace")]
+        a1=acks.get("st-1-approve")
+        if a1 is None: fail("selftest: no ack for st-1-approve (the order-retry scenario)")
+        elif a1["result"]!="accepted" or int((a1.get("refs") or {}).get("attempts") or 1)!=2:
+            fail(f"selftest: st-1-approve (one synthetic broker refusal) -> {a1['result']}/{a1['reason']} attempts={(a1.get('refs') or {}).get('attempts')} (expected accepted on attempt 2)")
+        elif not any("|order_retry|" in l and "|sig:1|" in l and "filled on attempt 2" in l for l in al): fail("selftest: no `order_retry ... filled on attempt 2` audit line for sig 1")
+        else: info.append("order retry: st-1-approve refused once (synthetic 10021), filled on attempt 2")
+        ar=acks.get("st-5-approve-refused")
+        if ar is None: warn("selftest: broker-refusal scenario not exercised (signal 5 not published?)")
+        else:
+            rf=ar.get("refs") or {}
+            if ar["result"]!="rejected" or ar["reason"]!="order_failed:10021": fail(f"selftest: st-5-approve-refused -> {ar['result']}/{ar['reason']} (expected rejected/order_failed:10021)")
+            if rf.get("signal_open")!=1 or rf.get("attempts")!=4: fail(f"selftest: st-5-approve-refused refs signal_open={rf.get('signal_open')} attempts={rf.get('attempts')} (expected 1 / 4)")
+            n_or=sum(1 for l in al if "|order_retry|" in l and "|sig:5|" in l and "|failed|" in l)
+            if n_or!=4: fail(f"selftest: {n_or} failed order_retry audit lines for sig 5 (expected 4)")
+            ofl=[l for l in al if "|ofail_check|" in l]
+            if not ofl: fail("selftest: no ofail_check audit line (the open-after-refusal assertions never ran)")
+            elif "|ok|" not in ofl[-1]: fail(f"selftest: refused approve did not leave the signal open: {ofl[-1][:200]}")
+            ko=acks.get("st-5-approve")
+            if not ko or ko["result"]!="accepted": fail(f"selftest: the re-approve after the refusal was not accepted ({ko and (ko['result'], ko['reason'])})")
+            r5=[r for r in all_rows if r.get("signal_id")=="5"]
+            if len(r5)!=1 or (r5[0].get("posid") or "0")=="0": fail(f"selftest: signal 5 should have exactly one journal row, with a position ({[(r.get('decision'),r.get('posid')) for r in r5]})")
+            else: info.append(f"broker refusal: #5 refused x4 -> still open -> re-approved, position {r5[0].get('posid')}")
     # --- report ---
     print("== live_queue_check ==")
     for m in info: print("  ",m)
