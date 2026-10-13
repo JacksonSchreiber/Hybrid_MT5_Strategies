@@ -25,12 +25,14 @@
   window.spApp = function () {
     var D = JSON.parse(document.getElementById('sp-data').textContent);
     return {
-      D: D, err: '', busy: false, done: '', inverse: false, entryMode: 'market',
+      D: D, err: '', busy: false, done: '', inverse: false, entryMode: 'market', rv: null, edit: D.mode === 'edit',
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null,
       init: function () {
         var self = this;
-        this.loadPreset(D.presets[0].key); this.hist = [this.snap()]; this.hpos = 0;
+        if (this.edit) this.fromConfig(D.plan, D.ids);       // trader 2026-10-13: editing a running plan - its levers keep their ids
+        else this.loadPreset(D.presets[0].key);
+        this.hist = [this.snap()]; this.hpos = 0;
         this.$nextTick(function () { self.bindSort(); });
         document.addEventListener('keydown', function (e) {
           var path = e.composedPath ? e.composedPath() : [e.target];
@@ -50,18 +52,34 @@
         return { schema: 'levers/v1', entry: { pct: +this.plan.entry }, tp2: !!this.plan.tp2, cap_pct: CAP, trim_to_cap: !!this.plan.trim,
                  levers: this.plan.levers.map(function (l) { var c = clone(l); delete c.id; return c; }) };
       },
-      fromConfig: function (cfg) {
+      fromConfig: function (cfg, ids) {
         this.plan = { entry: cfg.entry.pct, tp2: cfg.tp2 !== false, trim: !!cfg.trim_to_cap,
-                      levers: (cfg.levers || []).map(function (l) { var c = clone(l); c.id = uid(); return c; }) };
+                      levers: (cfg.levers || []).map(function (l, i) { var c = clone(l); c.id = (ids && ids[i]) || uid(); return c; }) };
       },
-      snap: function () { return JSON.stringify(this.toConfig()); },
+      ids: function () { return this.plan.levers.map(function (l) { return l.id; }); },
+      snap: function () { return JSON.stringify({ c: this.toConfig(), ids: this.ids() }); },     // the ids too: an edit keeps each lever's id through undo
       commit: function () {
         var s = this.snap(); if (this.hpos >= 0 && this.hist[this.hpos] === s) return;
         this.hist = this.hist.slice(0, this.hpos + 1); this.hist.push(s); if (this.hist.length > 300) this.hist.shift(); this.hpos = this.hist.length - 1;
-        this.presetSel = ''; this.presetAbout = '';
+        this.presetSel = ''; this.presetAbout = ''; this.rv = null;
       },
-      undo: function () { if (this.hpos <= 0) return; this.hpos--; this.fromConfig(JSON.parse(this.hist[this.hpos])); this.presetSel = ''; this.$nextTick(this.bindSort.bind(this)); },
-      redo: function () { if (this.hpos >= this.hist.length - 1) return; this.hpos++; this.fromConfig(JSON.parse(this.hist[this.hpos])); this.presetSel = ''; this.$nextTick(this.bindSort.bind(this)); },
+      restore: function (s) { var h = JSON.parse(s); this.fromConfig(h.c, h.ids); this.presetSel = ''; this.rv = null; this.$nextTick(this.bindSort.bind(this)); },
+      undo: function () { if (this.hpos <= 0) return; this.hpos--; this.restore(this.hist[this.hpos]); },
+      redo: function () { if (this.hpos >= this.hist.length - 1) return; this.hpos++; this.restore(this.hist[this.hpos]); },
+      // ---------------------------------------------------------------- editing a running plan (trader 2026-10-13)
+      leverState: function (L) { return (D.state && D.state[L.id]) || ''; },
+      editPost: function (preview) {
+        var self = this; if (!self.v.ok || self.busy) return; self.busy = true; self.err = '';
+        var body = new URLSearchParams({ key: D.key, plan: JSON.stringify(self.toConfig()), ids: JSON.stringify(self.ids()), base_rev: String(D.rev), preview: preview ? '1' : '0' });
+        fetch('/plan_edit', { method: 'POST', body: body }).then(function (r) { return r.json(); }).then(function (j) {
+          self.busy = false;
+          if (!j.ok) { self.err = j.error || 'refused'; if (preview) self.rv = null; return; }
+          if (preview) { self.rv = j; return; }
+          self.rv = null; self.done = j.msg; setTimeout(function () { location.reload(); }, 1500);
+        }).catch(function (e) { self.busy = false; self.err = 'network error: ' + e; });
+      },
+      review: function () { this.editPost(true); },
+      save: function () { if (!this.rv) return; this.editPost(false); },
       loadPreset: function (key) {
         var p = D.presets.filter(function (x) { return x.key === key; })[0]; if (!p) return;
         var cfg = clone(p.cfg);

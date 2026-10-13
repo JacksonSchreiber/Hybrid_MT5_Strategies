@@ -35,9 +35,12 @@ def kern_state(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0
          bk_lvl, bk_pct, nbk,
          mv_when, mv_to, mv_legs, mv_src, nmv,
          ad_type, ad_lvl, ad_until, ad_k, ad_early, ad_hold, ad_pct, ad_stop, ad_trade, nad,
-         ct_type, ct_k, ct_thr, nct, ad_wait, ad_cap, ct_ws, tr_on, tr_dist, tr_lower, tr_chk):
+         ct_type, ct_k, ct_thr, nct, ad_wait, ad_cap, ct_ws, tr_on, tr_dist, tr_lower, tr_chk, j0=0, j1=-1, init=None):
     """-> (R of the full ruled position, kind 0 stopped / 1 TP2 / 2 cut / 3 frame end / 4 banked out (everything open was banked:
-    the trade ends that minute), exit minute, gross units entered, banks fired, adds fired, cut index or -1)."""
+    the trade ends that minute), exit minute, gross units entered, banks fired, adds fired, cut index or -1), state.
+    LIVE (a plan edited mid-trade, trader 2026-10-13): minutes j0..j1-1 only, starting from `init` (the previous segment's end state,
+    its per-lever flags already mapped to THIS plan's levers - see plan_live.handoff); a segment that ends before the frame end with
+    the trade still on returns (None, state). j0=0, j1=-1, init=None is kern exactly (pipeline/plan_live_parity.py)."""
     nleg = 1 + nad
     ls = np.zeros(nleg); le = np.zeros(nleg); lst = np.zeros(nleg); alive = np.zeros(nleg, dtype=np.bool_)
     lp = np.zeros(nleg); fxd = np.zeros(nleg, dtype=np.bool_)          # lp: each leg's price in without the spread (risk_cap)
@@ -49,7 +52,23 @@ def kern_state(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0
     tr_hi = -1e18                                      # trail: the highest exit-side price since the last check
     nbf = 0; naf = 0
     src = np.full(nleg, -1, dtype=np.int64); sz0 = np.zeros(nleg)    # LIVE: each leg's add lever and size at creation
-    for j in range(n):
+    if init is not None:                               # LIVE: continue the previous segment - its legs, sizes, stops and totals
+        m0 = int(init["nl"]); nleg = m0 + nad
+        ls = np.zeros(nleg); le = np.zeros(nleg); lst = np.zeros(nleg); alive = np.zeros(nleg, dtype=np.bool_)
+        lp = np.zeros(nleg); fxd = np.zeros(nleg, dtype=np.bool_); src = np.full(nleg, -1, dtype=np.int64); sz0 = np.zeros(nleg)
+        ls[:m0] = init["ls"][:m0]; le[:m0] = init["le"][:m0]; lst[:m0] = init["lst"][:m0]; alive[:m0] = init["alive"][:m0]
+        lp[:m0] = init["lp"][:m0]; src[:m0] = init["src"][:m0]; sz0[:m0] = init["sz0"][:m0]; nl = m0
+        gross = init["gross"]; locked = init["locked"]; tstop = init["tstop"]; cs = init["cs"]; tr_hi = init["tr_hi"]
+        nbf = init["nbf"]; naf = init["naf"]
+        bk_done[:nbk] = init["bk_done"][:nbk]; mv_done[:nmv] = init["mv_done"][:nmv]; ad_done[:nad] = init["ad_done"][:nad]
+        ad_held[:nad] = init["ad_held"][:nad]; ct_hit[:nct] = init["ct_hit"][:nct]; ct_csw[:nct] = init["ct_csw"][:nct]
+    if j1 < 0: j1 = n
+
+    def st():
+        return {"ls": ls, "le": le, "lst": lst, "alive": alive, "lp": lp, "nl": nl, "src": src, "sz0": sz0, "gross": gross, "locked": locked,
+                "tstop": tstop, "cs": cs, "tr_hi": tr_hi, "nbf": nbf, "naf": naf, "bk_done": bk_done, "mv_done": mv_done, "ad_done": ad_done,
+                "ad_held": ad_held, "ct_hit": ct_hit, "ct_csw": ct_csw}
+    for j in range(j0, j1):
         cs += bc[j]; avg = cs / (j + 1)
         for c in range(nct):
             if ct_ws[c] == j: ct_csw[c] = cs
@@ -62,7 +81,7 @@ def kern_state(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0
                 else:
                     anyalive = True
         if not anyalive:
-            return (locked, 0, j, gross, nbf, naf, -1), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done)
+            return (locked, 0, j, gross, nbf, naf, -1), st()
         for c in range(nct):
             if ct_type[c] == 1 and (not ct_hit[c]) and bh[j] >= ct_thr[c]:
                 ct_hit[c] = True
@@ -79,7 +98,7 @@ def kern_state(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0
                         if alive[q] and ls[q] > 1e-12:
                             left = True
                     if not left:
-                        return (locked, 4, j, gross, nbf, naf, -1), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done)
+                        return (locked, 4, j, gross, nbf, naf, -1), st()
         for m in range(nmv):
             if not mv_done[m]:
                 hv = xh[j] if mv_src[m] == 0 else bh[j]
@@ -180,7 +199,7 @@ def kern_state(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0
             for q in range(nl):
                 if alive[q]:
                     v += ls[q] * (tp2_R - le[q])
-            return (v, 1, j, gross, nbf, naf, -1), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done)
+            return (v, 1, j, gross, nbf, naf, -1), st()
         for c in range(nct):
             if j == ct_k[c]:
                 aw = avg if ct_ws[c] < 0 else (cs - ct_csw[c]) / (j - ct_ws[c])          # windowed: the minutes after the window start
@@ -190,7 +209,7 @@ def kern_state(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0
                     for q in range(nl):
                         if alive[q]:
                             v += ls[q] * (xc[j] - le[q])
-                    return (v, 2, j, gross, nbf, naf, c), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done)
+                    return (v, 2, j, gross, nbf, naf, c), st()
         for a in range(nad):
             if ad_type[a] == 1 and (not ad_done[a]) and j == ad_k[a]:
                 if avg < ad_wait[a]:                   # wait_avg: the average is still below it - wait (unset: -NEVER, never waits)
@@ -237,21 +256,217 @@ def kern_state(xo, xh, xl, xc, bo, bh, bc, eo, n, e0, be, tp2_on, tp2_R, cap, F0
             for q in range(nl):
                 if alive[q] and (tv > lst[q] or (tr_lower and tv < lst[q])): lst[q] = tv
             if tv > tstop or tr_lower: tstop = tv
+    if j1 < n: return None, st()
     v = locked
     for q in range(nl):
         if alive[q]:
             v += ls[q] * (xc[n - 1] - le[q])
-    return (v, 3, n - 1, gross, nbf, naf, -1), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done)
+    return (v, 3, n - 1, gross, nbf, naf, -1), st()
 
 
-def run_state(F: dict, ctx: dict, P: dict):
-    """backtest_engine.run with kern_state -> ((R, kind, exit_j, gross, banks, adds, cut), (ls, lst, alive, nl, src, sz0, bk_done,
-    ad_done, mv_done))."""
+def run_state(F: dict, ctx: dict, P: dict, j0: int = 0, j1: int = -1, init: dict | None = None):
+    """backtest_engine.run with kern_state -> ((R, kind, exit_j, gross, banks, adds, cut) or None at a segment end, state dict: ls, lst,
+    alive, nl, src, sz0, bk_done, ad_done, mv_done, ... - kern_state's st())."""
     return kern_state(F["xo"], F["xh"], F["xl"], F["xc"], F["bo"], F["bh"], F["bc"], F["eo"], F["n"], ctx["e0"], ctx["be"],
                       P["tp2_on"], P["tp2_R"], P["cap"], P["F0"], P["bk_lvl"], P["bk_pct"], P["nbk"],
                       P["mv_when"], P["mv_to"], P["mv_legs"], P["mv_src"], P["nmv"],
                       P["ad_type"], P["ad_lvl"], P["ad_until"], P["ad_k"], P["ad_early"], P["ad_hold"], P["ad_pct"], P["ad_stop"], P["ad_trade"], P["nad"],
-                      P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"], P["ad_cap"], P["ct_ws"], P["tr_on"], P["tr_dist"], P["tr_lower"], P["tr_chk"])
+                      P["ct_type"], P["ct_k"], P["ct_thr"], P["nct"], P["ad_wait"], P["ad_cap"], P["ct_ws"], P["tr_on"], P["tr_dist"], P["tr_lower"], P["tr_chk"],
+                      j0, j1, init)
+
+
+# ------------------------------------------------------------------------------------------------------------- plan edits (versions)
+# trader 2026-10-13: "on open trades, i'd like to be able to add stuff/edit/delete stuff to the plan". The runner replays the whole trade
+# from the fill every poll, so an edit is a new VERSION of the plan from its minute: the replay runs version 0 from the fill, hands its
+# end state (legs, sizes, stops, totals) to version 1 at the edit minute, and so on. Each lever has an id (rec["lever_ids"], aligned
+# with rec["plan"]["levers"]; BE.validate drops unknown keys and compile_cfg sorts banks, so the id cannot live in the lever):
+#   - an unchanged lever keeps its id and what it already did (a bank that fired stays fired);
+#   - a changed lever gets a NEW id: it starts fresh from the edit minute (a level touched before the edit does not count);
+#   - a deleted lever is gone, but what it did stays (a moved stop stays where it is - stops never move back, except a trail's 'lower');
+#   - a time that passed before the edit never fires (as a time before the fill); "average R since entry" and "+X R reached" still
+#     look at the whole trade since the fill;
+#   - a new or changed trail runs one check at the edit minute (tightening it applies at once), then every N hours as before.
+def lever_ids(plan: dict, ids: list | None) -> list[str]:
+    n = len(plan.get("levers") or [])
+    return list(ids) if ids and len(ids) == n else [f"l{i}" for i in range(n)]
+
+
+def versions(rec: dict) -> list[dict]:
+    """[{plan, ids, from_t (server epoch of the first minute it runs; None = the fill)}, ...] - one entry until the first edit."""
+    return rec.get("versions") or [{"plan": rec["plan"], "ids": lever_ids(rec["plan"], rec.get("lever_ids")), "from_t": None}]
+
+
+def compile_ids(plan: dict, ids: list[str]) -> dict:
+    """the lever ids in compile_cfg's order per kind: banks by level (stable), moves / adds / cuts in stack order, the trail."""
+    L = list(zip(plan["levers"], ids))
+    return {"bank": [i for c, i in sorted([x for x in L if x[0]["type"] == "bank"], key=lambda x: x[0]["at"])],
+            "move": [i for c, i in L if c["type"] == "move"], "add": [i for c, i in L if c["type"].startswith("add")],
+            "cut": [i for c, i in L if c["type"].startswith("cut")], "trail": [i for c, i in L if c["type"] == "trail"]}
+
+
+def handoff(st: dict, ia: dict, ib: dict, Pb: dict, F: dict, j0: int) -> dict:
+    """the end state of a segment (levers ia) as the init of the next (levers ib, compiled Pb) starting at minute j0: legs and totals
+    carry; each lever's flags carry by id (a new id starts fresh); the cuts' history ("+X reached", a window's start sum) is recomputed
+    from the path, so a cut added later sees the whole trade."""
+    def by_id(arr, a_ids, b_ids, size):
+        out = np.zeros(max(size, 1), dtype=np.bool_)
+        for k, x in enumerate(b_ids):
+            if x in a_ids: out[k] = arr[a_ids.index(x)]
+        return out
+    init = {k: st[k] for k in ("ls", "le", "lst", "alive", "lp", "nl", "src", "sz0", "gross", "locked", "tstop", "cs", "nbf", "naf")}
+    init["bk_done"] = by_id(st["bk_done"], ia["bank"], ib["bank"], Pb["nbk"])
+    init["mv_done"] = by_id(st["mv_done"], ia["move"], ib["move"], Pb["nmv"])
+    init["ad_done"] = by_id(st["ad_done"], ia["add"], ib["add"], Pb["nad"])
+    init["ad_held"] = by_id(st["ad_held"], ia["add"], ib["add"], Pb["nad"])
+    bh = np.asarray(F["bh"][:j0]); csum = np.cumsum(np.asarray(F["bc"], dtype=np.float64)[:j0])
+    nct = Pb["nct"]; hit = np.zeros(max(nct, 1), dtype=np.bool_); csw = np.zeros(max(nct, 1))
+    for c in range(nct):
+        if Pb["ct_type"][c] == 1: hit[c] = bool(j0 > 0 and bh.max() >= Pb["ct_thr"][c])
+        ws = int(Pb["ct_ws"][c])
+        if 0 <= ws < j0: csw[c] = csum[ws]
+    init["ct_hit"] = hit; init["ct_csw"] = csw
+    init["tr_hi"] = st["tr_hi"] if (ia["trail"] and ib["trail"]) else -1e18      # the window's high since the last check carries
+    return init
+
+
+def replay(rec: dict, F: dict, ctx: dict, t0: int, vers: list[dict] | None = None):
+    """the plan over every version -> (res, state, P, vi): res = kern's tuple, P / vi = the version the trade is in (or ended in).
+    Version i runs from the first minute at or after its from_t; a version whose minute is not in the bars yet has not started."""
+    vers = vers or versions(rec); tm = np.asarray(ctx["tm"], dtype=np.int64); n = int(F["n"])
+    segs = []
+    for i, v in enumerate(vers):
+        j0 = 0 if (i == 0 or v.get("from_t") is None) else int(np.searchsorted(tm, (int(v["from_t"]) - t0) // 60, side="left"))
+        if j0 >= n: break
+        if segs and j0 <= segs[-1][1]: segs.pop()                    # two edits in one minute: the later one wins from that minute
+        segs.append((i, j0))
+    st = None; prev = None
+    for k, (i, j0) in enumerate(segs):
+        v = vers[i]; P = BE.compile_cfg(Runner.capped(rec, v["plan"]), ctx); ib = compile_ids(v["plan"], lever_ids(v["plan"], v.get("ids")))
+        init = None
+        if k > 0:
+            ia = prev
+            init = handoff(st, ia, ib, P, F, j0)
+            if ib["trail"] and ib["trail"][0] not in ia["trail"]:   # a new or changed trail: one check at the edit minute
+                P = dict(P, tr_chk=P["tr_chk"].copy()); P["tr_chk"][j0] = True
+        j1 = segs[k + 1][1] if k + 1 < len(segs) else -1
+        res, st = run_state(F, ctx, P, j0, j1, init)
+        if res is not None: return res, st, P, i
+        prev = ib
+    raise RuntimeError("replay: the last segment returned no result")
+
+
+def edit_path(cfg: dict, key: str) -> str: return os.path.join(plans_dir(cfg), "edits", f"{key}.json")
+
+
+def norm_banks(rec: dict) -> None:
+    """executed banks are lever ids since the edits (2026-10-13); an older record kept compile-order indices of its one version."""
+    b = rec.get("banks") or []
+    if any(isinstance(x, int) for x in b):
+        v = versions(rec)[0]; ids = compile_ids(v["plan"], lever_ids(v["plan"], v.get("ids")))["bank"]
+        rec["banks"] = [ids[x] if isinstance(x, int) and 0 <= x < len(ids) else x for x in b]
+
+
+def lever_desc(L: dict) -> str:
+    from live import backtest as BT
+    return BT.describe({"entry": {"pct": 0}, "tp2": True, "levers": [L]}).split("; ", 1)[-1]
+
+
+def lever_state(rec: dict, res, S: dict, P: dict, vi: int, F: dict) -> dict:
+    """{lever id: 'done' / 'holding' / 'time passed'} for the CURRENT version's levers (the page's pills while editing): a one-shot that
+    fired (or carried as fired), an add held at its bar, a cut whose time is behind the trade without firing."""
+    vs = versions(rec)
+    if vi != len(vs) - 1: return {}
+    V = vs[vi]; ci = compile_ids(V["plan"], lever_ids(V["plan"], V.get("ids"))); out = {}; jn = int(F["n"]) - 1
+    for k, x in enumerate(ci["bank"]):
+        if S["bk_done"][k]: out[x] = "done"
+    for k, x in enumerate(ci["move"]):
+        if S["mv_done"][k]: out[x] = "done"
+    for k, x in enumerate(ci["add"]):
+        if S["ad_done"][k]: out[x] = "done"
+        elif S["ad_held"][k]: out[x] = "holding"
+        elif P["ad_type"][k] == 1 and 0 <= int(P["ad_k"][k]) < jn: out[x] = "waiting"
+    for k, x in enumerate(ci["cut"]):
+        if int(P["ct_k"][k]) < jn: out[x] = "time passed"
+    return out
+
+
+def build_edit(rec: dict, plan_in, ids_in, base_rev, from_t: int) -> dict:
+    """the trader's edited plan -> the next version {plan, ids, from_t, rev, about, warnings}; raises ValueError in plain words.
+    Fixed after the entry: the entry %, TP2 on/off (the EA's set_sl never touches the TP) and the size cap."""
+    if rec.get("status") != "running" or rec.get("exit") or not rec.get("fill"): raise ValueError("only a running plan on an open trade can be edited")
+    if base_rev not in (None, "") and int(base_rev) != int(rec.get("rev") or 0): raise ValueError("the plan changed since this page loaded - reload it and edit again")
+    if not isinstance(plan_in, dict): raise ValueError("the plan must be an object")
+    if len(versions(rec)) > 40: raise ValueError("at most 40 edits on one trade")
+    cur = rec["plan"]
+    newp, warn = live_validate(dict(plan_in, entry={"pct": cur["entry"]["pct"]}, tp2=cur["tp2"], cap_pct=cur.get("cap_pct", BE.CAP_DEFAULT)))
+    old_ids = lever_ids(cur, rec.get("lever_ids")); old = dict(zip(old_ids, cur["levers"]))
+    raw = plan_in.get("levers") or []
+    ids_in = ids_in if isinstance(ids_in, list) and len(ids_in) == len(raw) else [None] * len(raw)
+    rev = int(rec.get("rev") or 0) + 1; ids, used, about = [], set(), []
+    for i, L in enumerate(newp["levers"]):
+        cid = ids_in[i] if isinstance(ids_in[i], str) else None
+        if cid in old and cid not in used and old[cid] == L:
+            ids.append(cid); used.add(cid); continue
+        ids.append(f"e{rev}.{i}")
+        if cid in old and cid not in used: used.add(cid); about.append(f"changed: {lever_desc(old[cid])} -> {lever_desc(L)} (starts fresh now)")
+        else: about.append(f"added: {lever_desc(L)}")
+    about += [f"removed: {lever_desc(L)}" for x, L in old.items() if x not in used]
+    if bool(newp.get("trim_to_cap")) != bool(cur.get("trim_to_cap")): about.append("trim adds to fit the cap: " + ("on" if newp.get("trim_to_cap") else "off"))
+    if not about: raise ValueError("nothing changed")
+    return {"plan": newp, "ids": ids, "from_t": int(from_t), "rev": rev, "at": C.now_iso(), "about": about, "warnings": warn}
+
+
+def commit_edit(rec: dict, v: dict, req_id=None) -> None:
+    if not rec.get("versions"): rec["versions"] = versions(rec)
+    rec["versions"].append(v); rec["plan"] = v["plan"]; rec["lever_ids"] = v["ids"]; rec["rev"] = v["rev"]
+    logline(rec, f"plan edited by you (edit {v['rev']}, from this minute): " + "; ".join(v["about"]))
+    rec["edit_last"] = {"id": req_id, "ok": True, "rev": v["rev"], "at": C.now_iso()}
+
+
+def preview_edit(cfg: dict, rec: dict, plan_in, ids_in, base_rev) -> dict:
+    """the web app's dry run: the edit as if applied now -> what the runner would send on its next poll (the same actions() code), the
+    plain-words changes, and warnings (a time already passed never fires). Nothing is written."""
+    import copy
+    from live import mt5feed
+    if rec.get("status") != "running" or not rec.get("fill"): return {"ok": False, "error": "only a running plan on an open trade can be edited"}
+    run = Runner(cfg, log=lambda m: None); r0 = copy.deepcopy(rec); norm_banks(r0)
+    pos = mt5feed.positions(); fr = run.frame_now(r0)
+    if pos is None or not fr: return {"ok": False, "error": "no live prices from the terminal right now - try again in a moment"}
+    bp = {int(x["ticket"]): x for x in pos if x.get("symbol") == rec["symbol"]}
+    try: v = build_edit(r0, plan_in, ids_in, base_rev, fr["now_srv"] - fr["now_srv"] % 60)
+    except ValueError as e: return {"ok": False, "error": str(e)}
+    r1 = copy.deepcopy(r0); commit_edit(r1, v)
+    res, S, P, vi = replay(r1, fr["F"], fr["ctx"], fr["t0"])
+    acts = run.actions(copy.deepcopy(r1), (res, S), P, bp, fr["tk"], fr["spec"], vi)
+    res0, S0, P0, vi0 = replay(r0, fr["F"], fr["ctx"], fr["t0"])
+    acts0 = run.actions(copy.deepcopy(r0), (res0, S0), P0, bp, fr["tk"], fr["spec"], vi0)
+    warn = list(v["warnings"]); jn = int(fr["F"]["n"]) - 1; ci = compile_ids(v["plan"], v["ids"]); fresh = {x for x in v["ids"] if x.startswith(f"e{v['rev']}.")}
+    for k, x in enumerate(ci["cut"]):
+        if x in fresh and int(P["ct_k"][k]) < jn: warn.append(f"{lever_desc(v['plan']['levers'][v['ids'].index(x)])}: that time has passed - it will never fire")
+    for k, x in enumerate(ci["add"]):
+        if x in fresh and P["ad_type"][k] == 1 and 0 <= int(P["ad_k"][k]) < jn: warn.append(f"{lever_desc(v['plan']['levers'][v['ids'].index(x)])}: that bar has closed - it adds only if its wait / early condition still applies")
+    kind = int(res[1])
+    if kind == 0: warn.append("the replay with this plan has every leg stopped - the broker's stops decide from here")
+    return {"ok": True, "about": v["about"], "now": [a["what"] for a in acts], "already": [a["what"] for a in acts0], "warn": warn,
+            "R": round(float(res[0]), 3), "rev": int(rec.get("rev") or 0)}
+
+
+def request_edit(cfg: dict, rec: dict, plan_in, ids_in, base_rev, wait_s: float = 12.0) -> dict:
+    """the web app's save: drop the request for the runner (the record's only writer) and wait for it to be applied."""
+    import uuid
+    if rec.get("status") != "running": return {"ok": False, "error": "only a running plan can be edited"}
+    rid = uuid.uuid4().hex; p = edit_path(cfg, rec["signal_key"]); os.makedirs(os.path.dirname(p), exist_ok=True)
+    C.atomic_write_json(p, {"id": rid, "plan": plan_in, "ids": ids_in, "base_rev": base_rev, "at": C.now_iso()})
+    t_end = time.time() + wait_s
+    while time.time() < t_end:
+        time.sleep(0.5)
+        cur = load_plan(cfg, rec["signal_key"]) or {}
+        e = cur.get("edit_last") or {}
+        if e.get("id") == rid:
+            return {"ok": True, "msg": f"plan updated (edit {e.get('rev')}) - the runner carries it out from this minute"} if e.get("ok") else {"ok": False, "error": e.get("msg") or "refused"}
+    try: os.remove(p)
+    except OSError: pass
+    return {"ok": False, "error": f"the plan runner did not pick the edit up within {wait_s:.0f} s (is the monitor running?) - nothing was changed"}
 
 
 # ------------------------------------------------------------------------------------------------------------- the plan the EA ran
@@ -322,7 +537,7 @@ def new_record(sig: dict, plan: dict, warn: list[str], inverse: bool, entry_mode
     eb = _epoch(sig.get("decision_bar_server") or sig.get("decision_bar"))
     return {"schema": "live-plan/v1", "signal_key": sig["signal_key"], "symbol": sig["symbol"], "signal_id": int(sig["signal_id"]),
             "strategy": sig.get("strategy", ""), "signal_direction": sig.get("direction"), "created_at": C.now_iso(), "status": "approving",
-            "inverse": bool(inverse), "entry_mode": entry_mode, "rbase": "fill", "plan": plan, "warnings": warn,
+            "inverse": bool(inverse), "entry_mode": entry_mode, "rbase": "fill", "plan": plan, "lever_ids": lever_ids(plan, None), "rev": 0, "warnings": warn,
             "card": {"d": d, "e": e, "R": R, "sl": mir(sl), "tp1": mir(lv.get("tp1")) if two else None, "tp2": mir(tp2), "entry_bar_open": eb},
             "full_lots_est": float((sig.get("sizing") or {}).get("lots") or 0), "approve_task": None,
             "legs": [], "banks": [], "exit": None, "pending": {}, "sl_rej": {}, "log": []}
@@ -558,38 +773,66 @@ class Runner:
                 L["status"] = "closed"; ch = True; logline(rec, f"leg {L['q']} (pos {L['posid']}) is closed on the account")
         if all(L["status"] in ("closed", "refused", "skipped") for L in rec["legs"]) and not rec.get("pending"):
             rec["status"] = "done"; logline(rec, "every leg is closed - the plan is finished"); return True
-        tk = mt5feed.tick(sym); spec = self.spec(sym)
-        if not tk or not spec: return ch
-        now_srv = int(tk["t"]); t0 = rec["fill"]["t"] - rec["fill"]["t"] % 60
-        bars = self.m1(rec["signal_key"], sym, t0, now_srv)
-        opens = self.h4_opens(rec["signal_key"], sym, int(rec["card"]["entry_bar_open"]), now_srv)
-        if not bars or opens is None: return ch
-        F, ctx = frame(bars, rec, t0, rec["fill"]["px"], opens)
-        if F["n"] < 1: return ch
-        P = BE.compile_cfg(self.capped(rec), ctx)
-        res = run_state(F, ctx, P)
-        acts = self.actions(rec, res, P, bp, tk, spec)
-        rec["model"] = {"R": round(float(res[0][0]), 3), "kind": int(res[0][1]), "minute": int(res[0][2]), "at": C.now_iso(), "bars": int(F["n"])}
+        fr = self.frame_now(rec)
+        if not fr: return ch
+        if self.apply_edit(rec, fr["now_srv"]): ch = True                # the trader's edit (written by the web app), applied here only
+        norm_banks(rec)
+        res, stt, P, vi = replay(rec, fr["F"], fr["ctx"], fr["t0"])
+        acts = self.actions(rec, (res, stt), P, bp, fr["tk"], fr["spec"], vi)
+        rec["model"] = {"R": round(float(res[0]), 3), "kind": int(res[1]), "minute": int(res[2]), "at": C.now_iso(), "bars": int(fr["F"]["n"])}
+        rec["lever_state"] = lever_state(rec, res, stt, P, vi, fr["F"])
         for x in acts:
             tid = C.write_task(cfg, sym, x["verb"], x["params"], position_id=x["posid"], issued_by="plan")
             rec.setdefault("pending", {})[tid] = {"verb": x["verb"], "posid": x["posid"], "what": x["what"], "at": time.time(), "q": x.get("q"), "sl": x["params"].get("sl")}
             logline(rec, "sent: " + x["what"])
         return True
 
+    def frame_now(self, rec: dict) -> dict | None:
+        """the live path since the fill in the plan's R: {tk, spec, now_srv, t0, F, ctx} (None: the feed is not ready - decide nothing)."""
+        from live import mt5feed
+        sym = rec["symbol"]; tk = mt5feed.tick(sym); spec = self.spec(sym)
+        if not tk or not spec: return None
+        now_srv = int(tk["t"]); t0 = rec["fill"]["t"] - rec["fill"]["t"] % 60
+        bars = self.m1(rec["signal_key"], sym, t0, now_srv)
+        opens = self.h4_opens(rec["signal_key"], sym, int(rec["card"]["entry_bar_open"]), now_srv)
+        if not bars or opens is None: return None
+        F, ctx = frame(bars, rec, t0, rec["fill"]["px"], opens)
+        if F["n"] < 1: return None
+        return {"tk": tk, "spec": spec, "now_srv": now_srv, "t0": t0, "F": F, "ctx": ctx}
+
+    def apply_edit(self, rec: dict, now_srv: int) -> bool:
+        """an edit request from the page (plans/edits/<key>.json): the runner is the only writer of a running record, so the web app drops
+        the request and this applies it - effective from the current minute (server clock)."""
+        p = edit_path(self.cfg, rec["signal_key"])
+        if not os.path.exists(p): return False
+        req = C.load_json(p) or {}
+        try: os.remove(p)
+        except OSError: pass
+        try:
+            v = build_edit(rec, req.get("plan"), req.get("ids"), req.get("base_rev"), now_srv - now_srv % 60)
+        except ValueError as e:
+            rec["edit_last"] = {"id": req.get("id"), "ok": False, "msg": str(e), "at": C.now_iso()}
+            logline(rec, f"plan edit refused: {e}"); return True
+        commit_edit(rec, v, req.get("id"))
+        return True
+
     @staticmethod
-    def capped(rec: dict) -> dict:
+    def capped(rec: dict, plan: dict | None = None) -> dict:
         """the plan with its 1R cap in the EA's terms: the EA measures 1R from the FIRST FILL to the signal stop (full lots x that distance).
         In the fill frame (rbase 'fill') that IS the replay's 1R (ratio 1, the cap as built); a card-frame record replays in the card's R -
         a fill better than the card entry makes the EA's 1R smaller, so the cap shrinks with it (an add the replay fits under the cap must
         also fit under the EA's, which refuses anything over 1R x 1.05)."""
-        cfg = rec["plan"]
+        cfg = plan if plan is not None else rec["plan"]
         if cfg.get("risk_cap") is None or not rec.get("fill"): return cfg
         ratio = abs(float(rec["fill"]["px"]) - float(rec["card"]["sl"])) / rbase(rec)[2]
         if ratio >= 1.0: return cfg
         return dict(cfg, risk_cap=round(min(float(cfg["risk_cap"]), max(0.01, ratio * 0.99)), 4))
 
-    def actions(self, rec: dict, res, P: dict, bp: dict, tk: dict, spec: dict) -> list[dict]:
-        (Rv, kind, jx, gross, nbf, naf, cut), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done) = res
+    def actions(self, rec: dict, res, P: dict, bp: dict, tk: dict, spec: dict, vi: int = -1) -> list[dict]:
+        (Rv, kind, jx, gross, nbf, naf, cut), S = res
+        ls, lst, alive, nl, src, sz0 = S["ls"], S["lst"], S["alive"], S["nl"], S["src"], S["sz0"]
+        bk_done, ad_done, mv_done = S["bk_done"], S["ad_done"], S["mv_done"]
+        V = versions(rec)[vi]; bank_ids = compile_ids(V["plan"], lever_ids(V["plan"], V.get("ids")))["bank"]
         c = rec["card"]; d, e, R = rbase(rec)
         step = spec.get("volume_step") or 0.01; vmin = spec.get("volume_min") or 0.01
         pt = spec.get("point") or 1e-5; dig = int(spec.get("digits") or 5); stops = (spec.get("stops_level") or 0) * pt
@@ -603,9 +846,9 @@ class Runner:
                 out.append({"verb": "close", "posid": int(L["posid"]), "params": {"why": "plan_" + why}, "what": f"close leg {L['q']} (pos {L['posid']}) - {why}"})
         # ---- exits: a cut, or everything banked; then nothing else
         if kind in (2, 4) and not rec.get("exit"):
-            why = ("cut at its time (" + self.cut_text(rec, P, cut) + ")") if kind == 2 else "everything banked"
+            why = ("cut at its time (" + self.cut_text(V["plan"], cut) + ")") if kind == 2 else "everything banked"
             rec["exit"] = {"kind": int(kind), "why": why, "at": C.now_iso()}
-            rec["banks"] = sorted(set(rec.get("banks", [])) | {b for b in range(P["nbk"]) if bk_done[b]})
+            rec["banks"] = sorted(set(rec.get("banks", [])) | {bank_ids[b] for b in range(P["nbk"]) if bk_done[b]})
             for L in open_legs: close(L, why)
             return out
         if rec.get("exit"):
@@ -625,8 +868,8 @@ class Runner:
             return out
         # ---- banks (one-shot, in level order)
         for b in range(P["nbk"]):
-            if not bk_done[b] or b in rec.setdefault("banks", []): continue
-            rec["banks"].append(b); f = float(P["bk_pct"][b]); lvl = float(P["bk_lvl"][b])
+            if not bk_done[b] or bank_ids[b] in rec.setdefault("banks", []): continue
+            rec["banks"].append(bank_ids[b]); f = float(P["bk_pct"][b]); lvl = float(P["bk_lvl"][b])
             for L in open_legs:
                 vol = float(bp[int(L["posid"])]["volume"]); amt = lots(f * vol)
                 if amt < vmin - 1e-9:
@@ -664,8 +907,8 @@ class Runner:
         return out
 
     @staticmethod
-    def cut_text(rec: dict, P: dict, ci: int) -> str:
-        cuts = [x for x in rec["plan"]["levers"] if x["type"].startswith("cut")]
+    def cut_text(plan: dict, ci: int) -> str:
+        cuts = [x for x in plan["levers"] if x["type"].startswith("cut")]
         if not (0 <= ci < len(cuts)): return "a cut"
         x = cuts[ci]
         if x["type"] == "cut_avg": return f"{x['at_h']:g} h, average R below {x['below']:+g}" + (f" over the last {x['window_h']:g} h" if x.get("window_h") else "")

@@ -1460,7 +1460,9 @@ def position_page(key: str, q: dict) -> str:
                f'<div class="k" id="p-flags">{E(pos_flags(p, closed))}</div></div>')
     out.append(position_kids(p))
     prec = PL.load_plan(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
-    if prec and any(int(L.get("posid") or 0) == int(p["posid"]) for L in prec.get("legs", [])): out.append(plan_panel(prec))
+    if prec and any(int(L.get("posid") or 0) == int(p["posid"]) for L in prec.get("legs", [])):
+        out.append(plan_panel(prec))
+        if prec.get("status") == "running" and not prec.get("exit") and not closed: out.append(plan_edit_block(prec, p))   # trader 2026-10-13
     out.append(staged_block(p))
     plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
     if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None,
@@ -1785,6 +1787,41 @@ def signal_plan_post(form: dict) -> dict:
     return {"ok": True, "msg": f"approved with your plan - {refs.get('lots')} lots" + (" (pending order placed)" if not refs.get("posid") else f", position {refs.get('posid')}") + "; the plan runner takes it from here"}
 
 
+def plan_edit_post(form: dict) -> dict:
+    """trader 2026-10-13: "on open trades, i'd like to be able to add stuff/edit/delete stuff to the plan". preview=1: a dry run - what the
+    plan runner would do at once with the edited plan (plan_live.preview_edit); preview=0: hand the edit to the runner (the record's only
+    writer) and wait for it to be applied (plan_live.request_edit)."""
+    key = form.get("key", ""); rec = PL.load_plan(CFG, key)
+    if not rec: return {"ok": False, "error": "no plan for this trade"}
+    try: plan = json.loads(form.get("plan") or ""); ids = json.loads(form.get("ids") or "[]")
+    except ValueError: return {"ok": False, "error": "the plan is not valid JSON"}
+    base = form.get("base_rev")
+    if form.get("preview") == "1": return PL.preview_edit(CFG, rec, plan, ids, base)
+    out = PL.request_edit(CFG, rec, plan, ids, base)
+    C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan_edit|{key}|ok={out.get('ok')}|{json.dumps(plan, separators=(',', ':'))[:3000]}")
+    return out
+
+
+def plan_edit_block(rec: dict, p: dict) -> str:
+    """the plan builder (signal_plan.html, mode 'edit') under a running plan on the position page: the current levers loaded with their
+    ids and state pills; Review shows what would happen at once, Save hands the edit to the runner."""
+    from live import mt5feed
+    try: spec = mt5feed.spec(rec["symbol"]) or {}
+    except Exception: spec = {}
+    data = {"key": rec["signal_key"], "symbol": rec["symbol"], "direction": p.get("direction"), "levels": {}, "lots": float(rec.get("full_lots") or rec.get("full_lots_est") or 0),
+            "step": float(spec.get("volume_step") or 0.01), "vmin": float(spec.get("volume_min") or 0.01), "entry_modes": ["market"], "presets": [],
+            "mode": "edit", "plan": rec["plan"], "ids": PL.lever_ids(rec["plan"], rec.get("lever_ids")), "state": rec.get("lever_state") or {},
+            "rev": int(rec.get("rev") or 0), "rbase": rec.get("rbase") or "card"}
+    v_ = STATIC_V; hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "signal_plan.html")
+    return (f'<link rel="stylesheet" href="/static/vendor/shoelace/themes/dark.css?v={v_}"><link rel="stylesheet" href="/static/backtest.css?v={v_}">'
+            f'<script type="module" src="/static/vendor/shoelace/shoelace-autoloader.js?v={v_}"></script>'
+            f'<script src="/static/vendor/sortable/Sortable.min.js?v={v_}"></script><script src="/static/signal_plan.js?v={v_}"></script>'
+            f'<script defer src="/static/vendor/alpine/alpine.min.js?v={v_}"></script>'
+            f'<script type="application/json" id="sp-data">{json.dumps(data, separators=(",", ":")).replace("</", "<\\/")}</script>'
+            '<details class="card" id="plan-edit"><summary><b>Edit the plan</b> <span class="k">add, change or remove levers on this open trade</span></summary>'
+            '<div id="sp-app" class="sl-theme-dark" x-data="spApp()" x-cloak>' + open(hp, encoding="utf-8").read() + '</div></details>')
+
+
 def do_task(form: dict) -> tuple[str, bool, str]:
     key = form.get("key", ""); verb = form.get("verb", "")
     if verb in C.VERBS_SIGNAL:
@@ -1959,7 +1996,7 @@ class H(BaseHTTPRequestHandler):
             return self._send(page("error", f'<div class="card bad">{E(repr(e))}</div>'), code=500)
     def do_POST(self):
         u = urllib.parse.urlsplit(self.path); n = int(self.headers.get("Content-Length") or 0)
-        if (u.path.startswith("/bt/") or u.path == "/signal_plan") and n > 64 * 1024:   # review 2026-10-04: the plan endpoints take small plans only
+        if (u.path.startswith("/bt/") or u.path in ("/signal_plan", "/plan_edit")) and n > 64 * 1024:   # review 2026-10-04: the plan endpoints take small plans only
             self.close_connection = True
             return self._send(json.dumps({"ok": False, "error": "request too large (64 KB max)"}), "application/json", 413)
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
@@ -1968,6 +2005,8 @@ class H(BaseHTTPRequestHandler):
                 back, ok, msg = do_task(form); return self._redirect(back, msg, ok)
             if u.path == "/signal_plan":                                      # trader 2026-10-12: approve with a custom plan
                 return self._send(json.dumps(signal_plan_post(form)), "application/json")
+            if u.path == "/plan_edit":                                        # trader 2026-10-13: edit a running plan (preview, then save)
+                return self._send(json.dumps(plan_edit_post(form)), "application/json")
             if u.path == "/plan_stop":
                 key = form.get("key", ""); rec = PL.load_plan(CFG, key)
                 if not rec or rec.get("status") not in ("approving", "waiting_fill", "running"): return self._redirect("/", "no running plan", False)

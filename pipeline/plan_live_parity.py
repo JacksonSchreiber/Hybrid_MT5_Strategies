@@ -2,7 +2,9 @@
 EXACTLY backtest_engine.kern's tuple on every box frame x every plan - the menu presets / options, the live-rules presets, and plans that
 exercise every lever (trail both ways, windowed average cuts, risk caps, early / held / waiting adds). Also checks the state it returns:
 the open size of every leg adds up to what the R says at a running end.
-  python3 pipeline/plan_live_parity.py [--data data/backtest] [--limit N]"""
+SPLIT (plan edits, 2026-10-13): the same plan cut into identical versions at a third and two thirds of the frame (plan_live.replay with
+handoff) must return exactly the unsegmented tuple - proof the state carried across an edit is complete.
+  python3 pipeline/plan_live_parity.py [--data data/backtest] [--limit N] [--split-limit N]"""
 from __future__ import annotations
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,6 +27,7 @@ EXTRA = [
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--data", default="data/backtest"); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--split-limit", type=int, default=0, help="frames for the split check (default: all)")
     a = ap.parse_args()
     m = json.load(open(os.path.join(a.data, "menu_v1.json")))
     plans = [p["cfg"] for p in m["presets"]] + list(m["options"].values()) + [m["raw"]] + [d["cfg"] for d in m["defaults"].values()]
@@ -36,7 +39,7 @@ def main():
     cfgs = [BE.validate(p)[0] for p in plans]
     fr = BE.Frames(os.path.join(a.data, "frames_v1"))
     ids = sorted(fr.idx)[: a.limit or None]
-    t0 = time.time(); n = bad = 0
+    t0 = time.time(); n = bad = 0; ns = sbad = 0
     for k, hid in enumerate(ids):
         F, ctx = fr.get(hid)
         for ci, cfg in enumerate(cfgs):
@@ -47,13 +50,19 @@ def main():
             if tuple(r0) != tuple(r1):
                 bad += 1
                 if bad <= 10: print("MISMATCH", hid, ci, r0, r1)
-            ls, lst, alive, nl, src, sz0, bk, ad, mv = st
-            if int(r1[1]) == 3:                      # running at the end: R = locked + open legs at the last close - check the sizes
-                pass
+            nl = st["nl"]
             if int(nl) - 1 != int(r1[5]): bad += 1; print("LEGS", hid, ci, nl, r1[5]) if bad <= 10 else None
-        if k % 500 == 0: print(f"{k}/{len(ids)} frames, {n} runs, {bad} mismatches, {time.time() - t0:.0f}s", flush=True)
-    print(f"DONE {n} runs over {len(ids)} frames x {len(cfgs)} plans: {bad} mismatches ({time.time() - t0:.0f}s)")
-    sys.exit(1 if bad else 0)
+            if (not a.split_limit or k < a.split_limit) and F["n"] >= 6:
+                lids = PL.lever_ids(cfg, None); tm = ctx["tm"]
+                vers = [{"plan": cfg, "ids": lids, "from_t": None}] + [{"plan": cfg, "ids": lids, "from_t": int(tm[F["n"] * q // 3]) * 60} for q in (1, 2)]
+                r2 = PL.replay({"plan": cfg}, F, ctx, 0, vers)[0]
+                ns += 1
+                if tuple(r2) != tuple(r1):
+                    sbad += 1
+                    if sbad <= 10: print("SPLIT MISMATCH", hid, ci, r1, r2)
+        if k % 500 == 0: print(f"{k}/{len(ids)} frames, {n} runs, {bad} mismatches, split {ns} runs {sbad} mismatches, {time.time() - t0:.0f}s", flush=True)
+    print(f"DONE {n} runs over {len(ids)} frames x {len(cfgs)} plans: {bad} mismatches; split (3 identical versions) {ns} runs: {sbad} mismatches ({time.time() - t0:.0f}s)")
+    sys.exit(1 if bad or sbad else 0)
 
 
 if __name__ == "__main__": main()

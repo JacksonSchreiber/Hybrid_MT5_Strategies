@@ -88,3 +88,26 @@ and a human-readable log the position page shows.
 - Page: `live/static/signal_plan.html` + `signal_plan.js` (Alpine; the Practice markup and edits), `webapp.signal_plan_layout`,
   `POST /signal_plan` (validates, writes the plan record + approve task, waits 12 s for the ack), `POST /plan_stop`, the plan panel on
   the signal and position pages. Tests: `pipeline/plan_live_parity.py`, `pipeline/plan_live_sim.py`.
+
+## Editing a running plan (trader 2026-10-13)
+"on open trades, i'd like to be able to add stuff/edit/delete stuff to the plan" - the position page shows the plan builder
+(`signal_plan.html` in mode `edit`) under a running plan: the current levers with their ids and state pills (done / holding /
+time passed). **Review the change** posts `POST /plan_edit preview=1`: a dry run of the runner's next poll with the edit applied now
+(`plan_live.preview_edit`, the same `actions()` code) - its plain-words changes, what the runner would send at once (a stop move, a
+close, a bank, an add) and warnings (a time already passed). **Save the change** posts `preview=0`: the web app drops
+`plans/edits/<key>.json` and waits up to 12 s; the runner (the record's only writer) applies it at the top of its next step
+(`apply_edit` -> `build_edit` / `commit_edit`) and acknowledges it in `edit_last`.
+
+- **Versions:** the record keeps `versions` [{plan, ids, from_t, rev, about}], `lever_ids` (aligned with `plan.levers`) and `rev`.
+  The replay (`plan_live.replay`) runs version 0 from the fill and each later version from the first minute at or after its
+  `from_t` (the minute of the save), handing over the end state (`handoff`: legs, sizes, stops, totals; each lever's flags by id;
+  the cuts' history recomputed from the path). `kern_state(..., j0, j1, init)` runs one segment; j0=0 / no init is kern exactly.
+- **Rules:** an unchanged lever keeps its id and what it did; a changed lever gets a new id and starts fresh from the edit minute
+  (a level touched before does not count); a removed lever leaves its effects (a stop never moves back, except a trail's `lower`);
+  a time that passed never fires; "average R since entry" and "+X R reached" look at the whole trade; a new or changed trail runs
+  one check at the edit minute, then every N hours from the fill as before.
+- **Fixed after entry:** the entry %, TP2 on/off (`set_sl` never touches the TP) and the size cap. Adds stay under the 1R cap.
+- **Executed banks** are lever ids in `rec["banks"]` (older records' compile-order indices are converted on load, `norm_banks`).
+- **Checks:** `pipeline/plan_live_parity.py` (kernel = kern, plus every plan split into three identical versions = unsplit, bit for
+  bit); `pipeline/plan_live_edit_check.py` (scenarios: trail tightened, cuts added in the future / past, triggers touched before the
+  edit, a fired bank kept / deleted, id bookkeeping, the runner applying a request, the preview's actions).

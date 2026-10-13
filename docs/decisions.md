@@ -89,3 +89,17 @@ All user-approved decisions, newest first.
 - **Verification:** pipeline/plan_live_rbase_check.py replays EURCAD #3 on its real numbers (the old frame closes it, the new one
   does nothing) and checks AUDUSD #4's replay R equals the EA's open R; the runner-vs-kernel sim (pipeline/plan_live_sim.py) on
   normal and late fills (--late).
+
+## 2026-10-13 — Plans can be edited on an open trade (trader: "on open trades, i'd like to be able to add stuff/edit/delete stuff to the plan")
+
+- **What:** the position page has "Edit the plan": add, change or remove levers on a running plan (e.g. a new average cut at +1R,
+  or the trail tightened from 1R to 0.5R). "Review the change" shows what the plan runner would do at once; "Save the change" applies
+  it from that minute.
+- **Rules (stated on the page):** a lever left as it is keeps what it already did; a changed lever starts fresh from now; a removed
+  lever leaves its effects (a stop never moves back); a time that has passed never fires; a changed trail checks at once. The entry
+  size and TP2 are fixed once the trade is open (TP2 would need an EA change); adds stay under the 1R cap (the 1% rule).
+- **Verification:** kernel parity with Practice unchanged (0 mismatches) and every plan split into three identical versions returns
+  the unsplit result bit for bit; edit scenarios pass; the runner sim matches the previous numbers; the full flow (review, save, the
+  runner sending the stop move) ran on a local copy of AUDUSD #4 against the live price feed.
+- **Coach flag:** an edited plan is no longer the plan approved at the signal - the plan record keeps every version with its minute
+  (`versions`), and the plan log names each change.

@@ -4,20 +4,25 @@
 <template x-if="err"><sl-alert variant="danger" open closable @sl-after-hide="err=''" class="bt-err"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon><span x-text="err"></span></sl-alert></template>
 <div class="card bt-plan">
   <div class="bt-planhead">
-    <div class="bt-h3">Your plan</div>
-    <sl-select size="small" placeholder="Load a preset…" :value="presetSel" @sl-change="loadPreset($event.target.value)" class="bt-preset" hoist>
+    <div class="bt-h3" x-text="edit ? 'The plan on this trade' : 'Your plan'"></div>
+    <sl-select size="small" placeholder="Load a preset…" :value="presetSel" @sl-change="loadPreset($event.target.value)" class="bt-preset" hoist x-show="!edit">
       <template x-for="p in D.presets" :key="p.key"><sl-option :value="p.key" x-text="p.label"></sl-option></template>
     </sl-select>
     <sl-tooltip content="Undo (Ctrl+Z)"><sl-icon-button name="arrow-counterclockwise" label="Undo" @click="undo()" :disabled="hpos <= 0"></sl-icon-button></sl-tooltip>
     <sl-tooltip content="Redo (Ctrl+Shift+Z)"><sl-icon-button name="arrow-clockwise" label="Redo" @click="redo()" :disabled="hpos >= hist.length - 1"></sl-icon-button></sl-tooltip>
   </div>
   <div class="k bt-small" x-show="presetAbout" x-text="presetAbout"></div>
-  <div class="bt-row" style="margin:4px 0 8px"><sl-checkbox :checked="inverse" @sl-change="setInverse($event)">Inverse - trade the opposite direction</sl-checkbox>
+  <div class="k bt-small" x-show="edit" style="margin:4px 0 8px">Changes apply from the minute you save. A lever you leave as it is keeps what it already did; a lever you change
+    starts fresh from now (a level touched before does not count); a lever you remove leaves its effects (a stop never moves back); a time that has
+    passed never fires; a changed trail checks at once, then on its schedule. The entry size and TP2 are fixed once the trade is open.
+    <span x-text="D.rbase === 'fill' ? 'R counts from your fill to the signal stop.' : 'This plan counts R from the signal card (approved before 2026-10-13).'"></span></div>
+  <div class="bt-row" style="margin:4px 0 8px" x-show="!edit"><sl-checkbox :checked="inverse" @sl-change="setInverse($event)">Inverse - trade the opposite direction</sl-checkbox>
     <span class="k bt-small" x-show="inverse" x-text="'Live: a ' + dirShown() + ' at market; the stop and targets mirrored round the entry at the same distances (chart redrawn)'"></span></div>
           <!-- entry (always first) -->
           <div class="bt-lever fixed">
             <span class="bt-lt">Entry</span>
-            <div class="bt-sent">Enter <sl-input type="number" size="small" class="bt-n" :value="plan.entry" min="1" max="100" step="5" @sl-change="setEntry($event)"><span slot="suffix">%</span></sl-input> at the signal</div>
+            <div class="bt-sent" x-show="!edit">Enter <sl-input type="number" size="small" class="bt-n" :value="plan.entry" min="1" max="100" step="5" @sl-change="setEntry($event)"><span slot="suffix">%</span></sl-input> at the signal</div>
+            <div class="bt-sent" x-show="edit" x-text="'Entered ' + plan.entry + '% (fixed)'"></div>
           </div>
 
           <div id="bt-stack" class="bt-stack">
@@ -25,6 +30,7 @@
               <div class="bt-lever" :data-id="L.id">
                 <span class="bt-grip" title="drag to reorder" ><sl-icon name="grip-vertical"></sl-icon></span>
                 <span class="bt-lt" :class="kindOf(L.type)" x-text="typeLabel(L.type)"></span>
+                <span class="pill" x-show="leverState(L)" x-text="leverState(L)" :title="leverState(L) === 'done' ? 'already fired - changing it re-arms it from now' : ''" style="font-size:11px;padding:0 6px"></span>
                 <div class="bt-sent">
                   <template x-if="L.type === 'add_reach'"><span>Add <sl-input type="number" size="small" class="bt-n" :value="L.pct" min="1" max="200" step="5" @sl-change="setF(L,'pct',$event)" ><span slot="suffix">%</span></sl-input>
                     if <sl-input type="number" size="small" class="bt-n" :value="L.at" step="0.25" @sl-change="setF(L,'at',$event)" ><span slot="suffix">R</span></sl-input> is reached
@@ -73,7 +79,7 @@
           <!-- target (always last) -->
           <div class="bt-lever fixed">
             <span class="bt-lt tgt">Target</span>
-            <div class="bt-sent">Exit at TP2 <sl-switch size="small" :checked="plan.tp2" @sl-change="setTp2($event)" ></sl-switch>
+            <div class="bt-sent">Exit at TP2 <sl-switch size="small" :checked="plan.tp2" @sl-change="setTp2($event)" :disabled="edit"></sl-switch>
               <span class="k" x-text="plan.tp2 ? 'on' : 'off - runs until a stop, a cut or the 40-day frame end'"></span></div>
           </div>
 
@@ -105,8 +111,23 @@
     <div class="bt-row bt-meterrow"><span class="k">On this account</span><b x-text="'100% = ' + D.lots.toFixed(2) + ' lots · entry ' + lotsOf(plan.entry) + ' lots'"></b></div>
     <template x-for="m in liveNotes()"><div class="bt-msg" :class="m.level" x-text="m.text"></div></template>
   </div>
+  <!-- edit a running plan: review (a dry run of the runner's next step), then save -->
+  <div class="sp-decide" x-show="edit">
+    <div class="bt-row" style="justify-content:flex-end;gap:8px">
+      <sl-button size="large" @click="review()" :disabled="!v.ok || busy" :loading="busy && !rv"><sl-icon slot="prefix" name="eye"></sl-icon>Review the change</sl-button>
+      <sl-button size="large" variant="primary" @click="save()" :disabled="!rv || busy" :loading="busy && !!rv"><sl-icon slot="prefix" name="check-lg"></sl-icon>Save the change</sl-button>
+    </div>
+    <template x-if="rv"><div class="bt-meter" style="margin-top:8px">
+      <template x-for="a in rv.about"><div class="bt-msg" x-text="a"></div></template>
+      <div class="bt-msg" :class="rv.now.length ? 'warn' : ''" x-text="rv.now.length ? 'At once, the plan runner would:' : 'Nothing happens at once - the levers apply as the price moves.'"></div>
+      <template x-for="a in rv.now"><div class="bt-msg warn" x-text="'• ' + a"></div></template>
+      <template x-for="a in rv.already"><div class="bt-msg" x-text="'(due anyway under the current plan: ' + a + ')'"></div></template>
+      <template x-for="a in rv.warn"><div class="bt-msg dn" x-text="a"></div></template>
+    </div></template>
+    <template x-if="done"><div class="bt-flash" x-text="done"></div></template>
+  </div>
   <!-- decide -->
-  <div class="sp-decide">
+  <div class="sp-decide" x-show="!edit">
     <div class="bt-row" style="justify-content:space-between">
       <sl-select size="small" :value="entryMode" @sl-change="entryMode = $event.target.value" class="sp-em" hoist>
         <sl-option value="market">Enter now at market</sl-option>
