@@ -68,9 +68,12 @@
       sgn: function () { return this.C.card && this.C.card.direction === 'SELL' ? -1 : 1; },
       fmtP: function (v) { if (v === null || v === undefined) return '-'; return this.fmtR(this.sgn() * v); },
       fmtTH: function (x) {             // trading hours (the chart's time), + the clock span when a weekend sits inside it
-        if (!x) return ''; var s = x.th < 48 ? (x.th < 10 ? (+x.th).toFixed(1) : Math.round(x.th)) + ' trading hours' : (x.th / 24).toFixed(1) + ' trading days';
+        if (!x) return ''; var s = this.fmtT(x);
         return x.clock_h - x.th > 6 ? s + ' (' + this.fmtH(x.clock_h) + ' on the clock, with the weekend)' : s;
       },
+      fmtT: function (x) { return x.th < 48 ? (x.th < 10 ? (+x.th).toFixed(1) : Math.round(x.th)) + ' trading hours' : (x.th / 24).toFixed(1) + ' trading days'; },
+      // trader 2026-10-13: the highest R the trade reached before it ended (not shown for TP2)
+      peakTxt: function (x) { return x && x.peak_R !== undefined ? ' · highest ' + this.fmt(x.peak_R) + (x.peak.th < 1 ? ' in the first hour' : ', ' + this.fmtT(x.peak) + ' in') : ''; },
       fmtH: function (h) { h = +h; return h < 48 ? h.toFixed(h < 10 ? 1 : 0) + ' h' : (h / 24).toFixed(1) + ' days'; },
       cls: function (v) { if (v === null || v === undefined || v === '') return ''; return +v > 0.0005 ? 'up' : +v < -0.0005 ? 'dn' : ''; },
       groupName: function (k) { var g = this.groups.filter(function (x) { return x.key === k; })[0]; return g ? g.name : k; },

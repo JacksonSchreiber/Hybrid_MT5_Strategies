@@ -561,9 +561,16 @@ def path_view(S, hid, plan_n, inverse: bool = False) -> dict:
         bars.append([round(o, 3), round(h, 3), round(l, 3), round(c, 3)] if up else [round(-o, 3), round(-l, 3), round(-h, 3), round(-c, 3)])
     def at(j):
         j = min(int(j), n - 1); return {"bar": int(rank[j]), "th": round(float(rank[j]) * 4 + (float(tm[j]) - float(kb[j]) * 240) / 60.0, 1), "clock_h": round(float(tm[j]) / 60.0, 1)}
-    raw = E.evaluate({"schema": E.SCHEMA, "entry": {"pct": 100}, "tp2": True, "levers": []}, F, ctx); out = {"raw_exit": dict(at(raw["exit_j"]), kind=KIND.get(raw["kind"], ""))}
+    def peak(r):                                               # trader 2026-10-13: the highest R the trade reached before it ended -
+        j = min(int(r["exit_j"]), n - 1)                       # the exit-side high (the price you could close at, as banks use);
+        if r["kind"] == 1: return {}                           # a stop's own minute is left out (the kernel checks stops first, so
+        k = j if r["kind"] == 0 else j + 1                     # that minute's high may have come after it); TP2 needs no peak
+        if k <= 0: return {"peak_R": round(float(F["xo"][0]), 2), "peak": at(0)}
+        jp = int(np.argmax(F["xh"][:k])); return {"peak_R": round(float(F["xh"][jp]), 2), "peak": at(jp)}
+    raw = E.evaluate({"schema": E.SCHEMA, "entry": {"pct": 100}, "tp2": True, "levers": []}, F, ctx)
+    out = {"raw_exit": dict(at(raw["exit_j"]), kind=KIND.get(raw["kind"], ""), **peak(raw)), "sell": not up}
     if plan_n:
-        ev = E.evaluate(plan_n, F, ctx); out["plan_exit"] = at(ev["exit_j"])
+        ev = E.evaluate(plan_n, F, ctx); out["plan_exit"] = dict(at(ev["exit_j"]), **peak(ev))
     last = max(out["raw_exit"]["bar"], out.get("plan_exit", {}).get("bar", 0)) + 1        # through the later of the two exits
     old = S["results"][hid].get("reveal") or []                # the 60-bar reveal also shows the path AFTER an early stop - kept;
     out["post_bars"] = old + bars[len(old):last] if last > len(old) else old    # longer when a trade ran past it (99.6% of bars agree)

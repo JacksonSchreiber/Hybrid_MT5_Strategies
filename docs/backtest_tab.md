@@ -84,6 +84,10 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
   TRADING hours, with the clock span added when a weekend sits inside ("16 trading hours (2.5 days on the clock, with the
   weekend)"); before, a 16 h cut over a weekend read "2.5 days" and its marker sat 11 bars late. A note says when raw came within
   0.25R of TP2 without filling it (a SELL closes at the ask).
+- Highest R before the end (trader 2026-10-13): the plan's and the raw trade's lines add "highest +1.87R, 2.7 trading days in" for
+  every exit except TP2, and a stopped-out plan shows "it got to +1.87R before the stop" beside the result. It is the exit-side high
+  (the price you could close at, what banks trigger on) from the entry to the exit; a stop's own minute is left out (the kernel
+  checks stops first, so that minute's high may have come after the stop). Practice only - the Test response is unchanged.
 
 ## Minimal removed (trader 2026-10-08)
 - "Get rid of the minimal preset, since it is shaped off the data and invalid." The tab and the advisor no longer see it: the preset
