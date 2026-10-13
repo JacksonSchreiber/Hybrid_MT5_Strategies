@@ -103,3 +103,12 @@ All user-approved decisions, newest first.
   runner sending the stop move) ran on a local copy of AUDUSD #4 against the live price feed.
 - **Coach flag:** an edited plan is no longer the plan approved at the signal - the plan record keeps every version with its minute
   (`versions`), and the plan log names each change.
+
+## 2026-10-13 — The open-positions reviewer suggests plan edits (trader: "make sure the open trades reviewer advisor know that these edits can be made? it should suggest edits to the plan if necessary")
+
+- **Now:** for a plan trade the reviewer sees the plan (each lever with its id, whether it fired, when its time comes, the R it
+  counts in, the runner's recent moves) and the rules of editing; it can answer EDIT PLAN with concrete lever changes. The review
+  page offers "Load into the plan editor": the change appears in the editor unsaved, the trader presses Review to see what it does
+  and Save to apply it. Nothing is applied by the advisor.
+- **Fixed on the way:** plan trades were described to the reviewer as "the EA banks at +1R", although the EA's own rules are off on
+  plan rows.

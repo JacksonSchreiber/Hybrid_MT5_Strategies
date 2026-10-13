@@ -111,3 +111,9 @@ close, a bank, an add) and warnings (a time already passed). **Save the change**
 - **Checks:** `pipeline/plan_live_parity.py` (kernel = kern, plus every plan split into three identical versions = unsplit, bit for
   bit); `pipeline/plan_live_edit_check.py` (scenarios: trail tightened, cuts added in the future / past, triggers touched before the
   edit, a fired bank kept / deleted, id bookkeeping, the runner applying a request, the preview's actions).
+- **The positions reviewer (2026-10-13)** knows plan trades: its bundle (`positions_review.build_bundle` -> `plan_live.plan_brief`) says
+  the plan runner manages them (the EA's rules are off), which R the plan counts in, the plan clock, and every lever with its id,
+  state and timing; its role explains edits and their rules. It answers `edit_plan` with `{changes, remove: [id], change: [{id,
+  field}], add: [lever]}`, validated against the running plan (`plan_live.apply_suggestion`); the review page's "Load into the plan
+  editor" opens the position page with `?suggest=<review>` - the suggestion loads as an unsaved change (Undo goes back), and the
+  trader reviews and saves as with any edit.
