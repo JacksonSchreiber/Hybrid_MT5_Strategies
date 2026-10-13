@@ -129,6 +129,14 @@ def main() -> int:
     except PermissionError: raised = True
     C.atomic_write_json = real
     check("H3 a failed save keeps the request for the next poll", raised and os.path.exists(PL.edit_path(cfg, r["signal_key"])) and (PL.load_plan(cfg, r["signal_key"]) or {}).get("rev") == 0)
+    # I: the positions reviewer's edit_plan suggestion applied to the current plan (the editor loads it; build_edit decides on save)
+    r = rec_of(bank + base)
+    sp, si = PL.apply_suggestion(r["plan"], r["lever_ids"], {"change": [{"id": "l1", "dist": 0.5}], "remove": ["l0"], "add": [{"type": "cut_avg", "at_h": 30, "below": 0.3}]})
+    check("I1 a suggestion applies: changed keeps its id until saved, removed gone, added has none",
+          si == ["l1", None] and sp["levers"][0]["dist"] == 0.5 and sp["levers"][1]["type"] == "cut_avg", str(si))
+    for nm, sug in (("unknown id", {"remove": ["l9"]}), ("bad lever", {"add": [{"type": "cut_avg", "at_h": 0}]}), ("not an object", ["x"])):
+        try: PL.apply_suggestion(r["plan"], r["lever_ids"], sug); check(f"I2 refused: {nm}", False)
+        except (ValueError, TypeError) as e: check(f"I2 refused: {nm}", True, f"({e})")
     print("RESULT:", "PASS" if OK else "FAIL")
     return 0 if OK else 1
 

@@ -25,7 +25,7 @@
   window.spApp = function () {
     var D = JSON.parse(document.getElementById('sp-data').textContent);
     return {
-      D: D, err: '', busy: false, done: '', inverse: false, entryMode: 'market', rv: null, edit: D.mode === 'edit',
+      D: D, err: '', busy: false, done: '', inverse: false, entryMode: 'market', rv: null, edit: D.mode === 'edit', sugNote: '',
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null,
       init: function () {
@@ -33,6 +33,11 @@
         if (this.edit) this.fromConfig(D.plan, D.ids);       // trader 2026-10-13: editing a running plan - its levers keep their ids
         else this.loadPreset(D.presets[0].key);
         this.hist = [this.snap()]; this.hpos = 0;
+        if (this.edit && D.suggest) {                        // the positions reviewer's edit_plan, loaded as an unsaved change (Undo goes back)
+          this.fromConfig(D.suggest.plan, D.suggest.ids); this.commit();
+          this.sugNote = "The reviewer's suggestion is loaded: " + (D.suggest.changes.join('; ') || 'see the levers') + '. Press Review the change to see what it does, then Save - or Undo to go back to your plan.';
+        }
+        if (this.edit && D.suggest_err) this.err = D.suggest_err;
         this.$nextTick(function () { self.bindSort(); });
         document.addEventListener('keydown', function (e) {
           var path = e.composedPath ? e.composedPath() : [e.target];

@@ -16,6 +16,7 @@
     starts fresh from now (a level touched before does not count); a lever you remove leaves its effects (a stop never moves back); a time that has
     passed never fires; a changed trail checks at once, then on its schedule. The entry size and TP2 are fixed once the trade is open.
     <span x-text="D.rbase === 'fill' ? 'R counts from your fill to the signal stop.' : 'This plan counts R from the signal card (approved before 2026-10-13).'"></span></div>
+  <div class="bt-msg warn" x-show="sugNote" x-text="sugNote" style="margin:4px 0 8px"></div>
   <div class="bt-row" style="margin:4px 0 8px" x-show="!edit"><sl-checkbox :checked="inverse" @sl-change="setInverse($event)">Inverse - trade the opposite direction</sl-checkbox>
     <span class="k bt-small" x-show="inverse" x-text="'Live: a ' + dirShown() + ' at market; the stop and targets mirrored round the entry at the same distances (chart redrawn)'"></span></div>
           <!-- entry (always first) -->

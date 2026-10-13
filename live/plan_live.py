@@ -469,6 +469,72 @@ def request_edit(cfg: dict, rec: dict, plan_in, ids_in, base_rev, wait_s: float 
     return {"ok": False, "error": f"the plan runner did not pick the edit up within {wait_s:.0f} s (is the monitor running?) - nothing was changed"}
 
 
+def apply_suggestion(plan: dict, ids: list[str], sug: dict) -> tuple[dict, list]:
+    """the positions reviewer's edit_plan params {remove: [id], change: [{id, field: value}], add: [lever]} on the CURRENT plan ->
+    (the edited plan, ids: the kept levers' ids, None for added ones) - loaded into the page's editor, where the trader reviews and
+    saves (build_edit then decides changed / unchanged). Raises ValueError (an unknown id - the plan changed since - or a bad lever)."""
+    if not isinstance(sug, dict): raise ValueError("the suggestion is not an object")
+    levers = [dict(L) for L in plan["levers"]]; ids = list(ids)
+    rm = [str(x) for x in (sug.get("remove") or [])]
+    for x in rm:
+        if x not in ids: raise ValueError(f"lever {x} is not in the plan any more")
+    for ch in sug.get("change") or []:
+        if not isinstance(ch, dict) or ch.get("id") not in ids: raise ValueError(f"lever {ch.get('id') if isinstance(ch, dict) else ch} is not in the plan any more")
+        L = levers[ids.index(ch["id"])]
+        for k, v in ch.items():
+            if k not in ("id", "type"): L[k] = v
+    keep = [(L, i) for L, i in zip(levers, ids) if i not in rm] + [(dict(a), None) for a in (sug.get("add") or []) if isinstance(a, dict)]
+    new = dict(plan, levers=[L for L, _ in keep])
+    new = live_validate(new)[0]
+    return new, [i for _, i in keep]
+
+
+def plan_clock_h(rec: dict) -> float | None:
+    """hours on the PLAN's clock now: 'N h' = H4 bar N // 4 after the entry-bar open, then N % 4 hours into it (backtest_engine.mark)."""
+    from live import mt5feed
+    try:
+        tk = mt5feed.tick(rec["symbol"]); eb = int(rec["card"]["entry_bar_open"])
+        b = mt5feed.bars_sp(rec["symbol"], "h4", eb - 60, int(tk["t"]) + 14400) if tk else None
+        opens = [int(x[0]) for x in (b or []) if int(x[0]) >= eb and int(x[0]) <= int(tk["t"])]
+        if not opens: return None
+        return 4.0 * (len(opens) - 1) + min(4.0, (int(tk["t"]) - opens[-1]) / 3600.0)
+    except Exception: return None
+
+
+def plan_brief(rec: dict) -> list[str]:
+    """the plan of a position, for the positions reviewer's bundle: who manages it, the R it counts in, every lever with its id, state
+    and timing, and what the runner did lately."""
+    from live import mt5feed
+    st = rec.get("status", ""); out = []
+    out.append(f"- **managed by the trader's PLAN** (status {st}{', edited ' + str(rec.get('rev')) + ' time(s)' if rec.get('rev') else ''}) - the plan runner carries"
+               " it out every few seconds; the EA's own rules (bank at +1R, BE, bloc, shorts raise) are OFF for this trade")
+    if st != "running": out.append("- the plan is not running: the trader manages this trade by hand (the EA's rules stay off) - plan edits are not possible")
+    d, e, R = rbase(rec); c = rec["card"]; f = rec.get("fill") or {}
+    if rec.get("rbase") == "fill": out.append(f"- the plan's R = from the fill {e} to the original stop {c['sl']} (1R = {R:.6g}) - the same R as 'R now' above")
+    else:
+        line = (f"- the plan's R counts from the SIGNAL CARD (approved before 2026-10-13): origin {e}, 1R = {R:.6g} - NOT the 'R now' above"
+                f" (that counts from the fill {f.get('px')}); lever values below are in the card's R")
+        try:
+            tk = mt5feed.tick(rec["symbol"]); px = float(tk["bid"] if d > 0 else tk["ask"])
+            line += f"; now the price is {d * (px - e) / R:+.2f}R in the plan's R"
+        except Exception: pass
+        out.append(line)
+    m = rec.get("model") or {}
+    if m: out.append(f"- the plan's own replay: {C.r_fmt(m.get('R'))} on the whole ruled size so far")
+    ids = lever_ids(rec["plan"], rec.get("lever_ids")); ls = rec.get("lever_state") or {}; ph = plan_clock_h(rec)
+    if ph is not None: out.append(f"- plan clock: {ph:.1f} h since the entry bar (the levers' 'N h' times count on this clock, H4 bars)")
+    out.append("- levers (id · state · what it does) - use these ids in an edit_plan suggestion:")
+    for L, i in zip(rec["plan"]["levers"], ids):
+        t = L.get("at_h") if L["type"].startswith("cut") else (4.0 * L["bar"] if L["type"] == "add_bar" else None)
+        when = "" if t is None or ph is None else (" (time passed)" if t <= ph else f" (in ~{t - ph:.1f} h)")
+        out.append(f"  - [{i}] {ls.get(i, 'armed')} · {lever_desc(L)}{when}")
+    if not rec["plan"]["levers"]: out.append("  - (no levers: in at the entry, out at TP2 or the stop)")
+    out.append(f"- TP2 {'on (the broker TP)' if rec['plan'].get('tp2') else 'off - no broker TP'}; entry {rec['plan']['entry']['pct']:g}% (both fixed now)")
+    lg = [x for x in (rec.get("log") or []) if not x["msg"].startswith("sent:")][-5:]
+    if lg: out.append("- the plan runner lately: " + " | ".join(f"{x['t'][5:16].replace('T', ' ')} {x['msg'][:160]}" for x in lg))
+    return out
+
+
 # ------------------------------------------------------------------------------------------------------------- the plan the EA ran
 def live_json(cfg: dict) -> dict:
     return C.load_json(os.path.join(cfg["root"], "config", "live.json"), {}) or {}

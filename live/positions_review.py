@@ -20,11 +20,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from live import common as C
 from live import charts
 from live import brief_runner
+from live import plan_live as PL
 
 KEEP = 10
-ACTIONS = ("hold", "close", "raise_sl", "bank", "move_to_be", "other")
+ACTIONS = ("hold", "close", "raise_sl", "bank", "move_to_be", "edit_plan", "other")
 URGENCY = ("now", "today", "watch")
-ACTION_TXT = {"hold": "HOLD", "close": "CLOSE", "raise_sl": "RAISE SL", "bank": "BANK", "move_to_be": "SL → BE", "other": "OTHER"}
+ACTION_TXT = {"hold": "HOLD", "close": "CLOSE", "raise_sl": "RAISE SL", "bank": "BANK", "move_to_be": "SL → BE", "edit_plan": "EDIT PLAN", "other": "OTHER"}
 DENIED = "Bash,Write,Edit,Task,Agent,NotebookEdit"
 
 ROLE = """# Position reviewer (live, sighted, ADVISORY ONLY)
@@ -59,6 +60,32 @@ never execute anything - you can only read files. The trader decides and acts wi
 - The EA already manages banks and the bloc rules automatically: apart from the early-average cut above, the DEFAULT is HOLD.
   Suggest a change only with a concrete reason you can point at.
 
+## Plan-managed trades (live custom plans) - and editing them
+Many trades run the trader's OWN lever plan (review.md says "managed by the trader's PLAN" and lists its levers). For those the
+plan runner carries the plan out every few seconds (banks, adds, stop moves, the trail, cuts) and the EA's own rules are OFF -
+never reason from "the EA will bank at +1R" on a plan trade; read its levers and their state instead.
+
+The trader can EDIT a running plan on the position page ("Edit the plan"): add, change or remove levers; it applies from the
+minute the trader saves, after a review screen that shows what the runner would do at once. The rules:
+- a lever left as it is keeps what it already did (a bank that fired stays fired);
+- a CHANGED lever starts fresh from now: a level touched before the edit does not count; changing a lever marked **done**
+  re-arms it (a fired 50% bank edited to 25% banks another 25% if the price is above its level) - say so if you suggest it;
+- a removed lever leaves its effects (a moved stop stays; stops never move back, except a trail with 'lower');
+- a time that has passed never fires (the plan clock in review.md: 'N h' = H4 bars since the entry bar); "average R since
+  entry" and "+X R reached" still look at the whole trade;
+- a new or changed trail checks AT ONCE: if the price is already further below its recent high than the new distance, saving
+  closes the trade - say that when you tighten a trail;
+- the entry size and TP2 are fixed once the trade is open; every add stays under a 1R cap on the open risk.
+The levers: bank {{"pct", "at" (R), "tp1": bool}} · move {{"to" (R, 0 = entry), "when" (R), "tp1": bool, "legs": "all"}} · trail
+{{"every_h", "dist" (R below the high), "lower": bool}} · cut_avg {{"at_h", "below" (R), "window_h": 12 or null}} · cut_unless
+{{"at_h", "reach" (R)}} · add_reach {{"pct", "at", "within_h", "stop"}} · add_bar {{"pct", "bar", "stop": "trade"}} · add_tp1 {{"pct",
+"min_R", "stop"}}. R values are in the PLAN's R (review.md says which R the plan counts in - usually from the fill to the
+original stop, the same as 'R now').
+On a plan trade, express management as a plan edit (action edit_plan) - an earlier cut, a tighter trail, a stop move at a
+level, a bank - rather than a one-off button: the plan keeps running and the edit is visible in its log. Suggest an edit only
+for a concrete reason (an event ahead, stalling, giving back R, structure broken); otherwise HOLD - the plan was the trader's
+own choice.
+
 ## Answer format (exactly)
 First a short markdown summary (at most 8 lines): the portfolio-level picture (event and correlation risk) and the
 positions that need attention. Then ONE fenced block:
@@ -70,9 +97,12 @@ positions that need attention. Then ONE fenced block:
 ```
 
 Every position in review.md appears exactly once. params: raise_sl {{"to_R": 0.5}} (R from entry, + = in the trade's
-favour) or {{"to_price": 1.2345}}; bank {{"pct": 50}}; close {{}}; move_to_be {{}}; other {{"note": "..."}}; hold {{}}.
-In the reason, say which button does it where one exists (SL → BE, SL → TP1, Close 50%, Close all) - anything else is
-"by hand in MT5" (the EA logs it as an external edit). urgency: now = act before the next H4 bar, today = within the day,
+favour) or {{"to_price": 1.2345}}; bank {{"pct": 50}}; close {{}}; move_to_be {{}}; other {{"note": "..."}}; hold {{}};
+edit_plan (plan trades only) {{"changes": ["each change in plain words"], "remove": ["<lever id>"], "change": [{{"id": "<lever id>",
+"dist": 0.5}}], "add": [{{"type": "cut_avg", "at_h": 30, "below": 0.3, "window_h": null}}]}} - ids exactly as review.md lists
+them, only the fields you change in "change", full levers in "add"; the trader loads it into the editor, reviews and saves.
+In the reason, say which button does it where one exists (SL → BE, SL → TP1, Close 50%, Close all, or "Edit the plan" for
+an edit_plan) - anything else is "by hand in MT5" (the EA logs it as an external edit). urgency: now = act before the next H4 bar, today = within the day,
 watch = nothing to do yet.
 """
 
@@ -192,6 +222,16 @@ def _events(p, hours: int) -> list[str]:
     return [f"in {e['hours_until']:.0f} h · {e['ccy']} {e['name']} [{e['cls']} {e['label']}]{' · BINDING' if e.get('binding') else ''}" for e in evs] or [f"none in the next {hours} h"]
 
 
+def plan_for(cfg: dict, p: dict) -> dict | None:
+    """the live plan record managing this position (trader 2026-10-12 plans), or None."""
+    if not p.get("signal_id"): return None
+    try:
+        rec = PL.load_plan(cfg, f"{p['symbol']}-{p['signal_id']}")
+        if rec and any(int(L.get("posid") or 0) == int(p["posid"]) for L in rec.get("legs") or []): return rec
+    except Exception: pass
+    return None
+
+
 # ----------------------------------------------------------------------------- bundle
 _CFG: dict = {}
 
@@ -216,12 +256,13 @@ def build_bundle(cfg: dict, positions: list[dict]) -> tuple[str, list[dict]]:
             charts.render(d1, title="D1  " + head + ("   (last candle still forming)" if fresh1 else "   (STALE: bars as of the signal)"), levels=lv, n_show=charts.D1_BARS, digits=dg).save(os.path.join(bdir, f"{p['posid']}-d1.png"))
             n4, n1 = min(len(h4), charts.H4_BARS), min(len(d1), charts.D1_BARS)
         except Exception as e: lines.append(f"(chart render failed for {k}: {e!r})")
-        R = _R(p); vw = _verdict_word(p)
+        R = _R(p); vw = _verdict_word(p); prec = plan_for(cfg, p)
         size = (f"{_f(p.get('lots_live')):g} lots of {_f(p.get('full_lots') or p.get('lots_init')):g} full"
                 f" (risk at entry {_f(p.get('risk_pct_effective')) * 100:.2f}%)")
         row = {"key": k, "symbol": p["symbol"], "posid": p["posid"], "direction": p.get("direction"), "strategy": p.get("strategy"),
                "open_r": p.get("open_r"), "banked_r": p.get("banked_r"), "bars_open": p.get("bars_open"), "best_r": best,
                "sl_r": _inR(p, p.get("sl_live")), "hours": _hours(p)}
+        if prec: row["plan"] = {"key": prec["signal_key"], "rev": int(prec.get("rev") or 0), "status": prec.get("status")}
         row["avg_r"], row["avg12_r"] = _avg_r(p)
         snap.append(row)
         lines += [f"## {k}", f"- **{p['symbol']} {p.get('direction')}** · {p.get('strategy')} · signal #{p.get('signal_id')} [{p.get('decision_class', '')}]"
@@ -237,7 +278,7 @@ def build_bundle(cfg: dict, positions: list[dict]) -> tuple[str, list[dict]]:
                   + (f" ({_inR(p, p.get('tp1')):+.2f}R)" if _inR(p, p.get('tp1')) is not None else "") + f" · TP2/TP now {p.get('tp_live') or '-'}"
                   + (f" ({_inR(p, p.get('tp_live')):+.2f}R)" if _inR(p, p.get('tp_live')) is not None else ""),
                   f"- size: {size}",
-                  f"- the EA, on its own: {_ea_pending(p)}",
+                  *(PL.plan_brief(prec) if prec else [f"- the EA, on its own: {_ea_pending(p)}"]),
                   f"- charts: `bundle/{p['posid']}-h4.png` ({n4} bars{'' if fresh4 else ', STALE'}), `bundle/{p['posid']}-d1.png` ({n1} bars{'' if fresh1 else ', STALE'})",
                   f"- events (next {s['events_h']} h): " + "; ".join(_events(p, s["events_h"])), ""]
     lines += ["## Portfolio", portfolio_block(cfg, positions), ""]
@@ -347,6 +388,22 @@ def parse(text: str, keys: list[str]) -> tuple[str, list[dict], str, list[str]]:
     return summary, out, str((data or {}).get("portfolio", ""))[:1500], warn
 
 
+def check_plan_edits(cfg: dict, recs: list[dict], positions: list[dict], warn: list[str]) -> None:
+    """an edit_plan must apply to the trade's running plan (plan_live.apply_suggestion): plan_ok -> the review page offers to load it
+    into the editor; otherwise the reason stays and plan_err says why it cannot be loaded."""
+    byk = {key_of(p): p for p in positions}
+    for r in recs:
+        if r.get("action") != "edit_plan": continue
+        prec = plan_for(cfg, byk.get(r["key"], {}))
+        if not prec or prec.get("status") != "running":
+            r["plan_err"] = "this trade has no running plan to edit"; warn.append(f"{r['key']}: edit_plan on a trade without a running plan"); continue
+        try:
+            PL.apply_suggestion(prec["plan"], PL.lever_ids(prec["plan"], prec.get("lever_ids")), r.get("params") or {})
+            r["plan_ok"] = True; r["plan_rev"] = int(prec.get("rev") or 0); r["plan_key"] = prec["signal_key"]
+        except (ValueError, TypeError, KeyError) as e:
+            r["plan_err"] = str(e)[:200]; warn.append(f"{r['key']}: the suggested plan edit does not apply ({e})")
+
+
 def params_text(r: dict) -> str:
     p = r.get("params") or {}; a = r.get("action")
     if a == "raise_sl":
@@ -356,6 +413,7 @@ def params_text(r: dict) -> str:
         if "to_price" in p: return f"to {p['to_price']}"
     if a == "bank" and "pct" in p: return f"{p['pct']}%"
     if a == "other" and p.get("note"): return str(p["note"])[:120]
+    if a == "edit_plan" and isinstance(p.get("changes"), list): return "; ".join(str(x) for x in p["changes"])[:200]
     return ""
 
 
@@ -382,6 +440,7 @@ def generate(cfg: dict, log, requested_by: str = "web", consult=None) -> dict:
             res["positions"] = snap
             if r.get("ok"):
                 summary, recs, port, warn = parse(r.get("text", ""), [x["key"] for x in snap])
+                check_plan_edits(cfg, recs, positions, warn)
                 res.update(ok=True, summary=summary, recs=recs, portfolio=port, warnings=warn, raw=r.get("text", ""))
             else:
                 res.update(ok=False, recs=[], summary="", portfolio="", warnings=[])

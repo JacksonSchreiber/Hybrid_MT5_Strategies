@@ -814,6 +814,20 @@ def _pr_badge(r: dict) -> str:
     pt = PR.params_text(r)
     return f'<span class="pr-act {u}">{E(PR.ACTION_TXT.get(a, a.upper()))}{(" " + E(pt)) if pt else ""}</span>' + (f' <span class="pr-act {u}">{E(r.get("urgency", ""))}</span>' if a != "hold" else "")
 
+def _pr_plan_edit(ts: str, r: dict) -> str:
+    """trader 2026-10-13: an edit_plan suggestion - its changes, and a link that loads it into the position page's plan editor (the trader
+    reviews what it would do and saves; nothing is applied from here)."""
+    if r.get("action") != "edit_plan": return ""
+    prm = r.get("params") or {}; ch = [str(x) for x in (prm.get("changes") or [])][:8]
+    out = "".join(f'<div class="k">• {E(x)}</div>' for x in ch)
+    if r.get("plan_ok"):
+        cur = PL.load_plan(CFG, r.get("plan_key") or "") or {}
+        if cur.get("status") != "running": out += '<div class="k">the plan is no longer running</div>'
+        elif int(cur.get("rev") or 0) != int(r.get("plan_rev") or 0): out += '<div class="k warn">the plan was edited after this review - the suggestion may not fit any more; re-run the review</div>'
+        else: out += f'<a class="btn" style="margin-top:6px;display:inline-block" href="/position/{E(r["key"])}?suggest={E(ts)}#plan-edit">Load into the plan editor →</a>'
+    elif r.get("plan_err"): out += f'<div class="k bad">cannot be loaded into the editor: {E(r["plan_err"])}</div>'
+    return out
+
 def _pr_status_line(st: dict, rv: dict | None, npos: int) -> str:
     stt = st.get("state")
     if stt == "queued": return '<span class="warn">queued — the advisor picks it up within a few seconds</span>'
@@ -907,7 +921,7 @@ def review_page(q: dict) -> str:
         out.append(f'<div class="pr-item {E(u)}"><div class="pr-top"><a href="/position/{E(r["key"])}"><b class="big">{E(x.get("symbol", r["key"]))}</b> {E(str(x.get("direction", "")))} <span class="k">{E(str(x.get("strategy", "")))}</span></a>'
                    f'{grp_pill(x.get("symbol", ""))}{_pr_badge(r)}{_pr_clear(rv["ts"], r["key"], "/review?r=" + rv["ts"])}</div>'
                    f'<div class="k" style="margin-top:4px">at review {C.r_fmt(x.get("open_r"))}{best} · banked {C.r_fmt(x.get("banked_r"))} · {E(str(x.get("hours", "")))} · {now_txt}</div>'
-                   f'<div class="why">{E(r.get("reason", ""))}</div></div>')
+                   f'<div class="why">{E(r.get("reason", ""))}</div>{_pr_plan_edit(rv["ts"], r)}</div>')
     if rv.get("raw"): out.append(f'<div class="card"><details><summary class="k">the advisor\'s full answer</summary><pre>{E(rv["raw"])}</pre></details></div>')
     return page("Positions review", "".join(out), "home", refresh=15 if running else None)
 
@@ -1462,7 +1476,7 @@ def position_page(key: str, q: dict) -> str:
     prec = PL.load_plan(CFG, f'{p["symbol"]}-{p.get("signal_id")}') if p.get("signal_id") else None
     if prec and any(int(L.get("posid") or 0) == int(p["posid"]) for L in prec.get("legs", [])):
         out.append(plan_panel(prec))
-        if prec.get("status") == "running" and not prec.get("exit") and not closed: out.append(plan_edit_block(prec, p))   # trader 2026-10-13
+        if prec.get("status") == "running" and not prec.get("exit") and not closed: out.append(plan_edit_block(prec, p, q.get("suggest")))   # trader 2026-10-13
     out.append(staged_block(p))
     plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
     if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None,
@@ -1802,9 +1816,10 @@ def plan_edit_post(form: dict) -> dict:
     return out
 
 
-def plan_edit_block(rec: dict, p: dict) -> str:
+def plan_edit_block(rec: dict, p: dict, suggest_ts: str | None = None) -> str:
     """the plan builder (signal_plan.html, mode 'edit') under a running plan on the position page: the current levers loaded with their
-    ids and state pills; Review shows what would happen at once, Save hands the edit to the runner."""
+    ids and state pills; Review shows what would happen at once, Save hands the edit to the runner. suggest_ts: a positions review whose
+    edit_plan suggestion for this position is loaded on top as an unsaved change (Undo goes back)."""
     from live import mt5feed
     try: spec = mt5feed.spec(rec["symbol"]) or {}
     except Exception: spec = {}
@@ -1812,13 +1827,22 @@ def plan_edit_block(rec: dict, p: dict) -> str:
             "step": float(spec.get("volume_step") or 0.01), "vmin": float(spec.get("volume_min") or 0.01), "entry_modes": ["market"], "presets": [],
             "mode": "edit", "plan": rec["plan"], "ids": PL.lever_ids(rec["plan"], rec.get("lever_ids")), "state": rec.get("lever_state") or {},
             "rev": int(rec.get("rev") or 0), "rbase": rec.get("rbase") or "card"}
+    if suggest_ts:
+        from live import positions_review as PR
+        rv = PR.load_review(CFG, suggest_ts) if re.fullmatch(r"\d{8}T\d{6}Z", str(suggest_ts)) else None
+        r = next((x for x in (rv or {}).get("recs") or [] if x.get("key") == f'{p["symbol"]}-{p["posid"]}' and x.get("action") == "edit_plan"), None)
+        try:
+            if not r: raise ValueError("no plan edit suggested for this position in that review")
+            sp, si = PL.apply_suggestion(rec["plan"], data["ids"], r.get("params") or {})
+            data["suggest"] = {"plan": sp, "ids": si, "changes": [str(x) for x in ((r.get("params") or {}).get("changes") or [])][:8], "reason": r.get("reason", "")}
+        except (ValueError, TypeError, KeyError) as e: data["suggest_err"] = f"the reviewer's suggestion could not be loaded: {e}"
     v_ = STATIC_V; hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "signal_plan.html")
     return (f'<link rel="stylesheet" href="/static/vendor/shoelace/themes/dark.css?v={v_}"><link rel="stylesheet" href="/static/backtest.css?v={v_}">'
             f'<script type="module" src="/static/vendor/shoelace/shoelace-autoloader.js?v={v_}"></script>'
             f'<script src="/static/vendor/sortable/Sortable.min.js?v={v_}"></script><script src="/static/signal_plan.js?v={v_}"></script>'
             f'<script defer src="/static/vendor/alpine/alpine.min.js?v={v_}"></script>'
             f'<script type="application/json" id="sp-data">{json.dumps(data, separators=(",", ":")).replace("</", "<\\/")}</script>'
-            '<details class="card" id="plan-edit"><summary><b>Edit the plan</b> <span class="k">add, change or remove levers on this open trade</span></summary>'
+            f'<details class="card" id="plan-edit"{" open" if suggest_ts else ""}><summary><b>Edit the plan</b> <span class="k">add, change or remove levers on this open trade</span></summary>'
             '<div id="sp-app" class="sl-theme-dark" x-data="spApp()" x-cloak>' + open(hp, encoding="utf-8").read() + '</div></details>')
 
 
