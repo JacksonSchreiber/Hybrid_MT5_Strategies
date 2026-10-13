@@ -7,7 +7,10 @@ size at creation, and the end state (sizes, stops, alive, which banks / adds / m
 it returns exactly kern's tuple on every box frame x every menu plan.
 
 Live semantics (Practice parity, the differences named in docs/live_plans.md):
-  - prices in the card's R: R(price) = d x (price - card entry) / |card entry - signal SL|, exit side = bid (BUY) / ask (SELL);
+  - prices in the POSITION's R (trader 2026-10-13, rbase 'fill'): R(price) = d x (price - first fill) / |first fill - signal SL|, exit
+    side = bid (BUY) / ask (SELL) - the EA's open R and sizing basis, so a lever counts from the fill, not from the card entry (a late
+    fill used to start the replay at, say, +0.91R, and 'stop to entry when +0.5R' fired at the fill: EURCAD #3, NZDCHF #6). Records
+    approved before that carry no rbase and keep the card's R (origin the card entry, 1R = |card entry - signal SL|);
   - the path starts at the first leg's fill minute; the forming minute counts for level triggers only (a time check waits for its minute
     to close: mark() sees the last bar as not yet closed);
   - "H hours" / "bar N close" on the H4 grid from the ENTRY-BAR open (the signal bar's close), as in Practice; a time that passed before
@@ -319,7 +322,7 @@ def new_record(sig: dict, plan: dict, warn: list[str], inverse: bool, entry_mode
     eb = _epoch(sig.get("decision_bar_server") or sig.get("decision_bar"))
     return {"schema": "live-plan/v1", "signal_key": sig["signal_key"], "symbol": sig["symbol"], "signal_id": int(sig["signal_id"]),
             "strategy": sig.get("strategy", ""), "signal_direction": sig.get("direction"), "created_at": C.now_iso(), "status": "approving",
-            "inverse": bool(inverse), "entry_mode": entry_mode, "plan": plan, "warnings": warn,
+            "inverse": bool(inverse), "entry_mode": entry_mode, "rbase": "fill", "plan": plan, "warnings": warn,
             "card": {"d": d, "e": e, "R": R, "sl": mir(sl), "tp1": mir(lv.get("tp1")) if two else None, "tp2": mir(tp2), "entry_bar_open": eb},
             "full_lots_est": float((sig.get("sizing") or {}).get("lots") or 0), "approve_task": None,
             "legs": [], "banks": [], "exit": None, "pending": {}, "sl_rej": {}, "log": []}
@@ -349,10 +352,20 @@ def approve(cfg: dict, sig: dict, plan_in: dict, inverse: bool, entry_mode: str)
 
 
 # ------------------------------------------------------------------------------------------------------------- the live frame
+def rbase(rec: dict) -> tuple[int, float, float]:
+    """the plan's R frame -> (d, origin price, 1R). rbase 'fill' (every record from 2026-10-13): the first leg's fill and |fill - signal
+    stop|, the position's own R; else (and before the fill is known) the card: its entry and |card entry - signal stop|."""
+    c = rec["card"]; f = rec.get("fill")
+    if rec.get("rbase") == "fill" and f:
+        px = float(f["px"]); R = abs(px - float(c["sl"]))
+        if R > 0: return c["d"], px, R
+    return c["d"], c["e"], c["R"]
+
+
 def frame(bars: list, rec: dict, t0: int, fill_px: float, h4_opens: list[int]) -> tuple[dict, dict]:
-    """M1 bars [[t,o,h,l,c,v,spread]] (server clock) from the fill minute t0 -> (F, ctx) in the card's R, the box frames' layout
+    """M1 bars [[t,o,h,l,c,v,spread]] (server clock) from the fill minute t0 -> (F, ctx) in the plan's R (rbase), the box frames' layout
     (backtest_engine.decode_frame): a BUY's exit side is the bid, a SELL's the ask (bid + the bar's spread), its entry spread eo."""
-    c = rec["card"]; d, e, R = c["d"], c["e"], c["R"]
+    c = rec["card"]; d, e, R = rbase(rec)
     a = np.asarray([b[:7] for b in bars if b[0] >= t0], dtype=np.float64)
     t, o, h, l, cl, sp = a[:, 0], a[:, 1], a[:, 2], a[:, 3], a[:, 4], a[:, 6]
     s = sp / R
@@ -534,7 +547,12 @@ class Runner:
             else: return ch
             fl = float(pj.get("full_lots") or 0)
             rec["full_lots"] = fl if fl > 0 else (float(x["volume"]) * 100.0 / max(1.0, rec["plan"]["entry"]["pct"]) if x else rec["full_lots_est"])
-            ch = True
+            rec.setdefault("rbase", "fill"); ch = True
+            if rec["rbase"] == "fill":
+                c = rec["card"]; d, e, R = rbase(rec); dig = int((self.spec(sym) or {}).get("digits") or 5)
+                logline(rec, f"R counts from your fill {e:.{dig}f} to the signal stop {float(c['sl']):.{dig}f}: 1R = {R:.{dig}f}"
+                             + (f" (the card's entry was {c['e']:.{dig}f} with 1R {c['R']:.{dig}f}: your fill was {d * (e - c['e']) / c['R']:+.2f}R from it)"
+                                if abs(e - c["e"]) > 0.05 * c["R"] else ""))
         for L in rec["legs"]:
             if L["status"] == "open" and L.get("posid") and int(L["posid"]) not in bp:
                 L["status"] = "closed"; ch = True; logline(rec, f"leg {L['q']} (pos {L['posid']}) is closed on the account")
@@ -560,18 +578,19 @@ class Runner:
 
     @staticmethod
     def capped(rec: dict) -> dict:
-        """the plan with its 1R cap in the EA's terms: the EA measures 1R from the FIRST FILL to the signal stop (full lots x that distance),
-        the replay in the card's R - a fill better than the card entry makes the EA's 1R smaller, so the cap shrinks with it (an add the
-        replay fits under the cap must also fit under the EA's, which refuses anything over 1R x 1.05)."""
+        """the plan with its 1R cap in the EA's terms: the EA measures 1R from the FIRST FILL to the signal stop (full lots x that distance).
+        In the fill frame (rbase 'fill') that IS the replay's 1R (ratio 1, the cap as built); a card-frame record replays in the card's R -
+        a fill better than the card entry makes the EA's 1R smaller, so the cap shrinks with it (an add the replay fits under the cap must
+        also fit under the EA's, which refuses anything over 1R x 1.05)."""
         cfg = rec["plan"]
         if cfg.get("risk_cap") is None or not rec.get("fill"): return cfg
-        ratio = abs(float(rec["fill"]["px"]) - float(rec["card"]["sl"])) / float(rec["card"]["R"])
+        ratio = abs(float(rec["fill"]["px"]) - float(rec["card"]["sl"])) / rbase(rec)[2]
         if ratio >= 1.0: return cfg
         return dict(cfg, risk_cap=round(min(float(cfg["risk_cap"]), max(0.01, ratio * 0.99)), 4))
 
     def actions(self, rec: dict, res, P: dict, bp: dict, tk: dict, spec: dict) -> list[dict]:
         (Rv, kind, jx, gross, nbf, naf, cut), (ls, lst, alive, nl, src, sz0, bk_done, ad_done, mv_done) = res
-        c = rec["card"]; d, e, R = c["d"], c["e"], c["R"]
+        c = rec["card"]; d, e, R = rbase(rec)
         step = spec.get("volume_step") or 0.01; vmin = spec.get("volume_min") or 0.01
         pt = spec.get("point") or 1e-5; dig = int(spec.get("digits") or 5); stops = (spec.get("stops_level") or 0) * pt
         busy = {(v["posid"], v["verb"]) for v in (rec.get("pending") or {}).values()}

@@ -62,7 +62,12 @@ approve task id, then the runner's state: legs (leg index -> posid), executed on
 and a human-readable log the position page shows.
 
 ## Runner semantics (Practice parity)
-- Prices in the card's R: R(price) = d x (price - card entry) / |card entry - signal SL|. Exit side = bid for a BUY, ask for a SELL.
+- Prices in the POSITION's R (trader 2026-10-13, record key `rbase: "fill"`): R(price) = d x (price - first fill) /
+  |first fill - signal SL| - the EA's open R and sizing basis. Exit side = bid for a BUY, ask for a SELL. So "+1R", "entry"
+  (0R), the trail distance, cut thresholds and banks all count from where the trade got in, and the -1R floor is the broker's
+  original stop. Before 2026-10-13 the replay used the card's R (origin the card entry); a late fill then started the replay at,
+  say, +0.91R and a "stop to entry when +0.5R" lever fired at the fill (EURCAD #3, NZDCHF #6 closed within seconds). Records
+  without `rbase` (approved before the change) keep the card's R until they finish.
 - The path starts at the first leg's fill minute (M1 bars from the terminal, with each bar's own spread); the current minute is
   included for level triggers only (time-based checks wait for the minute to close).
 - Times: "H hours" = H4 bar H // 4 after the ENTRY-BAR open (the signal bar's close, same grid as Practice), then H % 4 hours into

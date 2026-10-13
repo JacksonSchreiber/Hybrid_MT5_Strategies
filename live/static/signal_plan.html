@@ -115,7 +115,8 @@
       <sl-button size="large" variant="primary" @click="approve()" :disabled="!v.ok || busy" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon><span x-text="inverse ? 'Approve the INVERSE with this plan' : 'Approve with this plan'"></span></sl-button>
     </div>
     <div class="k bt-small">The EA opens the first leg; the plan runner on the box then carries out every lever on the live price (a few seconds behind it) and the
-      EA's own rules stay off for this trade. Every leg always has its stop at the broker.</div>
+      EA's own rules stay off for this trade. Every leg always has its stop at the broker. R counts from your fill: 1R = your fill to the signal
+      stop (the position's open R), so if the price has already moved, the levers start at 0 from where you got in.</div>
     <template x-if="done"><div class="bt-flash" x-text="done"></div></template>
   </div>
 </div>

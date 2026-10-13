@@ -72,3 +72,20 @@ All user-approved decisions, newest first.
 - **Coach flag:** a refused-then-re-approved signal journals once, at the fill that happened. The refusal itself lives in the
   audit log (`order_retry`, `order_failed_open`), not in the journal.
 
+## 2026-10-13 — A live plan's R counts from the fill, not the card entry (trader: "it should just be based on the original SL and not change")
+
+- **Trigger:** EURCAD #3 (13:49 UTC) and NZDCHF #6 (02:01 UTC) were approved with plans after the price had already moved
+  in the trade's favour (+0.91R and +0.66R past the card entry). The plan runner measured R from the card entry, so the plan's
+  "stop to entry when +0.5R" lever was already true at the fill. It put the stop at the fill price, the spread put that
+  stop through the price, and the runner closed each trade within seconds (-0.02R, -0.03R). AUDUSD #4's page showed two R
+  numbers for the same price (the position's open R +0.72R, counted from the fill; the plan's replay +0.96R, counted with
+  the card's 1R).
+- **Now:** every new plan measures R like the position does: from the actual fill to the original signal stop (the EA's open
+  R and sizing basis; never the moving stop). A late fill's levers start at 0 from where the trade got in. The running AUDUSD
+  #4 plan keeps the card's R until it closes (re-basing it mid-trade would re-time its past cut checks).
+- **Also (same day, trader's asks):** the journal tab sorts newest first by signal time, and its symbol box matches any part of
+  the name in any case ("xauusd" finds XAUUSD.sim); the live charts show the cursor's price as R beside the crosshair price
+  label (a signal: from its entry to its stop; a position: from the fill to the original stop).
+- **Verification:** pipeline/plan_live_rbase_check.py replays EURCAD #3 on its real numbers (the old frame closes it, the new one
+  does nothing) and checks AUDUSD #4's replay R equals the EA's open R; the runner-vs-kernel sim (pipeline/plan_live_sim.py) on
+  normal and late fills (--late).

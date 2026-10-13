@@ -36,6 +36,7 @@ class Sim:
         self.sp = sp; self.d = -1 if sell else 1; self.j = 0
         self.h4 = [int(T0 + o * 60) for o in ctx["off"] if o is not None]
         self.pos = {}; self.closed = {}; self.next_id = 1000; self.tasks = []; self.acks = {}; self.pnl = 0.0; self.full = 1.0
+        self.R1 = R_          # the R the P&L is counted in: the first leg's |fill - signal stop| once it fills (the plan's rbase 'fill')
     def bid(self, j): return self.o[j]
     def ask(self, j): return self.o[j] + self.sp[j]
     def open_leg(self, j, lots, sl, tp):
@@ -44,7 +45,7 @@ class Sim:
         self.pos[pid] = {"ticket": pid, "symbol": "SIM", "volume": lots, "sl": sl, "tp": tp, "price_open": px, "time": int(self.t[j])}
         return pid, px
     def close_vol(self, pid, vol, px):
-        p = self.pos[pid]; self.pnl += self.d * (px - p["price_open"]) * vol / R_ / self.full
+        p = self.pos[pid]; self.pnl += self.d * (px - p["price_open"]) * vol / self.R1 / self.full
         p["volume"] = round(p["volume"] - vol, 6)
         if p["volume"] <= 1e-9: self.closed[pid] = self.pos.pop(pid)
     def exit_px(self, j): return self.bid(j) if self.d > 0 else self.ask(j)
@@ -101,8 +102,11 @@ def patch(sim: Sim):
     C.list_positions = lambda cfg, closed=False: []
 
 
-def run_one(F, ctx, plan, sell):
+def run_one(F, ctx, plan, sell, late=0):
+    """late: the first leg fills at minute `late` of the frame instead of its first minute (a late approve: the price has moved off the
+    card entry), so the plan's R counts from that fill (rbase 'fill', 2026-10-13)."""
     sim = Sim(F, ctx, sell); patch(sim)
+    late = min(int(late), sim.n - 2)
     cfg = {"root": "/nonexistent"}
     pl, _ = PL.live_validate(plan)
     pl.pop("risk_cap", None) if not plan.get("risk_cap") and not any(c["type"].startswith("add") for c in plan["levers"]) else None
@@ -115,23 +119,24 @@ def run_one(F, ctx, plan, sell):
     rec = PL.new_record(sig, pl, [], False, "market"); rec["approve_task"] = "approve"
     # the first leg at minute 0's open, sized entry% of 1.0 lots, the signal stop, TP2 when on
     sim.full = 1.0
-    pid, px = sim.open_leg(0, pl["entry"]["pct"] / 100.0, rec["card"]["sl"], rec["card"]["tp2"] if pl["tp2"] else 0)
-    sim.pos[999] = sim.pos.pop(pid); sim.pos[999]["ticket"] = 999
+    pid, px = sim.open_leg(late, pl["entry"]["pct"] / 100.0, rec["card"]["sl"], rec["card"]["tp2"] if pl["tp2"] else 0)
+    sim.pos[999] = sim.pos.pop(pid); sim.pos[999]["ticket"] = 999; sim.R1 = abs(px - rec["card"]["sl"])
+    if sim.d * (sim.o[late] - rec["card"]["sl"]) <= 0 or (pl["tp2"] and sim.d * (sim.o[late] - rec["card"]["tp2"]) >= 0): return None   # out of the trade already
     run = PL.Runner(cfg, log=lambda m: None)
     PL.save_plan = lambda cfg, rec: None
-    for j in range(sim.n):
+    for j in range(late, sim.n):
         sim.j = j
-        if j > 0: sim.minute(j)
-        else:   # minute 0: only the stop / TP check after the entry at the open
-            sim.tasks = []; sim.minute(0)
-        if not sim.pos and not sim.tasks and j > 0: break
+        if j > late: sim.minute(j)
+        else:   # the entry minute: only the stop / TP check after the entry at the open
+            sim.tasks = []; sim.minute(j)
+        if not sim.pos and not sim.tasks and j > late: break
         if rec.get("status") in PL.FINAL: break
         run.step(rec)
     # anything still open at the frame end closes at the last close
     for pid in list(sim.pos): sim.close_vol(pid, sim.pos[pid]["volume"], sim.c[min(sim.j, sim.n - 1)] + (sim.sp[sim.j] if sell else 0))
     # the kernel on the SAME live frame the runner replays (its own direction, prices and fill): the reference for this direction
     F2, ctx2 = PL.frame(sim.bars(0, sim.n) + [sim.bars(sim.n - 1, sim.n)[0][:1] + [sim.c[-1]] * 4 + [0, sim.sp[-1]]], rec,
-                        int(sim.t[0]), rec["fill"]["px"], sim.h4)
+                        int(sim.t[late]), rec["fill"]["px"], sim.h4)
     ctx2["tm"][-1] = ctx2["tm"][-2] + 1; ctx2["t_next"] = int(ctx2["tm"][-1])        # a closing dummy minute: every real minute counts as closed
     r_k = float(BE.run(BE.kern, F2, ctx2, BE.compile_cfg(pl, ctx2))[0])
     return sim.pnl, rec, r_k
@@ -139,6 +144,7 @@ def run_one(F, ctx, plan, sell):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--data", default="data/backtest"); ap.add_argument("--frames", type=int, default=30); ap.add_argument("--maxn", type=int, default=2500)
+    ap.add_argument("--late", type=int, default=0, help="the first leg fills this many minutes into the frame (a late approve)")
     a = ap.parse_args()
     fr = BE.Frames(os.path.join(a.data, "frames_v1"))
     ids = [h for h in sorted(fr.idx) if fr.idx[h]["up"] and fr.idx[h]["n"] <= a.maxn]
@@ -148,8 +154,9 @@ def main():
         F, ctx = fr.get(hid)
         for name, plan in PLANS.items():
             cfg = PL.live_validate(plan)[0]
-            r_b, rec_b, kb = run_one(F, ctx, plan, False)
-            r_s, rec_s, ks = run_one(F, ctx, plan, True)
+            ob = run_one(F, ctx, plan, False, a.late); os_ = run_one(F, ctx, plan, True, a.late)
+            if ob is None or os_ is None: continue
+            (r_b, rec_b, kb), (r_s, rec_s, ks) = ob, os_
             rows.append((hid, name, kb, r_b, ks, r_s))
             flag = "  <-- far from the kernel" if max(abs(r_b - kb), abs(r_s - ks)) > 0.35 else ""
             if flag: print(f"{hid} {name}: BUY kernel {kb:+.3f} runner {r_b:+.3f} | SELL kernel {ks:+.3f} runner {r_s:+.3f}{flag}", flush=True)

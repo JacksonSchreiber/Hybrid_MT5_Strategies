@@ -144,6 +144,28 @@
           var vis = n - from, w = Math.max(100, box.clientWidth - 75); pad = Math.min(Math.ceil(vis / 2), Math.max(5, Math.ceil(140 * vis / Math.max(60, w - 140)))); }
         chart.timeScale().setVisibleLogicalRange({ from: from, to: n + pad });
         new ResizeObserver(function () { chart.applyOptions({ width: box.clientWidth }); }).observe(box);
+        guard('rtag', function () { rTag(lv); });
+      }
+      // trader 2026-10-13: the cursor's price also as R, in a tag beside the crosshair's price label. R = profit R from the entry to the
+      // ORIGINAL stop: d.r_base on a position page (its fill and risk-basis stop - never the moving stop), else the levels drawn (the
+      // signal; mirrored levels on the plan card's Inverse redraw). A BUY when the stop is below the entry. Blind cards already print R.
+      function rTag(lv) {
+        var old = box.querySelector('.hc-rtag'); if (old) old.remove();
+        var rb = d.r_base || lv, rE = +rb.entry, rS = +rb.sl;
+        if (d.blind || !(rE > 0) || !(rS > 0) || rE === rS) return;
+        var dir = rS < rE ? 1 : -1, risk = Math.abs(rE - rS), tag = document.createElement('div');
+        tag.className = 'hc-rtag';
+        tag.style.cssText = 'position:absolute;display:none;pointer-events:none;z-index:3;font:11px/16px monospace;padding:0 4px;border-radius:2px;background:#30363d;color:#e6edf3;white-space:nowrap';
+        if (getComputedStyle(box).position === 'static') box.style.position = 'relative';
+        box.appendChild(tag);
+        chart.subscribeCrosshairMove(function (p) {
+          var px = (p && p.point && p.point.y >= 0) ? cs.coordinateToPrice(p.point.y) : null;
+          if (px === null || px === undefined || !isFinite(px)) { tag.style.display = 'none'; return; }
+          var r = dir * (px - rE) / risk;
+          tag.textContent = (r >= 0 ? '+' : '') + r.toFixed(2) + 'R';
+          tag.style.color = r >= 0 ? '#3fb950' : '#f85149';
+          tag.style.top = (p.point.y - 8) + 'px'; tag.style.right = (chart.priceScale('right').width() + 2) + 'px'; tag.style.display = 'block';
+        });
       }
       bar.querySelectorAll('button').forEach(function (b) { b.onclick = function () { tf = b.dataset.tf; bar.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); }); start(); }; });
       start();

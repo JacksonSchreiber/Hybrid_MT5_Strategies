@@ -1137,6 +1137,8 @@ def plan_panel(rec: dict) -> str:
     return (f'<div class="card"><h2>Your plan <span class="pill {cls}">{E(st)}</span>{" <span class=\"pill warn\">INVERSE</span>" if rec.get("inverse") else ""}</h2>'
             f'<div>{E(what)}{" · every add under a 1R cap on the open risk" if rec["plan"].get("risk_cap") else ""}</div>'
             + (f'<div class="k">the replay (Practice engine, live prices): {C.r_fmt(m.get("R"))} so far · {m.get("bars")} minutes · {E(m.get("at", ""))}</div>' if m else "")
+            + ('<div class="k">R here = from your fill to the signal stop, the same as the position\'s open R</div>' if rec.get("rbase") == "fill" else
+               '<div class="k">R here = from the signal card\'s entry to the signal stop (approved before 2026-10-13) - it differs from the position\'s open R, which counts from your fill</div>')
             + (f'<table style="margin-top:6px"><tr><th>leg</th><th>pos</th><th>state</th><th></th></tr>{rows}</table>' if rows else "")
             + f'<details open style="margin-top:6px"><summary class="k">what the plan runner did</summary>{log}</details>{stop}</div>')
 
@@ -1238,8 +1240,9 @@ def signal_page(key: str, q: dict) -> str:
     out.append(f'<div id="sigwatch" data-key="{E(key)}" data-status="{E(s.get("status", ""))}" data-delays="{s.get("delay_count", 0)}"></div>')
     return page(f"#{s['signal_id']} {s['strategy']} {s['direction']}", "".join(out), "home")   # no full-page refresh: /api/signal state poll + banner
 
-def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None, expose: bool = False) -> str:
-    """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load."""
+def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None, expose: bool = False, r_base: dict | None = None) -> str:
+    """interactive Lightweight-Charts block fed from the signal's own bars; everything drawn on load. r_base {entry, sl}: what the cursor's
+    R tag counts from (a position: its fill and original stop); default the levels drawn."""
     ov = C.clean_overlay(sig.get("overlay"), (sig.get("levels") or {}).get("entry"))   # never let garbage geometry rescale the chart
     from live import mt5feed
     live_feed = mt5feed.available()
@@ -1247,6 +1250,7 @@ def chart_block(sig: dict, levels: dict | None = None, marks: list | None = None
             "levels": levels or sig.get("levels") or {},
             "overlay": {k: ov.get(k) for k in ("zone", "zone2", "leg", "aux", "swings_hi", "swings_lo")},
             "signal_t": charts._epoch(sig.get("signal_time")), "digits": charts._digits(sig), "marks": marks or [], "strategy": sig.get("strategy", "")}
+    if r_base: data["r_base"] = r_base
     tvs = C.tv_symbol(CFG, sig["symbol"]); link = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(tvs)}&interval=240"
     cid = "hc_" + hashlib.md5(sig["signal_key"].encode()).hexdigest()[:8]
     return (f'<div class="card" style="padding:6px"><div class="hc" id="{cid}"><div class="row hc-bar" style="padding:2px 4px 6px"><button class="btn on" data-tf="h4" style="padding:6px 12px">H4</button><button class="btn" data-tf="d1" style="padding:6px 12px">D1</button>'
@@ -1459,7 +1463,8 @@ def position_page(key: str, q: dict) -> str:
     if prec and any(int(L.get("posid") or 0) == int(p["posid"]) for L in prec.get("legs", [])): out.append(plan_panel(prec))
     out.append(staged_block(p))
     plv = {"entry": p.get("entry"), "sl": p.get("sl_live"), "tp1": p.get("tp1"), "tp2": p.get("tp_live")}
-    if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None))
+    if src: out.append(chart_block(src, plv, marks=[{"t": int(p["opened_at"]) - int(p["opened_at"]) % 14400, "label": "entry"}] if p.get("opened_at") else None,
+                                   r_base={"entry": p.get("entry"), "sl": p.get("sl_risk_basis")}))
     else: out.append(tv_block(p["symbol"], 240, plv))
     if p.get("signal_id"): out.append(f'<div class="k"><a href="/signal/{E(p["symbol"])}-{p["signal_id"]}">→ signal #{p["signal_id"]} (EA charts, verdict)</a></div>')
     # events inside hold (next 5 days for the symbol)
@@ -1660,10 +1665,13 @@ def equity_page(q: dict) -> str:
 
 
 def journal_page(q: dict) -> str:
-    sym = q.get("symbol") or None; rows = C.journal_rows(CFG, sym)
+    # trader 2026-10-13: newest first by signal time (the file order was symbol by symbol); the symbol box matches any part, any case
+    sym = (q.get("symbol") or "").strip() or None; rows = C.journal_rows(CFG)
+    if sym: rows = [r for r in rows if sym.lower() in (r.get("symbol") or "").lower()]
     dec = q.get("decision") or ""
     if dec: rows = [r for r in rows if r.get("decision") == dec]
-    rows = list(reversed(rows))[:200]
+    rows.sort(key=lambda r: (r.get("signal_time") or "", r.get("symbol") or "", int(r.get("signal_id") or 0) if str(r.get("signal_id") or "").isdigit() else 0), reverse=True)
+    rows = rows[:200]
     opts = "".join(f'<option value="{E(x)}" {"selected" if x == dec else ""}>{E(x or "all decisions")}</option>' for x in ["", "approved", "approved_pending", "skipped", "rejected"])
     out = [f'<h1>Journal</h1><form method="get" class="row"><select name="decision" style="width:auto">{opts}</select><input name="symbol" value="{E(sym or "")}" placeholder="symbol" style="width:160px"><button class="btn">Filter</button></form><div class="card"><table><tr><th>#</th><th>time</th><th>signal</th><th>decision</th><th>R</th><th>exit</th></tr>']
     for r in rows:
