@@ -117,6 +117,18 @@ def main() -> int:
     run_ = PL.Runner(cfg, log=lambda m: None); applied = run_.apply_edit(r, T0 + j * 60 + 20)
     check("H2 the runner applies the request and acknowledges it", applied and r["rev"] == 1 and r["edit_last"]["ok"] and r["edit_last"]["id"] == "req1"
           and not os.path.exists(PL.edit_path(cfg, r["signal_key"])), r["log"][-1]["msg"] if r["log"] else "")
+    # H3: the save fails (Windows: the file open elsewhere) -> the request stays for the next poll, nothing half-applied on disk
+    r = rec_of(base); PL.save_plan(cfg, r)
+    C.atomic_write_json(PL.edit_path(cfg, r["signal_key"]), {"id": "req2", "plan": {"entry": {"pct": 100}, "tp2": False, "levers": new}, "ids": ["l0"], "base_rev": 0})
+    real = C.atomic_write_json; PL.time.sleep = lambda s_: None
+    def boom(path, obj):
+        if path.endswith("SIM.sim-1.json"): raise PermissionError(13, "Access is denied")
+        return real(path, obj)
+    C.atomic_write_json = boom
+    try: run_.apply_edit(r, T0 + j * 60 + 20); raised = False
+    except PermissionError: raised = True
+    C.atomic_write_json = real
+    check("H3 a failed save keeps the request for the next poll", raised and os.path.exists(PL.edit_path(cfg, r["signal_key"])) and (PL.load_plan(cfg, r["signal_key"]) or {}).get("rev") == 0)
     print("RESULT:", "PASS" if OK else "FAIL")
     return 0 if OK else 1
 

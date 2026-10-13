@@ -384,7 +384,7 @@ def lever_state(rec: dict, res, S: dict, P: dict, vi: int, F: dict) -> dict:
     for k, x in enumerate(ci["add"]):
         if S["ad_done"][k]: out[x] = "done"
         elif S["ad_held"][k]: out[x] = "holding"
-        elif P["ad_type"][k] == 1 and 0 <= int(P["ad_k"][k]) < jn: out[x] = "waiting"
+        elif P["ad_type"][k] == 1 and 0 <= int(P["ad_k"][k]) < jn: out[x] = "bar passed"
     for k, x in enumerate(ci["cut"]):
         if int(P["ct_k"][k]) < jn: out[x] = "time passed"
     return out
@@ -459,7 +459,7 @@ def request_edit(cfg: dict, rec: dict, plan_in, ids_in, base_rev, wait_s: float 
     C.atomic_write_json(p, {"id": rid, "plan": plan_in, "ids": ids_in, "base_rev": base_rev, "at": C.now_iso()})
     t_end = time.time() + wait_s
     while time.time() < t_end:
-        time.sleep(0.5)
+        time.sleep(1.0)
         cur = load_plan(cfg, rec["signal_key"]) or {}
         e = cur.get("edit_last") or {}
         if e.get("id") == rid:
@@ -514,7 +514,12 @@ def plans_dir(cfg: dict) -> str: return os.path.join(cfg["root"], "plans")
 def plan_path(cfg: dict, key: str) -> str: return os.path.join(plans_dir(cfg), f"{key}.json")
 def load_plan(cfg: dict, key: str) -> dict | None: return C.load_json(plan_path(cfg, key)) if C.safe_key(key) else None
 def save_plan(cfg: dict, rec: dict) -> None:
-    os.makedirs(plans_dir(cfg), exist_ok=True); C.atomic_write_json(plan_path(cfg, rec["signal_key"]), rec)
+    os.makedirs(plans_dir(cfg), exist_ok=True)
+    for k in range(5):                     # Windows: os.replace fails while another process has the file open (the page reading it)
+        try: C.atomic_write_json(plan_path(cfg, rec["signal_key"]), rec); return
+        except PermissionError:
+            if k == 4: raise
+            time.sleep(0.2)
 
 
 def _epoch(s: str | None) -> int | None:
@@ -806,14 +811,15 @@ class Runner:
         p = edit_path(self.cfg, rec["signal_key"])
         if not os.path.exists(p): return False
         req = C.load_json(p) or {}
-        try: os.remove(p)
-        except OSError: pass
         try:
             v = build_edit(rec, req.get("plan"), req.get("ids"), req.get("base_rev"), now_srv - now_srv % 60)
+            commit_edit(rec, v, req.get("id"))
         except ValueError as e:
             rec["edit_last"] = {"id": req.get("id"), "ok": False, "msg": str(e), "at": C.now_iso()}
-            logline(rec, f"plan edit refused: {e}"); return True
-        commit_edit(rec, v, req.get("id"))
+            logline(rec, f"plan edit refused: {e}")
+        save_plan(self.cfg, rec)           # saved BEFORE the request goes and before anything is sent: a failed save raises, the request
+        try: os.remove(p)                  # stays, and the next poll (the record reloaded, base_rev unchanged) applies it again
+        except OSError: pass
         return True
 
     @staticmethod
