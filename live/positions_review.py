@@ -171,6 +171,25 @@ def _avg_r(p):
         return None, None
 
 
+def avg12_r(symbol: str, entry: float, R: float, up: bool, t0: int | None = None) -> float | None:
+    """trader 2026-10-14 ("an indicator showing the average R in the past 12 hours for each symbol"): the average R of the last 720 M1
+    closes (~12 trading hours, the window of the 12 h average cut) against an entry and a 1R distance, signed by the direction; t0 (server
+    clock): only the minutes since then (a trade younger than 12 h averages since its entry, as the cut does). None: no bars."""
+    try:
+        from live import mt5feed
+        if not (R and R > 0 and entry): return None
+        xs = [b for b in (mt5feed.bars(symbol, "m1", 760, max_age_s=20.0) or []) if t0 is None or b[0] >= t0][-720:]
+        if not xs: return None
+        return (1.0 if up else -1.0) * (sum(b[4] for b in xs) / len(xs) - float(entry)) / float(R)
+    except Exception:
+        return None
+
+
+def pos_avg12(p) -> float | None:
+    """a position's 12 h average R: from its fill against its original stop (the position's R), since its entry when younger."""
+    return avg12_r(p["symbol"], _f(p.get("entry")), _R(p), _up(p), int(_f(p.get("opened_at"))) or None)
+
+
 def _hours(p) -> str:
     try:
         from live import exposure as EXP

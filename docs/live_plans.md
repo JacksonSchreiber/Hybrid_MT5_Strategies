@@ -22,6 +22,11 @@ The EA's flat parser sees params as `params.<name>`; values are numbers or strin
 | `entry_pct` | 1-100 (default 100) | first position = ruled lots x pct/100, floored to the volume step, at least the min lot |
 | `tp2` | `1` (default) / `0` | `0`: the order has NO broker TP (the plan runs until a stop, a cut or a manual close) |
 | `inverse` | `1` | trade the opposite direction: direction flipped, SL / TP / TP1 / TP2 mirrored round the parked candidate's entry (`2*entry - level`) BEFORE the market validation and sizing |
+| `lv_entry` `lv_sl` `lv_tp1` `lv_tp2` | prices (2026-10-14) | the plan's own levels replace the card's BEFORE the market validation and the sizing (`SizeByRisk(entry, sl)`: 1R = the ruled risk at the custom stop). `lv_entry` = a pending order there (limit or stop against the market; `entry_mode` forced to pending). Sides checked (`bad_params:lv_sl_side` / `lv_tp_side`); refused with `inverse` (`bad_params:levels_with_inverse`). `lv_tp1` never turns a one-target card into a split (journal only - the EA's management is off on plan rows) |
+| `pend_bars` | 1-60 | the custom-entry pending order's expiry in H4 bars (row field `pend_bars`, persisted; 0 = `InpPendingExpiryBars`) |
+
+The signal JSON of an EA with these params carries `"plan_levels": true`; the page and `plan_live.approve` refuse custom levels on a
+signal without it (an older EA would ignore them and size at the card's stop).
 
 Plan rows: `entry_mode` = `plan_` + the usual mode (`plan_market`, `plan_market_now`, `plan_pending_frozen`), with `_inv`
 appended for an inverse (`plan_market_inv`); `st_full_lots` = the ruled full lots (100%); `st_tranche` 0. Staging never
@@ -117,3 +122,41 @@ close, a bank, an add) and warnings (a time already passed). **Save the change**
   field}], add: [lever]}`, validated against the running plan (`plan_live.apply_suggestion`); the review page's "Load into the plan
   editor" opens the position page with `?suggest=<review>` - the suggestion loads as an unsaved change (Undo goes back), and the
   trader reviews and saves as with any edit.
+
+## Custom levels, armed plans and the advisor's own plan (trader 2026-10-14)
+"add an option to change the SL, entry, TP1/2. keep the signal's default in the box, but allow it to be changed. also add an indicator
+showing the average R in the past 12 hours for each symbol" and "the advisor on the live symbols should be able to create its own plan
+based on the market conditions ... especially if the advisor's ruling is a 'wait', it should have a plan that executes on its wait criteria".
+
+- **Levels box** (signal page, pre-approve only): entry / stop / TP1 / TP2 prefilled with the signal's, each editable with a reset; it
+  shows 1R, each target in R and the size at the same 1% risk (the EA computes the exact lots). The chart's lines move with them. The
+  plan carries only the changed levels (`plan.levels`, `entry_h` = the pending order's hours); `plan_live.validate_levels` checks the
+  sides; the record's `card` takes them, so the R frame (`rbase`: fill to YOUR stop), TP1 / TP2 levers and the 1R cap all count from
+  them. A custom entry's lever hours count from the H4 bar it fills in. Not with Inverse.
+- **Wait** (`plan.arm` = `{when: [...], cancel: [...]}`): conditions on the bid (the chart's price) - `touch` above/below a price, a
+  `close` (M15 / H1 / H4 bar, bucketed from M1) above/below a price, `after` a UTC time, `hours` after the previous step. `when` steps are
+  met IN ORDER, each from the minute the previous one was met; any `cancel` rule ends the wait (nothing sent); a wait always has a time
+  limit (none given: 48 h; at most 120 h). The record starts `armed`: no approve task. The runner (`Runner.armed`) checks every poll;
+  when the last step is met it re-reads the record (a Disarm from the page wins), re-anchors the lever hours to the current H4 bar and
+  sends the approve (`send_approve`, issued_by plan, a Telegram line). While armed it keeps the signal open with an explicit `delay`
+  when the next bar close would expire it (implicit_streak >= max_age - 1; one per H4 bar). The signal still dies if the price trades
+  through the CARD's stop at a bar close (the EA's parked-signal rule) - the armed plan then ends `cancelled`. Cancelled / ended waits
+  leave the signal open for the trader. A market entry after a wait meets the EA's R:R floor (1.0 to TP2 from the fill) - the page says so.
+- **Disarm:** `POST /plan_stop` on an armed record -> `stopped`, nothing sent. The home page shows `ARMED · waiting k/n`; the signal page
+  shows the armed panel above the builder; a second approve is refused until it is disarmed.
+- **12 h average:** `positions_review.avg12_r` = the mean of the last 720 M1 closes (12 trading hours, the 12 h average cut's window)
+  against an entry and 1R, signed by the direction - a position from its fill to its original stop (since its entry when younger than
+  12 h), a pending signal from its entry to its stop. Pills on the home page (signals and positions), the signal and position pages
+  (cached 30 s).
+- **The advisor's own plan** (CLAUDE.live.md "Your plan", the consult prompt asks for it): after `Changes my mind:` a fenced `plan`
+  block, schema `live-advisor-plan/v1` {rationale, levels, wait, entry, tp2, levers}, built from the chart and today's market - not
+  from the studies, presets or the record. Its Changes-my-mind points become levels / wait steps; a WAIT verdict's plan carries its wait
+  criteria as `wait`. `verdict_fmt.parse` lifts the block out (`plan_text`); `plan_live.advisor_plan` validates it exactly as an approve
+  (levers, level sides, the wait) and the advisor card shows it in words with "Load into the builder" (a window event the builder takes
+  as an unsaved plan). The trader still approves or arms it; nothing is sent by the advisor. The role's old "don't recommend moving a
+  stop" doctrine is now background ("the EA's default management").
+- **Checks:** `pipeline/plan_live_levels_check.py` (levels, conditions, approve params, armed runner on a fake feed: steps in order,
+  the keep-alive delay, the trigger, cancels; the advisor block). EA self-test (from signal 17 on, after the plan and inverse scenarios):
+  a stop on the wrong side refused `bad_params:lv_sl_side`; a tighter custom stop + TP2 at 3R lands on the row and the broker and the
+  full lots are sized at the custom stop (`plan_lv_check`); a custom entry halfway to the stop with `pend_bars` 1 rests as a
+  `plan_pending_frozen` order and fills (cut) or expires after one bar (`plan_lvpend_check`). `live_queue_check.py` validates them.

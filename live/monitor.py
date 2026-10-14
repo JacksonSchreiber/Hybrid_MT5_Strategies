@@ -69,7 +69,7 @@ class Monitor:
                 tag = f"pend-exp:{key}"
                 if row.get("decision") == "expired" and tag not in self.st["acks"]:
                     self.st["acks"].append(tag)
-                    self.send(f"PENDING ORDER EXPIRED unfilled: #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} at {lv.get('entry')} - the EA cancelled it after {C.PENDING_EXPIRY_BARS} H4 bars.")
+                    self.send(f"PENDING ORDER EXPIRED unfilled: #{s['signal_id']} {s['symbol']} {s['strategy']} {s['direction']} at {row.get('entry') or lv.get('entry')} - the EA cancelled it after {int(row.get('pend_bars') or 0) or C.PENDING_EXPIRY_BARS} H4 bars.")
             elif prev is None and stt != "open":
                 pass  # decided before the monitor started
             seen[key] = stt
@@ -697,7 +697,7 @@ class Monitor:
         if (self.cfg.get("live_plans") or {}).get("runner", True) and not self.dry:
             try:                                            # trader 2026-10-12: the live plan runner (docs/live_plans.md), its own thread
                 from live import plan_live
-                plan_live.Runner(self.cfg, log=lambda m: self.log("plans: " + m)).start()
+                plan_live.Runner(self.cfg, log=lambda m: self.log("plans: " + m), notify=self.send).start()
             except Exception as e: self.guard_error("plan_runner", e)
         # one boot check per boot: a service restart inside the first 15 min must not re-announce a reboot
         boot_key = str(int(time.time() - boot_s)) if boot_s is not None else ""

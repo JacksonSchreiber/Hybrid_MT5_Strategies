@@ -14,6 +14,7 @@ _LABEL = re.compile(r"^(SUMMARY|VERDICT|Mechanical|OPINION|Size|Sources|Quality|
 _CHECKS = re.compile(r"^Checks\s*[—–-]\s*(.+?)\s*:\s*(.*)$", re.I)
 _STEP = re.compile(r"(\d{1,2})\s*([✓✔✗✘×?xXvV-])")            # v/V: some transports mangle the tick glyph
 _CHIP = re.compile(r"(regime|news|correlation)\s*([✓✔✗✘×?xXvV-])", re.I)
+_PLAN = re.compile(r"```\s*plan\s*\n(.*?)```", re.S | re.I)            # 2026-10-14: the advisor's own plan, a fenced JSON block
 
 
 def _norm(g: str) -> str: return GLYPH.get(g, GLYPH.get(g.lower(), "maybe"))
@@ -37,8 +38,11 @@ def parse(text: str | None) -> dict:
                  "mech": None, "mech_rule": None, "mech_detail": "", "d1_ext": None,
                  "opinion": None, "opinion_conf": None, "opinion_text": "", "sources": [], "unsourced": True,
                  # coach item 22 (2026-10-01): the advisor's sizing call - STAGED | FULL | PROMOTE-IF <condition> | n/a
-                 "size": None, "size_cond": None, "size_conf": None}
+                 "size": None, "size_cond": None, "size_conf": None,
+                 "plan_text": None}
     if not text: out["missing"] = ["everything"]; return out
+    pm = _PLAN.search(text)
+    if pm: out["plan_text"] = pm.group(1).strip(); text = text[:pm.start()] + text[pm.end():]
     cur, buf = None, []
 
     def flush():

@@ -512,7 +512,27 @@ def vpill(v: str | None) -> str:
     return f'<span class="vp {PILL.get(v or "", "none")}">{E(v or "no verdict")}</span>'
 
 
-def verdict_card(p: dict, other: dict | None = None) -> str:
+def advisor_plan_box(p: dict, sig: dict | None) -> str:
+    """2026-10-14: the advisor's own plan under its verdict - what it does in plain words, the reason, and "Load into the builder" (the
+    builder on this page takes it as an unsaved plan; the trader still approves)."""
+    if not p.get("plan_text") or not sig: return ""
+    try: ap = PL.advisor_plan(p["plan_text"], sig)
+    except Exception as e: ap = {"ok": False, "error": f"could not read it ({e!r:.80})"}
+    if not ap: return ""
+    if not ap.get("ok"): return f'<div class="sp-advplan"><b>The advisor\'s plan</b> <span class="bad">not usable: {E(ap.get("error", ""))}</span></div>'
+    lab = f'The advisor\'s plan ({p.get("verdict") or "?"}): ' + (ap.get("rationale") or "")[:200]
+    btn = ""
+    if sig.get("status") == "open":
+        det = json.dumps({"plan": ap["cfg"], "label": lab}, separators=(",", ":"))
+        btn = (f'<button type="button" class="btn" style="margin-top:6px" data-plan="{E(det)}" onclick="if(!document.getElementById(\'sp-app\')){{alert(\'The plan builder is not on this page.\');return;}}'
+               f'window.dispatchEvent(new CustomEvent(\'sp-load-plan\',{{detail:JSON.parse(this.dataset.plan)}}))">Load into the builder</button>'
+               '<span class="k bt-small">it loads as an unsaved plan - you review it and approve (or change it)</span>')
+    return (f'<div class="sp-advplan"><b>The advisor\'s plan</b>' + "".join(f'<span class="bt-small">{E(x)}</span>' for x in ap.get("about") or [])
+            + (f'<span class="bt-small k">why: {E(ap["rationale"])}</span>' if ap.get("rationale") else "")
+            + "".join(f'<span class="bt-small warn">{E(w)}</span>' for w in ap.get("warnings") or []) + btn + '</div>')
+
+
+def verdict_card(p: dict, other: dict | None = None, sig: dict | None = None) -> str:
     """The verdict block as a card (coach 2026-09-24). Whatever parsed is rendered; the raw text always stays one
     click away under "more", so a model drifting from the format costs detail, never the verdict."""
     dec = VF.decisive_step(p)
@@ -564,7 +584,7 @@ def verdict_card(p: dict, other: dict | None = None) -> str:
     return (head + sm
             + (f'<div class="chips">{start}</div>' if start else "")
             + (f'<div class="chips">{steps}<span class="k">{E(p.get("strategy") or "")} steps</span></div>' if steps else "")
-            + q + op + src + why + chg + f'<details><summary class="k">more</summary>{more}</details>')
+            + q + op + src + why + chg + advisor_plan_box(p, sig) + f'<details><summary class="k">more</summary>{more}</details>')
 
 
 def _parsed_last(rec: dict | None) -> dict:
@@ -664,7 +684,7 @@ def advisor_section(key: str) -> tuple[str, str]:
                 oth = parsed.get(next((x["id"] for x in ms if x["id"] != mid), ""), None)
                 body.append(f'<div class="k">{E(mid)} · {E(c.get("ts", ""))} · {c.get("elapsed_s")}s'
                             + (" · follow-up" if c.get("kind") == "reply" else "") + "</div>"
-                            + verdict_card(pv, oth if c.get("kind") != "reply" else {"steps": list(first_steps.items())}))
+                            + verdict_card(pv, oth if c.get("kind") != "reply" else {"steps": list(first_steps.items())}, sig))
             elif c.get("kind") == "verdict" and not c.get("interrupted"): body.append(f'<div class="k bad">{E(mid)} · {E(c.get("ts", ""))} · no answer: {E(str(c.get("error"))[:160])}</div>')
         w = words.get(mid)
         answered = any(c.get("ok") for c in cs)
@@ -766,6 +786,38 @@ def be_ok(p: dict) -> bool:
         past = sl > 0 and ((sl >= e) if (p.get("direction") or "").upper() == "BUY" else (sl <= e))
     except (TypeError, ValueError): past = False
     return bool(p.get("be_placeable")) and not past
+
+_AVG12: dict = {}
+AVG12_TIP = ("the average R of the last 12 trading hours (720 one-minute closes) - the window of the 12 h average cut; "
+             "a position counts from its fill to its original stop, a pending signal from its entry to its stop")
+
+
+def armed_pill(key: str) -> str:
+    rec = PL.load_plan(CFG, key)
+    if not rec or rec.get("status") != "armed": return ""
+    k = (rec.get("arm_state") or {}).get("k", 0); n = len((rec.get("arm") or {}).get("when") or [])
+    return f'<span class="pill warn" title="{E(PL.arm_text(rec.get("arm")))}">ARMED · waiting {k}/{n}</span>'
+
+
+def avg12_pill(kind: str, x: dict) -> str:
+    """trader 2026-10-14: the 12 h average R as a pill (cached 30 s per signal / position - the home page shows one per card)."""
+    from live import positions_review as PR
+    try:
+        if kind == "pos": k = ("p", x["symbol"], str(x.get("posid")))
+        else: lv = x.get("levels") or {}; k = ("s", x["signal_key"], lv.get("entry"), lv.get("sl"))
+    except (KeyError, TypeError): return ""
+    c = _AVG12.get(k)
+    if not c or time.time() - c[0] > 30:
+        if kind == "pos": v = PR.pos_avg12(x)
+        else:
+            try: e, sl = float(lv["entry"]), float(lv["sl"]); v = PR.avg12_r(x["symbol"], e, abs(e - sl), x.get("direction") == "BUY")
+            except (KeyError, TypeError, ValueError): v = None
+        if len(_AVG12) > 500: _AVG12.clear()
+        c = _AVG12[k] = (time.time(), v)
+    v = c[1]
+    if v is None: return ""
+    return f'<span class="pill {"ok" if v >= 0 else "bad"}" title="{E(AVG12_TIP)}">avg 12h {C.r_fmt(v)}</span>'
+
 
 def pos_flags(p: dict, closed: bool) -> str:
     xe = p.get("last_external_edit") or ""
@@ -970,7 +1022,7 @@ def dashboard(q: dict) -> str:
         out.append(f'<a href="/signal/{E(s["signal_key"])}"><div class="card"><div class="row"><span class="big">{E(s["symbol"])} {E(s["strategy"])} {E(s["direction"])}</span>{grp_pill(s["symbol"])}{cls_pill(s.get("decision_class"))}{'<span class="pill warn">RE-OFFERED</span>' if s.get("reoffer") else ""}<span class="k">#{s["signal_id"]}</span></div>'
                    f'<div class="row"><span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span><span class="k">delays {s.get("delay_count", 0)}</span><span class="k">{E((s.get("regime") or {}).get("pretty", ""))}</span>'
                    + (f'<span class="k">D1 {ext[s["signal_key"]]:+.2f} ATR (obs)</span>' if ext.get(s["signal_key"]) is not None else '<span class="k">D1 ext n/a</span>')
-                   + '</div>' + grp_box(s["symbol"])
+                   + avg12_pill("sig", s) + armed_pill(s["signal_key"]) + '</div>' + grp_box(s["symbol"])
                    + advisor_rows(s["signal_key"], s) + '</div></a>')
     # pending orders (approved with "pending at the original entry"; resting on the broker until price comes back)
     out.append("<h2>Pending orders</h2>")
@@ -1013,7 +1065,7 @@ def dashboard(q: dict) -> str:
         if int(p.get("short_raise") or 0) == 1 and not child: title += ' <span class="pill ok">STOP +0.25R</span>'
         title += rv_pill.get(f'{p["symbol"]}-{p["posid"]}', "")
         out.append(f'<a href="/position/{E(p["symbol"])}-{p["posid"]}"><div class="card"{style}><div class="row"><span class="big">{title}</span><span class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</span>'
-                   f'<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
+                   f'{"" if child else avg12_pill("pos", p)}<span class="k">banked {C.r_fmt(p.get("banked_r"))} · {p.get("lots_live")} lots · {p.get("bars_open")} bars</span></div></div></a>')
     # instances: one compact table (the expanded universe runs ~40 charts - a card each would bury everything below)
     live_n = 0; rows_i = []
     for sym in syms:
@@ -1116,14 +1168,22 @@ def signal_plan_layout(s: dict, key: str, head: list) -> list:
     left.append(f'<details><summary class="k">static EA charts (what the advisor saw)</summary><img class="chart" src="/chart/{E(key)}/h4.png?d={d}" alt="H4"><img class="chart" src="/chart/{E(key)}/d1.png?d={d}" alt="D1"></details>')
     m_ = re.search(r'<span class="badge[^"]*">.*?</span>', html_adv)
     right.append(f'<div class="card sp-advmini"><b>Advisor</b> <span id="adv-mini">{m_.group(0) if m_ else "-"}</span> <a class="k" href="#adv-card">its full read ↓</a></div>')
+    rec_ = PL.load_plan(CFG, key)
+    if rec_ and rec_.get("status") == "armed": right[-1] += plan_panel(rec_)         # 2026-10-14: an armed plan waits above the builder
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "signal_plan.html")
     right.append('<div id="sp-app" class="sl-theme-dark" x-data="spApp()" x-cloak>' + open(p, encoding="utf-8").read() + '</div>')
     right.append(f'<div class="card"><form method="post" action="/task" class="row"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="skip"><select name="reason_code" style="flex:1">'
                  + "".join(f'<option value="{k}">{k}  {E(v_)}</option>' for k, v_ in C.SKIP_REASONS.items()) + '</select><button class="btn no">SKIP</button></form>'
                  f'<form method="post" action="/task" style="margin-top:10px"><input type="hidden" name="key" value="{E(key)}"><input type="hidden" name="verb" value="delay"><button class="btn wait" style="width:100%">DELAY one bar</button></form></div>')
+    try: base = PL.sig_levels(s)
+    except (KeyError, TypeError, ValueError): base = {}
+    try: tk = mt5feed.tick(s["symbol"]) or {}
+    except Exception: tk = {}
     data = {"key": key, "symbol": s["symbol"], "direction": s.get("direction"), "levels": {k: lv.get(k) for k in ("entry", "sl", "tp1", "tp2", "tp")},
             "lots": float(sz.get("lots") or 0), "step": float(spec.get("volume_step") or 0.01), "vmin": float(spec.get("volume_min") or 0.01),
-            "entry_modes": s.get("entry_modes") or ["market"], "presets": _sp_presets(s)}
+            "entry_modes": s.get("entry_modes") or ["market"], "presets": _sp_presets(s),
+            "base": {k: base.get(k) for k in ("entry", "sl", "tp1", "tp2")}, "digits": int(spec.get("digits") or 5), "point": float(spec.get("point") or 0) or None,
+            "plan_levels": bool(s.get("plan_levels")), "tick": {"bid": tk.get("bid"), "ask": tk.get("ask")}}
     v_ = STATIC_V
     assets = (f'<link rel="stylesheet" href="/static/vendor/shoelace/themes/dark.css?v={v_}"><link rel="stylesheet" href="/static/backtest.css?v={v_}">'
               f'<script type="module" src="/static/vendor/shoelace/shoelace-autoloader.js?v={v_}"></script>'
@@ -1140,18 +1200,31 @@ def plan_panel(rec: dict) -> str:
     """a live plan's state: the levers, the legs, what the runner did (newest first), and a Stop button."""
     from live import backtest as BT
     st = rec.get("status", ""); legs = rec.get("legs") or []
-    cls = {"running": "ok", "approving": "wait", "waiting_fill": "wait", "done": "", "refused": "bad", "stopped": "bad"}.get(st, "")
+    cls = {"running": "ok", "approving": "wait", "waiting_fill": "wait", "armed": "warn", "done": "", "refused": "bad", "stopped": "bad", "cancelled": "bad"}.get(st, "")
     rows = "".join(f'<tr><td>{"first" if L["q"] == 0 else "add " + str(L["q"])}</td><td>{E(str(L.get("posid") or "-"))}</td><td>{E(L.get("status", ""))}</td><td class="k">{E(str(L.get("lots") or ""))} {E(L.get("reason", ""))}</td></tr>' for L in legs)
     log = "".join(f'<div class="k"><span style="font-variant-numeric:tabular-nums">{E(x["t"][5:16].replace("T", " "))}</span> {E(x["msg"])}</div>' for x in reversed((rec.get("log") or [])[-40:]))
     m = rec.get("model") or {}
     stop = (f'<form method="post" action="/plan_stop" style="margin-top:8px" onsubmit="return confirm(\'Stop the plan? The trade keeps its stops and TP; nothing more is banked, added or cut - you manage it by hand.\')">'
             f'<input type="hidden" name="key" value="{E(rec["signal_key"])}"><button class="btn no">Stop the plan (manage by hand)</button></form>') if st in ("approving", "waiting_fill", "running") else ""
+    if st == "armed":
+        stop = (f'<form method="post" action="/plan_stop" style="margin-top:8px" onsubmit="return confirm(\'Disarm? Nothing has been sent; the signal stays open for you to decide.\')">'
+                f'<input type="hidden" name="key" value="{E(rec["signal_key"])}"><button class="btn no">Disarm (nothing has been sent)</button></form>')
+    dig = None
+    try:
+        from live import mt5feed
+        dig = int((mt5feed.spec(rec["symbol"]) or {}).get("digits") or 5)
+    except Exception: pass
+    ast = rec.get("arm_state") or {}
+    wait = (f'<div class="warn">ARMED - nothing sent yet. It {E(PL.arm_text(rec.get("arm"), dig))}.'
+            + (f' Steps met: {ast.get("k", 0)}/{len((rec.get("arm") or {}).get("when") or [])}.' if rec.get("arm") else "") + '</div>') if st == "armed" else \
+           (f'<div class="k">it waited: {E(PL.arm_text(rec.get("arm"), dig))}</div>' if rec.get("arm") else "")
+    lvl = f'<div class="k">{E(PL.levels_text(rec.get("levels"), dig))}</div>' if rec.get("levels") else ""
     try: what = BT.describe(rec["plan"])
     except Exception: what = ""
     return (f'<div class="card"><h2>Your plan <span class="pill {cls}">{E(st)}</span>{" <span class=\"pill warn\">INVERSE</span>" if rec.get("inverse") else ""}</h2>'
-            f'<div>{E(what)}{" · every add under a 1R cap on the open risk" if rec["plan"].get("risk_cap") else ""}</div>'
+            f'{wait}<div>{E(what)}{" · every add under a 1R cap on the open risk" if rec["plan"].get("risk_cap") else ""}</div>{lvl}'
             + (f'<div class="k">the replay (Practice engine, live prices): {C.r_fmt(m.get("R"))} so far · {m.get("bars")} minutes · {E(m.get("at", ""))}</div>' if m else "")
-            + ('<div class="k">R here = from your fill to the signal stop, the same as the position\'s open R</div>' if rec.get("rbase") == "fill" else
+            + ((f'<div class="k">R here = from your fill to {"your" if (rec.get("levels") or {}).get("sl") is not None else "the signal"} stop, the same as the position\'s open R</div>') if rec.get("rbase") == "fill" else
                '<div class="k">R here = from the signal card\'s entry to the signal stop (approved before 2026-10-13) - it differs from the position\'s open R, which counts from your fill</div>')
             + (f'<table style="margin-top:6px"><tr><th>leg</th><th>pos</th><th>state</th><th></th></tr>{rows}</table>' if rows else "")
             + f'<details open style="margin-top:6px"><summary class="k">what the plan runner did</summary>{log}</details>{stop}</div>')
@@ -1165,7 +1238,8 @@ def signal_page(key: str, q: dict) -> str:
     is_open = s.get("status") == "open"
     out.append(f'<h1>{E(s["symbol"])} · {E(s["strategy"])} {E(s["direction"])} <span class="k">#{s["signal_id"]}</span></h1>'
                f'<div class="row">{grp_pill(s["symbol"])}{cls_pill(s.get("decision_class"))}{status_pill(s.get("status", ""))}<span class="pill">{E(rg.get("pretty", ""))}</span>'
-               + (f'<span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span>' if is_open else "") + f'<span class="k">{E(s.get("sigtime_text", ""))} · {E(s.get("session", ""))}</span></div>'
+               + (f'<span class="k">deadline</span><span class="cd" data-deadline="{E(s.get("deadline", ""))}"></span>' if is_open else "") + (avg12_pill("sig", s) if is_open else "")
+               + f'<span class="k">{E(s.get("sigtime_text", ""))} · {E(s.get("session", ""))}</span></div>'
                f'<div class="k">{E(s.get("protocol_text", ""))}</div><div class="k">{E(s.get("strategy_text", ""))}</div>' + grp_box(s["symbol"]) + signal_parent_line(s))
     out.append(signal_kids(s))
     if is_open and str(s.get("auto_reason", "")).startswith("order_failed"):   # trader 2026-10-12: a refused approve leaves the signal open
@@ -1240,7 +1314,7 @@ def signal_page(key: str, q: dict) -> str:
             pos = [p for p in C.list_positions(CFG) if p.get("symbol") == s["symbol"] and str(p.get("signal_id")) == str(s["signal_id"])]
             row = C.row_state(CFG, s["symbol"], s["signal_id"]) or {}
             if pos: out.insert(1, f'<div class="flash ok">pending order has FILLED - <a href="/position/{E(s["symbol"])}-{pos[0]["posid"]}">open position</a></div>')
-            elif row.get("decision") == "expired": out.insert(1, f'<div class="flash bad">pending order EXPIRED unfilled (EA cancelled it after {C.PENDING_EXPIRY_BARS} H4 bars)</div>')
+            elif row.get("decision") == "expired": out.insert(1, f'<div class="flash bad">pending order EXPIRED unfilled (EA cancelled it after {int(row.get("pend_bars") or 0) or C.PENDING_EXPIRY_BARS} H4 bars)</div>')
             else: out.insert(1, '<div class="flash bad">no resting order found for this signal (filled, cancelled or expired) - check Open positions</div>')
     rec = PL.load_plan(CFG, key)
     if rec and not is_open: out.insert(2, plan_panel(rec))
@@ -1317,8 +1391,9 @@ def cancel_txt(o: dict) -> str:
         row = C.row_state(CFG, o["symbol"], sid) or {}
         placed = C.parse_iso(row.get("placed_time")) if isinstance(row.get("placed_time"), str) else (datetime.fromtimestamp(int(row["placed_time"]), timezone.utc) if row.get("placed_time") else None)
         base = int(placed.timestamp()) if placed else int(o.get("setup") or 0)
-        at = C.pending_cancel_at(base, C.PENDING_EXPIRY_BARS, int(o.get("server_offset_h", 3)))
-        return f'~{C.fmt_dt(at)} ({C.rel_time(at)}, {C.PENDING_EXPIRY_BARS} H4 bars after placement)'
+        nb = int(row.get("pend_bars") or 0) or C.PENDING_EXPIRY_BARS          # a plan's custom entry carries its own expiry (2026-10-14)
+        at = C.pending_cancel_at(base, nb, int(o.get("server_offset_h", 3)))
+        return f'~{C.fmt_dt(at)} ({C.rel_time(at)}, {nb} H4 bars after placement)'
     except Exception:
         return f"after {C.PENDING_EXPIRY_BARS} H4 bars"
 
@@ -1466,7 +1541,7 @@ def position_page(key: str, q: dict) -> str:
     t_src = C.parse_iso((src or {}).get("published_at"))
     src_ok = src if src and t_src and int(t_src.timestamp()) - 300 <= _opened_utc(p) else None   # a reused signal id is not this trade's signal
     out.append(f'<h1>{E(p["symbol"])} · {E(p["strategy"])} {E(p["direction"])} <span class="k">pos {p["posid"]} · signal #{p.get("signal_id")}</span></h1>'
-               + f'<div class="row">{grp_pill(p["symbol"])}{bloc_pills(p)}</div>' + grp_box(p["symbol"]) + position_parent_line(p, src_ok) +
+               + f'<div class="row">{grp_pill(p["symbol"])}{bloc_pills(p)}{"" if closed else avg12_pill("pos", p)}</div>' + grp_box(p["symbol"]) + position_parent_line(p, src_ok) +
                f'<div class="card" id="poslive" data-key="{E(key)}" data-closed="{1 if closed else 0}"><div class="grid2"><div><div class="k">open R</div><div id="p-open_r" class="big v {"ok" if p.get("open_r", 0) >= 0 else "bad"}">{C.r_fmt(p.get("open_r"))}</div></div><div><div class="k">banked R</div><div id="p-banked_r" class="big v">{C.r_fmt(p.get("banked_r"))}</div></div>'
                f'<div><span class="k">entry</span> <b class="v">{p.get("entry")}</b></div><div><span class="k">SL live</span> <b id="p-sl_live" class="v bad">{p.get("sl_live")}</b> <span class="k">(risk basis {p.get("sl_risk_basis")})</span></div>'
                f'<div><span class="k">TP1</span> <b class="v">{p.get("tp1") or "-"}</b></div><div><span class="k">TP live</span> <b id="p-tp_live" class="v">{p.get("tp_live") or "-"}</b></div>'
@@ -1790,7 +1865,9 @@ def signal_plan_post(form: dict) -> dict:
     except ValueError: return {"ok": False, "error": "the plan is not valid JSON"}
     ok, msg, rec = PL.approve(CFG, s, plan, form.get("inverse") == "1", em)
     if not ok: return {"ok": False, "error": msg}
-    C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan|{key}|preset={form.get('preset', '')}|inverse={form.get('inverse')}|{json.dumps(rec['plan'], separators=(',', ':'))}")
+    C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan|{key}|preset={form.get('preset', '')}|inverse={form.get('inverse')}|"
+                  f"{json.dumps(rec['plan'], separators=(',', ':'))}|levels={json.dumps(rec.get('levels'), separators=(',', ':'))}|arm={json.dumps(rec.get('arm'), separators=(',', ':'))}")
+    if rec.get("status") == "armed": return {"ok": True, "msg": msg + " - nothing is sent until then; the plan keeps the signal open meanwhile"}
     a = C.wait_ack(CFG, rec["approve_task"], APPROVE_ACK_S)
     if not a: return {"ok": True, "msg": f"plan saved and the approve sent - no answer from the EA within {APPROVE_ACK_S:.0f} s yet; this page shows it when it comes"}
     if a.get("result") != "accepted":
@@ -2033,7 +2110,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(json.dumps(plan_edit_post(form)), "application/json")
             if u.path == "/plan_stop":
                 key = form.get("key", ""); rec = PL.load_plan(CFG, key)
-                if not rec or rec.get("status") not in ("approving", "waiting_fill", "running"): return self._redirect("/", "no running plan", False)
+                if not rec or rec.get("status") not in ("armed", "approving", "waiting_fill", "running"): return self._redirect("/", "no running plan", False)
+                if rec["status"] == "armed":
+                    rec["status"] = "stopped"; PL.logline(rec, "disarmed by you - nothing was sent; the signal is yours to decide"); PL.save_plan(CFG, rec)
+                    C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan_disarm|{key}|by=web")
+                    return self._redirect(f"/signal/{key}", "plan disarmed - nothing was sent", True)
                 rec["status"] = "stopped"; PL.logline(rec, "stopped by you - the trade keeps its stops and TP; manage it by hand"); PL.save_plan(CFG, rec)
                 C.append_line(os.path.join(CFG["root"], "web", "web_audit.log"), f"{C.now_iso()}|plan_stop|{key}|by=web")
                 return self._redirect(f"/signal/{key}", "plan stopped - the trade is yours to manage", True)

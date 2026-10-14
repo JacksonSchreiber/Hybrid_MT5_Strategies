@@ -87,4 +87,9 @@ main{max-width:1400px}
 .sp-live .bt-msg{color:var(--dim)}.sp-live .bt-msg.warn{color:#f2cc60}.sp-live .bt-msg.dn{color:#ffaba8}
 .sp-grid .bt-left,.sp-grid .bt-right{display:flex;flex-direction:column;min-width:0}#adv-card{overflow-wrap:anywhere}#adv-card .advs{grid-template-columns:1fr}
 .sp-advmini{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* levels + wait (2026-10-14) */
+.sp-lvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 12px}.sp-lv{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.sp-lvname{width:38px}.sp-lvin{width:120px}.sp-chg::part(base){border-color:#e3b341}.sp-cond{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0}
+.sp-tf{width:80px}.sp-side{width:120px}.sp-dt{background:#0d1117;color:var(--fg,#c9d1d9);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font:inherit}
+.sp-advplan{margin-top:8px;border-left:3px solid #58a6ff;padding:4px 8px}.sp-advplan .bt-small{display:block}
 @media (max-width:1050px){.sp-grid{display:flex;flex-direction:column}.sp-grid .bt-left,.sp-grid .bt-right{display:contents}}

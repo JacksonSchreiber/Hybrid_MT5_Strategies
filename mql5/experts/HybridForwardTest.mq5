@@ -288,6 +288,7 @@ struct JournalRow
    bool     is_pending;     // true = order placed as a pending (edited entry), awaiting fill
    long     order_ticket;   // pending-order ticket (0 until placed; for expiry/fill binding)
    datetime placed_time;    // when the pending order was placed (expiry bar-count basis)
+   int      pend_bars;      // live plan with a custom entry (2026-10-14): its pending order's expiry in H4 bars (0 = InpPendingExpiryBars)
    long     decision_ms;
    long     posid;
    bool     closed;
@@ -379,7 +380,7 @@ void StagedInit(JournalRow &r){ r.st_state=0; r.st_tranche=0; r.st_full_lots=0.0
                               r.inv_state=0; r.inv_parent_sid=0; r.inv_parent_posid=0; r.inv_parent_strategy=""; r.inv_bars_to_stop=0; r.inv_slip_r=0.0;
                               r.sr_state=0; r.sr_time=0; r.sr_px=0.0; r.sr_stop=0.0; r.sr_from=0.0; r.sr_vol=0.0; r.sr_tries=0;
                               r.ro=0; r.ro_held_min=0; r.ro_spread0=0.0; r.ro_spread1=0.0; r.ro_drift=0.0; r.d2_state=0;
-                              r.bl_state=0; r.bl_lock=0; r.bl_time=0; r.bl_tries=0; }
+                              r.bl_state=0; r.bl_lock=0; r.bl_time=0; r.bl_tries=0; r.pend_bars=0; }
 JournalRow g_rows[];
 //--- LIVE CUSTOM PLANS (trader 2026-10-12, docs/live_plans.md): a plan row's entry_mode starts with "plan" (plan_market,
 //--- plan_market_now, plan_pending_frozen, plan_add; "_inv" appended for an inverse). The plan runner (Python, live/plan_live.py)
@@ -561,6 +562,7 @@ string   g_size_choice="";        // coach item 22: the approve task's params.si
 bool     g_plan_on=false;         // live approve params.plan=1 (docs/live_plans.md): the row is plan-managed
 double   g_plan_pct=100.0;        // params.entry_pct: first position as % of the ruled lots (1-100)
 bool     g_plan_tp2=true;         // params.tp2: false = no broker TP on the order
+int      g_plan_pend_bars=0;      // params.pend_bars (2026-10-14): a custom-entry pending order's expiry in H4 bars (0 = the input)
 bool     g_plan_inv=false;        // params.inverse: the candidate was mirrored round its entry before validation
 //--- live order retries + a refused approve keeps its signal open (trader 2026-10-12): set by OrderSendRetry / CommitDecision,
 //--- read by the approve handler and WriteAck. The tester sends once and never rolls back (parity).
@@ -1642,7 +1644,8 @@ void ExpireStalePendings()
       if(!g_rows[i].is_pending || g_rows[i].posid>0 || g_rows[i].closed) continue;
       if(g_rows[i].order_ticket<=0 || g_rows[i].placed_time<=0) continue;
       int age=iBarShift(_Symbol,g_tf,g_rows[i].placed_time,false);   // H4 bars since placed
-      if(age<InpPendingExpiryBars) continue;
+      int lim=((IsPlan(i) && g_rows[i].pend_bars>=1 && g_rows[i].pend_bars<=60) ? g_rows[i].pend_bars : InpPendingExpiryBars);   // 2026-10-14: a plan's own expiry
+      if(age<lim) continue;
       bool del=g_trade.OrderDelete((ulong)g_rows[i].order_ticket);
       g_rows[i].decision="expired";
       g_rows[i].closed=true;
@@ -2047,7 +2050,8 @@ void WriteSignalJson(string status,string auto_reason)
    j.EndObj();
    j.KTime("deadline",deadline); j.KInt("max_age_bars",g_cfg_max_age_bars);
    j.KInt("delay_count",g_delay_count); j.KInt("implicit_streak",g_park.implicit_streak);
-   j.Key("entry_modes"); j.BeginArr(); j.Str("market"); j.Str("pending"); j.EndArr();   // live: market now, or a pending order at the original entry (waits for price to return)
+   j.Key("entry_modes"); j.BeginArr(); j.Str("market"); j.Str("pending"); j.EndArr();
+   j.KBool("plan_levels",true);           // 2026-10-14: this build takes custom levels on a plan approve (params.lv_*)   // live: market now, or a pending order at the original entry (waits for price to return)
    j.KBool("trading_enabled",g_trading_enabled);
    //--- overlay geometry (what DrawOverlays draws) + EMA values at the last closed bar
    j.Key("overlay"); j.BeginObj();
@@ -2371,7 +2375,7 @@ void LiveSaveRowState(int i)
    j.KNum("partial_frac",r.partial_frac,4); j.KNum("lots",r.lots,2); j.KNum("risk_px",r.risk_px,_Digits);
    j.KBool("tp1_done",r.tp1_done); j.KBool("banked",r.banked); j.KBool("ratcheted",r.ratcheted); j.KNum("closed_vol",r.closed_vol,2);
    j.KStr("decision",r.decision); j.KInt("skip_reason",r.skip_reason); j.KBool("edited",r.edited); j.KBool("is_pending",r.is_pending);
-   j.KInt("order_ticket",r.order_ticket); j.KInt("placed_time",(long)r.placed_time); j.KInt("decision_ms",r.decision_ms);
+   j.KInt("order_ticket",r.order_ticket); j.KInt("placed_time",(long)r.placed_time); j.KInt("decision_ms",r.decision_ms); j.KInt("pend_bars",r.pend_bars);
    j.KInt("posid",r.posid); j.KBool("closed",r.closed); j.KInt("exit_time",(long)r.exit_time); j.KNum("exit_price",r.exit_price,_Digits);
    j.KNum("pnl",r.pnl,2); j.KNum("r_multiple",r.r_multiple,6);
    j.KStr("regime",r.regime); j.KStr("with_trend",r.with_trend); j.KStr("decision_class",r.decision_class);
@@ -2493,6 +2497,7 @@ bool LiveLoadRowState(string rel)
    r.closed_vol=StringToDouble(JGet(k,v,"closed_vol")); r.decision=JGet(k,v,"decision",""); r.skip_reason=(int)StringToInteger(JGet(k,v,"skip_reason","0"));
    r.edited=(JGet(k,v,"edited")=="true"); r.is_pending=(JGet(k,v,"is_pending")=="true"); r.order_ticket=StringToInteger(JGet(k,v,"order_ticket","0"));
    r.placed_time=(datetime)StringToInteger(JGet(k,v,"placed_time","0")); r.decision_ms=StringToInteger(JGet(k,v,"decision_ms","0"));
+   r.pend_bars=(int)StringToInteger(JGet(k,v,"pend_bars","0"));
    r.posid=StringToInteger(JGet(k,v,"posid","0")); r.closed=(JGet(k,v,"closed")=="true");
    r.exit_time=(datetime)StringToInteger(JGet(k,v,"exit_time","0")); r.exit_price=StringToDouble(JGet(k,v,"exit_price"));
    r.pnl=StringToDouble(JGet(k,v,"pnl")); r.r_multiple=StringToDouble(JGet(k,v,"r_multiple"));
@@ -3038,7 +3043,7 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
       //--- live custom plan params (trader 2026-10-12, docs/live_plans.md): validated here, applied by CommitDecision via g_plan_*
       string ppl=JGet(k,v,"params.plan","0");
       bool p_on=(ppl=="1" || ppl=="true");
-      double p_pct=100.0; bool p_tp2=true, p_inv=false;
+      double p_pct=100.0; bool p_tp2=true, p_inv=false; double p_lv_e=0.0; int p_pend=0;
       double o_e=g_park.orig_entry, o_sl=g_park.orig_sl, o_tp=g_park.orig_tp, o_tp1=g_park.orig_tp1, o_tp2=g_park.orig_tp2;
       string wt_saved=g_sig_with_trend;                 // an inverse flips with_trend for its own row only (restored after the commit)
       string wt_inv=(g_sig_with_trend=="1" ? "0" : (g_sig_with_trend=="0" ? "1" : g_sig_with_trend));
@@ -3062,9 +3067,33 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
             if(o_tp1>0.0) o_tp1=NormPrice(2.0*e0-o_tp1);
             if(o_tp2>0.0) o_tp2=NormPrice(2.0*e0-o_tp2);
            }
+         //--- custom levels (trader 2026-10-14, docs/live_plans.md): the plan's own entry / stop / TP1 / TP2 replace the card's BEFORE the
+         //--- market validation and the sizing - SizeByRisk(cand.entry,cand.sl) keeps 1R = the ruled risk at the custom stop (the 1% rule);
+         //--- a custom entry is a pending order there (limit or stop against the market, its own expiry pend_bars). Not with an inverse.
+         double lv_e=StringToDouble(JGet(k,v,"params.lv_entry","0")), lv_sl=StringToDouble(JGet(k,v,"params.lv_sl","0"));
+         double lv_t1=StringToDouble(JGet(k,v,"params.lv_tp1","0")), lv_t2=StringToDouble(JGet(k,v,"params.lv_tp2","0"));
+         p_lv_e=lv_e;
+         if(lv_e>0.0 || lv_sl>0.0 || lv_t1>0.0 || lv_t2>0.0)
+           {
+            if(p_inv){ reason="bad_params:levels_with_inverse"; return "rejected"; }
+            bool two0=(cand.partial_fraction>0.0 && cand.tp1>0.0 && cand.tp2>0.0);
+            if(lv_e>0.0)  cand.entry=NormPrice(lv_e);
+            if(lv_sl>0.0) cand.sl=NormPrice(lv_sl);
+            if(lv_t2>0.0){ if(two0) cand.tp2=NormPrice(lv_t2); else { cand.tp=NormPrice(lv_t2); if(cand.tp2>0.0) cand.tp2=cand.tp; } }
+            if(lv_t1>0.0 && (two0 || cand.partial_fraction<=0.0)) cand.tp1=NormPrice(lv_t1);   // never turns a one-target card into a split
+            double ltp=(two0? cand.tp2 : cand.tp);
+            if(!(cand.direction>0 ? cand.sl<cand.entry : cand.sl>cand.entry)){ reason="bad_params:lv_sl_side"; return "rejected"; }
+            if(ltp>0.0 && !(cand.direction>0 ? ltp>cand.entry : ltp<cand.entry)){ reason="bad_params:lv_tp_side"; return "rejected"; }
+            int pb=(int)StringToInteger(JGet(k,v,"params.pend_bars","0"));
+            p_pend=(pb>=1 && pb<=60 ? pb : 0);
+            AuditLine("plan_levels",task_id,"approve",StringFormat("sig:%d",sid),"ok","",
+                      StringFormat("entry=%s sl=%s tp1=%s tp2=%s pend_bars=%d (card entry=%s sl=%s)",DoubleToString(lv_e,_Digits),DoubleToString(lv_sl,_Digits),
+                                   DoubleToString(lv_t1,_Digits),DoubleToString(lv_t2,_Digits),p_pend,DoubleToString(o_e,_Digits),DoubleToString(o_sl,_Digits)));
+           }
         }
       string em=JGet(k,v,"params.entry_mode",(g_delay_count>0 ? "pending" : "market"));
       if(em=="market_now") em="market";
+      if(p_on && p_lv_e>0.0) em="pending";              // 2026-10-14: a custom entry is always a pending order at it
       string entry_mode;
       if(em=="market")
         {
@@ -3103,11 +3132,11 @@ string LiveExecuteTask(string &k[],string &v[],string task_id,string verb,string
          reason=fwhy; return "rejected";
         }
       //--- commit exactly as the tester would after an Accept click
-      g_plan_on=p_on; g_plan_pct=p_pct; g_plan_tp2=p_tp2; g_plan_inv=p_inv; if(p_inv) g_sig_with_trend=wt_inv;
+      g_plan_on=p_on; g_plan_pct=p_pct; g_plan_tp2=p_tp2; g_plan_inv=p_inv; g_plan_pend_bars=p_pend; if(p_inv) g_sig_with_trend=wt_inv;
       if(InpLiveSelfTest && (bool)MQLInfoInteger(MQL_TESTER)) g_st_fail_k=(int)StringToInteger(JGet(k,v,"params.selftest_fail","0"));
       CommitDecision(sid,cand,caption,o_e,o_sl,o_tp,o_tp1,o_tp2,
                      true,0,DecisionMs(),false,false,entry_mode);
-      g_plan_on=false; g_plan_inv=false; g_plan_pct=100.0; g_plan_tp2=true; g_sig_with_trend=wt_saved;
+      g_plan_on=false; g_plan_inv=false; g_plan_pct=100.0; g_plan_tp2=true; g_plan_pend_bars=0; g_sig_with_trend=wt_saved;
       g_size_choice=""; g_st_fail_k=0;
       if(g_of_rolled)
         {   //--- trader 2026-10-12: the broker refused every attempt and nothing traded, so the signal stays OPEN (still parked,
@@ -3495,6 +3524,14 @@ double   st_plan_sl0=0.0;
 int      st_inv_state=0, st_inv_sid=0, st_inv_dir0=0;
 double   st_inv_e0=0.0, st_inv_sl0=0.0;
 datetime st_inv_t0=0;
+//--- custom levels (2026-10-14): after the inverse, a stop on the wrong side (refused bad_params:lv_sl_side), then on the same signal a
+//--- plan with a tighter stop + TP2 at 3R (row / broker stop and TP = the custom ones, full lots sized at the custom stop) - cut; then a
+//--- custom ENTRY (a pending order halfway to the stop, pend_bars 1): it fills (cut) or expires after one H4 bar.
+int      st_lv_state=0, st_lv_sid=0;     // 0 not sent, 1 wrong-side sent, 2 custom sent, 3 running, 4 done
+double   st_lv_sl=0.0, st_lv_tp=0.0;
+datetime st_lv_t0=0;
+int      st_lvp_state=0, st_lvp_sid=0;   // 0 not sent, 1 sent, 2 resting / filled (watched), 3 done
+int PlanPendRow(int sid){ for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].id==sid && IsPlan(i) && g_rows[i].entry_mode!="plan_add") return i; return -1; }
 int PlanLeg0Row(int sid){ for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].id==sid && IsPlan(i) && g_rows[i].entry_mode!="plan_add" && g_rows[i].posid>0) return i; return -1; }
 int PlanAddRow(int sid){ for(int i=0;i<ArraySize(g_rows);i++) if(g_rows[i].id==sid && g_rows[i].entry_mode=="plan_add" && g_rows[i].posid>0 && !g_rows[i].closed) return i; return -1; }
 void SelfTestPlanTick(datetime now)
@@ -3559,6 +3596,45 @@ void SelfTestPlanTick(datetime now)
       SelfTestWriteTask("st-plan-inv-cut","position_id",g_rows[iv].posid,"close","{\"why\":\"plan_cut selftest\"}");
       st_inv_state=3; st_plan_last=now;
      }
+   //--- custom levels: the row and the broker carry the custom stop / TP, the full lots are sized at the custom stop; then cut
+   if(st_lv_state==3)
+     {
+      int il=PlanLeg0Row(st_lv_sid);
+      if(il<0 || g_rows[il].closed || !PositionSelectByTicket((ulong)g_rows[il].posid)){ st_lv_state=4; return; }
+      if(st_lv_t0==0)
+        {
+         st_lv_t0=now;
+         double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP); if(step<=0) step=0.01;
+         double want=SizeByRisk(g_rows[il].entry,st_lv_sl), full=g_rows[il].st_full_lots;
+         bool ok=(MathAbs(g_rows[il].sl-st_lv_sl)<=0.5*tick && MathAbs(PositionGetDouble(POSITION_SL)-st_lv_sl)<=0.5*tick
+                  && MathAbs(PositionGetDouble(POSITION_TP)-st_lv_tp)<=0.5*tick && MathAbs(full-want)<=MathMax(step,0.03*want)+1e-9);
+         AuditLine("plan_lv_check","","",StringFormat("pos:%I64d",g_rows[il].posid),(ok?"ok":"mismatch"),"",
+                   StringFormat("sig:%d sl %s pos_sl %s (want %s) tp %s (want %s) full %.2f (sized at the custom stop %.2f) card sl %s",st_lv_sid,
+                                DoubleToString(g_rows[il].sl,_Digits),DoubleToString(PositionGetDouble(POSITION_SL),_Digits),DoubleToString(st_lv_sl,_Digits),
+                                DoubleToString(PositionGetDouble(POSITION_TP),_Digits),DoubleToString(st_lv_tp,_Digits),full,want,DoubleToString(g_rows[il].orig_sl,_Digits)));
+         st_plan_last=now; return;
+        }
+      SelfTestWriteTask("st-plan-lv-cut","position_id",g_rows[il].posid,"close","{\"why\":\"plan_cut selftest\"}");
+      st_lv_state=4; st_plan_last=now; return;
+     }
+   //--- custom entry: a resting plan pending order - filled -> cut; else it must expire after its one H4 bar (pend_bars)
+   if(st_lvp_state==2)
+     {
+      int ip=PlanPendRow(st_lvp_sid);
+      if(ip<0){ st_lvp_state=3; return; }
+      if(g_rows[ip].posid>0)
+        {
+         if(!g_rows[ip].closed && PositionSelectByTicket((ulong)g_rows[ip].posid))
+           { AuditLine("plan_lvpend_check","","",StringFormat("sig:%d",st_lvp_sid),"ok","filled",StringFormat("mode=%s pend_bars=%d entry %s",g_rows[ip].entry_mode,g_rows[ip].pend_bars,DoubleToString(g_rows[ip].entry,_Digits)));
+             SelfTestWriteTask("st-plan-lvpend-cut","position_id",g_rows[ip].posid,"close","{\"why\":\"plan_cut selftest\"}"); }
+         st_lvp_state=3; st_plan_last=now; return;
+        }
+      if(g_rows[ip].closed || g_rows[ip].decision=="expired")
+        { int age=iBarShift(_Symbol,g_tf,g_rows[ip].placed_time,false);
+          AuditLine("plan_lvpend_check","","",StringFormat("sig:%d",st_lvp_sid),(g_rows[ip].decision=="expired" && g_rows[ip].pend_bars==1 ? "ok" : "mismatch"),"expired",
+                    StringFormat("decision=%s pend_bars=%d age=%d mode=%s",g_rows[ip].decision,g_rows[ip].pend_bars,age,g_rows[ip].entry_mode));
+          st_lvp_state=3; st_plan_last=now; return; }
+     }
   }
 void SelfTestTick()
   {
@@ -3596,6 +3672,15 @@ void SelfTestTick()
          else if(kk>=17 && st_plan_state==3 && st_inv_state==0 && !HasActiveOrderOrPosition())   // live custom plan, INVERSE
            { SelfTestWriteTask(StringFormat("st-%d-approve-plan-inv",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\",\"plan\":1,\"inverse\":1,\"entry_pct\":100,\"tp2\":1}");
              st_inv_state=1; st_inv_sid=kk; st_inv_dir0=g_delayed.direction; st_inv_e0=g_delayed.entry; st_inv_sl0=g_delayed.sl; st_sid_done=kk; }
+         else if(kk>=17 && st_plan_state==3 && st_inv_state==3 && st_lv_state==0 && !HasActiveOrderOrPosition())   // custom levels, wrong side first
+           { double bad=NormPrice(g_delayed.entry+(g_delayed.entry-g_delayed.sl));
+             SelfTestWriteTask(StringFormat("st-%d-approve-plan-lvbad",kk),"signal_id",kk,"approve",StringFormat("{\"entry_mode\":\"market\",\"plan\":1,\"entry_pct\":100,\"tp2\":1,\"lv_sl\":%s}",DoubleToString(bad,_Digits)));
+             st_lv_state=1; st_lv_sid=kk; st_sid_done=kk; }
+         else if(kk>=17 && st_lv_state==4 && st_lvp_state==0 && !HasActiveOrderOrPosition())   // a custom entry: a pending order halfway to the stop
+           { double mk=(g_delayed.direction>0 ? SymbolInfoDouble(_Symbol,SYMBOL_ASK) : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+             double pe=NormPrice(mk-0.5*(mk-g_delayed.sl));
+             SelfTestWriteTask(StringFormat("st-%d-approve-plan-lvpend",kk),"signal_id",kk,"approve",StringFormat("{\"entry_mode\":\"market\",\"plan\":1,\"entry_pct\":100,\"tp2\":1,\"lv_entry\":%s,\"pend_bars\":1}",DoubleToString(pe,_Digits)));
+             st_lvp_state=1; st_lvp_sid=kk; st_sid_done=kk; }
          else if(kk==1)   // order retry (trader 2026-10-12): the broker refuses the first send (synthetic 10021), the retry fills
            { SelfTestWriteTask("st-1-approve","signal_id",1,"approve","{\"entry_mode\":\"market\",\"selftest_fail\":1}"); st_sid_done=kk; }
          else { SelfTestWriteTask(StringFormat("st-%d-approve",kk),"signal_id",kk,"approve","{\"entry_mode\":\"market\"}"); st_sid_done=kk; }
@@ -3662,7 +3747,23 @@ void SelfTestTick()
    if(ack_poll && st_inv_state==1)
      { string ap=ReadTextFile(LivePath(StringFormat("acks\\st-%d-approve-plan-inv.json",st_inv_sid)));
        if(ap!="") { st_inv_state=(StringFind(ap,"\"result\":\"accepted\"")>=0 && PlanLeg0Row(st_inv_sid)>=0 ? 2 : 0); st_inv_t0=0; st_plan_last=now; } }
-   if(st_plan_state==2 || st_inv_state==2) SelfTestPlanTick(now);
+   if(ack_poll && st_lv_state==1)
+     { string ap=ReadTextFile(LivePath(StringFormat("acks\\st-%d-approve-plan-lvbad.json",st_lv_sid)));
+       if(ap!="")
+         { if(g_live_parked && g_park.sid==st_lv_sid && !HasActiveOrderOrPosition())
+             { double mk=(g_delayed.direction>0 ? SymbolInfoDouble(_Symbol,SYMBOL_ASK) : SymbolInfoDouble(_Symbol,SYMBOL_BID));
+               st_lv_sl=NormPrice(mk-0.6*(mk-g_delayed.sl)); st_lv_tp=NormPrice(mk+3.0*(mk-st_lv_sl));
+               SelfTestWriteTask(StringFormat("st-%d-approve-plan-lv",st_lv_sid),"signal_id",st_lv_sid,"approve",
+                                 StringFormat("{\"entry_mode\":\"market\",\"plan\":1,\"entry_pct\":100,\"tp2\":1,\"lv_sl\":%s,\"lv_tp2\":%s}",DoubleToString(st_lv_sl,_Digits),DoubleToString(st_lv_tp,_Digits)));
+               st_lv_state=2; }
+           else st_lv_state=4; } }
+   if(ack_poll && st_lv_state==2)
+     { string ap=ReadTextFile(LivePath(StringFormat("acks\\st-%d-approve-plan-lv.json",st_lv_sid)));
+       if(ap!="") { st_lv_state=(StringFind(ap,"\"result\":\"accepted\"")>=0 && PlanLeg0Row(st_lv_sid)>=0 ? 3 : 4); st_lv_t0=0; st_plan_last=now; } }
+   if(ack_poll && st_lvp_state==1)
+     { string ap=ReadTextFile(LivePath(StringFormat("acks\\st-%d-approve-plan-lvpend.json",st_lvp_sid)));
+       if(ap!="") { st_lvp_state=(StringFind(ap,"\"result\":\"accepted\"")>=0 && PlanPendRow(st_lvp_sid)>=0 ? 2 : 3); st_plan_last=now; } }
+   if(st_plan_state==2 || st_inv_state==2 || st_lv_state==3 || st_lvp_state==2) SelfTestPlanTick(now);
    //--- position management on the first open graded position (a plan row is the plan scenario's, above)
    int idx=ActiveRowIdx();
    if(idx>=0 && IsPlan(idx)) return;
@@ -4114,7 +4215,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
    g_rows[n].rt_tp1R=0.0; g_rows[n].rt_tp2R=0.0;
    g_rows[n].rt_touched1=0; g_rows[n].rt_reached2=0; g_rows[n].rt_redip1=0;
    g_rows[n].decision_ms=decision_ms; g_rows[n].skip_reason=0; g_rows[n].edited=any_edited;
-   g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0;
+   g_rows[n].is_pending=false; g_rows[n].order_ticket=0; g_rows[n].placed_time=0; g_rows[n].pend_bars=(plan ? g_plan_pend_bars : 0);
    g_rows[n].posid=0; g_rows[n].closed=false;
    g_rows[n].regime=g_sig_regime; g_rows[n].with_trend=g_sig_with_trend; g_rows[n].decision_class=g_sig_class;
    g_rows[n].to_entry=g_to_entry; g_rows[n].to_sl=g_to_sl; g_rows[n].to_tp1=g_to_tp1; g_rows[n].to_tp2=g_to_tp2;
@@ -4311,7 +4412,7 @@ void CommitDecision(int id,SignalCandidate &cand,string caption,
                ObjectSetDouble(0,StringFormat("%s%d_entry",InpObjPrefix,id),OBJPROP_PRICE,pend_price);
                ChartRedraw(0);
                Print("Signal #",id," PENDING ",OrderTypeName(ot)," @ ",DoubleToString(pend_price,_Digits),
-                     " ticket=",g_rows[n].order_ticket," (expires in ",InpPendingExpiryBars," H4 bars)");
+                     " ticket=",g_rows[n].order_ticket," (expires in ",(g_rows[n].pend_bars>0 ? g_rows[n].pend_bars : InpPendingExpiryBars)," H4 bars)");
               }
             else
               {

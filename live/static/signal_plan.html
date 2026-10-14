@@ -19,6 +19,64 @@
   <div class="bt-msg warn" x-show="sugNote" x-text="sugNote" style="margin:4px 0 8px"></div>
   <div class="bt-row" style="margin:4px 0 8px" x-show="!edit"><sl-checkbox :checked="inverse" @sl-change="setInverse($event)">Inverse - trade the opposite direction</sl-checkbox>
     <span class="k bt-small" x-show="inverse" x-text="'Live: a ' + dirShown() + ' at market; the stop and targets mirrored round the entry at the same distances (chart redrawn)'"></span></div>
+  <!-- levels (trader 2026-10-14): the signal's entry / stop / TP1 / TP2 in the boxes, each can be changed (pre-approve only) -->
+  <div class="bt-lever fixed sp-levels" x-show="!edit">
+    <span class="bt-lt">Levels</span>
+    <div class="bt-sent" style="width:100%">
+      <div class="sp-lvgrid">
+        <template x-for="k in ['entry','sl','tp1','tp2']" :key="k">
+          <div class="sp-lv" x-show="k !== 'tp1' || D.levels.tp1 != null || lvChanged('tp1')">
+            <span class="k sp-lvname" x-text="LVN[k]"></span>
+            <sl-input type="number" size="small" class="sp-lvin" :class="lvChanged(k) ? 'sp-chg' : ''" :value="plan.levels[k] == null ? '' : plan.levels[k]" :step="pointStep()"
+                      :disabled="!lvOk()" :placeholder="k === 'tp1' ? 'none' : ''" @sl-change="setLevel(k, $event)"></sl-input>
+            <sl-icon-button name="arrow-counterclockwise" label="back to the signal's" x-show="lvChanged(k)" @click="resetLevel(k)"></sl-icon-button>
+            <span class="k bt-small" x-text="lvNote(k)"></span>
+          </div>
+        </template>
+      </div>
+      <div class="k bt-small" x-show="lvChanged('entry')">The order waits at your entry as a pending order (<span x-text="orderType()"></span>), cancelled if not filled within
+        <sl-input type="number" size="small" class="bt-n" :value="plan.levels.entry_h" min="1" max="120" step="1" @sl-change="setEntryH($event)"><span slot="suffix">h</span></sl-input></div>
+      <div class="k bt-small" x-show="!lvOk()" x-text="D.plan_levels ? 'Levels are fixed with Inverse on.' : 'The EA on this chart cannot take custom levels yet (it needs the 2026-10-14 EA update) - the signal\'s levels are used.'"></div>
+      <div class="k bt-small" x-show="anyLvChanged()" x-text="sizeNote()"></div>
+    </div>
+  </div>
+  <!-- wait (2026-10-14): conditions to meet before the order is sent - the plan waits ARMED -->
+  <div class="bt-lever fixed sp-wait" x-show="!edit">
+    <span class="bt-lt">Wait</span>
+    <div class="bt-sent" style="width:100%">
+      <sl-checkbox :checked="plan.armOn" @sl-change="setArm($event)">Wait for conditions before sending the order</sl-checkbox>
+      <template x-if="plan.armOn"><div>
+        <div class="k bt-small" style="margin:4px 0">In order - each step counts from when the one before it was met:</div>
+        <template x-for="(c, i) in plan.when" :key="'w' + i"><div class="sp-cond">
+          <span class="k" x-text="(i + 1) + '.'"></span>
+          <sl-select size="small" class="bt-s" :value="c.type" @sl-change="setCond(c, 'type', $event)" hoist>
+            <sl-option value="touch">the price trades at</sl-option><sl-option value="close">a bar closes</sl-option><sl-option value="after">after a time</sl-option><sl-option value="hours">hours pass</sl-option></sl-select>
+          <template x-if="c.type === 'close'"><sl-select size="small" class="bt-s sp-tf" :value="c.tf" @sl-change="setCond(c, 'tf', $event)" hoist><sl-option value="m15">M15</sl-option><sl-option value="h1">H1</sl-option><sl-option value="h4">H4</sl-option></sl-select></template>
+          <template x-if="c.type === 'touch' || c.type === 'close'"><sl-select size="small" class="bt-s sp-side" :value="c.side" @sl-change="setCond(c, 'side', $event)" hoist><sl-option value="above">at or above</sl-option><sl-option value="below">at or below</sl-option></sl-select></template>
+          <template x-if="c.type === 'touch' || c.type === 'close'"><sl-input type="number" size="small" class="sp-lvin" :value="c.px" :step="pointStep()" @sl-change="setCond(c, 'px', $event)"></sl-input></template>
+          <template x-if="c.type === 'after'"><input type="datetime-local" class="sp-dt" :value="localDT(c.t)" @change="setCondT(c, $event)"></template>
+          <template x-if="c.type === 'hours'"><sl-input type="number" size="small" class="bt-n" :value="c.h" min="0.25" max="120" step="1" @sl-change="setCond(c, 'h', $event)"><span slot="suffix">h</span></sl-input></template>
+          <sl-icon-button name="x-lg" label="Remove" @click="plan.when.splice(i, 1); commit()"></sl-icon-button>
+        </div></template>
+        <sl-button size="small" @click="addCond('when')"><sl-icon slot="prefix" name="plus-lg"></sl-icon>Add a step</sl-button>
+        <div class="k bt-small" style="margin:8px 0 4px">Cancel the wait if any of these happens first:</div>
+        <template x-for="(c, i) in plan.cancel" :key="'c' + i"><div class="sp-cond">
+          <sl-select size="small" class="bt-s" :value="c.type" @sl-change="setCond(c, 'type', $event)" hoist>
+            <sl-option value="touch">the price trades at</sl-option><sl-option value="close">a bar closes</sl-option><sl-option value="after">after a time</sl-option><sl-option value="hours">hours pass</sl-option></sl-select>
+          <template x-if="c.type === 'close'"><sl-select size="small" class="bt-s sp-tf" :value="c.tf" @sl-change="setCond(c, 'tf', $event)" hoist><sl-option value="m15">M15</sl-option><sl-option value="h1">H1</sl-option><sl-option value="h4">H4</sl-option></sl-select></template>
+          <template x-if="c.type === 'touch' || c.type === 'close'"><sl-select size="small" class="bt-s sp-side" :value="c.side" @sl-change="setCond(c, 'side', $event)" hoist><sl-option value="above">at or above</sl-option><sl-option value="below">at or below</sl-option></sl-select></template>
+          <template x-if="c.type === 'touch' || c.type === 'close'"><sl-input type="number" size="small" class="sp-lvin" :value="c.px" :step="pointStep()" @sl-change="setCond(c, 'px', $event)"></sl-input></template>
+          <template x-if="c.type === 'after'"><input type="datetime-local" class="sp-dt" :value="localDT(c.t)" @change="setCondT(c, $event)"></template>
+          <template x-if="c.type === 'hours'"><sl-input type="number" size="small" class="bt-n" :value="c.h" min="0.25" max="120" step="1" @sl-change="setCond(c, 'h', $event)"><span slot="suffix">h</span></sl-input></template>
+          <sl-icon-button name="x-lg" label="Remove" @click="plan.cancel.splice(i, 1); commit()"></sl-icon-button>
+        </div></template>
+        <sl-button size="small" @click="addCond('cancel')"><sl-icon slot="prefix" name="plus-lg"></sl-icon>Add a cancel rule</sl-button>
+        <div class="k bt-small" style="margin-top:6px">Nothing is sent until the last step is met; then the order goes in as set above (at market, or the pending order at your entry).
+          While it waits the plan keeps the signal open (a delay before each deadline). The signal still ends if the price trades through the signal's own stop at a bar close.
+          Prices are the chart's (bid). Times in your local time.</div>
+      </div></template>
+    </div>
+  </div>
           <!-- entry (always first) -->
           <div class="bt-lever fixed">
             <span class="bt-lt">Entry</span>
@@ -109,7 +167,7 @@
 
   <!-- live: what the plan means in lots on this account -->
   <div class="bt-meter sp-live">
-    <div class="bt-row bt-meterrow"><span class="k">On this account</span><b x-text="'100% = ' + D.lots.toFixed(2) + ' lots · entry ' + lotsOf(plan.entry) + ' lots'"></b></div>
+    <div class="bt-row bt-meterrow"><span class="k">On this account</span><b x-text="'100% = ' + fullLots().toFixed(2) + ' lots · entry ' + lotsOf(plan.entry) + ' lots' + (anyLvChanged() ? ' (at your stop, about)' : '')"></b></div>
     <template x-for="m in liveNotes()"><div class="bt-msg" :class="m.level" x-text="m.text"></div></template>
   </div>
   <!-- edit a running plan: review (a dry run of the runner's next step), then save -->
@@ -130,15 +188,16 @@
   <!-- decide -->
   <div class="sp-decide" x-show="!edit">
     <div class="bt-row" style="justify-content:space-between">
-      <sl-select size="small" :value="entryMode" @sl-change="entryMode = $event.target.value" class="sp-em" hoist>
+      <span class="k" x-show="lvChanged('entry')" x-text="'Pending order at your entry ' + plan.levels.entry"></span>
+      <sl-select size="small" :value="entryMode" @sl-change="entryMode = $event.target.value" class="sp-em" hoist x-show="!lvChanged('entry')">
         <sl-option value="market">Enter now at market</sl-option>
         <template x-if="D.entry_modes.indexOf('pending') >= 0"><sl-option value="pending" x-text="'Pending order at the original entry ' + D.levels.entry"></sl-option></template>
       </sl-select>
-      <sl-button size="large" variant="primary" @click="approve()" :disabled="!v.ok || busy" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon><span x-text="inverse ? 'Approve the INVERSE with this plan' : 'Approve with this plan'"></span></sl-button>
+      <sl-button size="large" variant="primary" @click="approve()" :disabled="!v.ok || busy" :loading="busy"><sl-icon slot="prefix" name="check-lg"></sl-icon><span x-text="plan.armOn && plan.when.length ? 'Arm this plan (it waits)' : (inverse ? 'Approve the INVERSE with this plan' : 'Approve with this plan')"></span></sl-button>
     </div>
     <div class="k bt-small">The EA opens the first leg; the plan runner on the box then carries out every lever on the live price (a few seconds behind it) and the
-      EA's own rules stay off for this trade. Every leg always has its stop at the broker. R counts from your fill: 1R = your fill to the signal
-      stop (the position's open R), so if the price has already moved, the levers start at 0 from where you got in.</div>
+      EA's own rules stay off for this trade. Every leg always has its stop at the broker. R counts from your fill: 1R = your fill to the stop
+      (the signal's, or yours if you changed it - the position's open R), so if the price has already moved, the levers start at 0 from where you got in.</div>
     <template x-if="done"><div class="bt-flash" x-text="done"></div></template>
   </div>
 </div>

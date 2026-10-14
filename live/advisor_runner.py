@@ -512,7 +512,8 @@ class Runner:
                       f"Bundle: {rel}/setup.md, {rel}/h4.png, {rel}/d1.png" + (f", {rel}/market-brief.md (context brief - §Context brief rules apply)" if os.path.exists(os.path.join(bdir, "market-brief.md")) else "") + ". Read them all, then answer with the full scorecard. "
                       f"Start from library/INDEX.md and the distilled notes it points at for this setup, then read the bundle. "
                       f"Answer with the block exactly as CLAUDE.live.md specifies - SUMMARY, VERDICT, Mechanical, the two Checks lines, "
-                      f"OPINION, Sources, Why, Changes my mind - using the glyphs ✓ ✗ ? as in the role file. Do NOT write a LOG: line and do "
+                      f"OPINION, Sources, Why, Changes my mind - using the glyphs ✓ ✗ ? as in the role file, then your own ```plan block (§Your plan: "
+                      f"levels, the wait and the levers, built from this chart and today's market, with every Changes-my-mind point built in). Do NOT write a LOG: line and do "
                       f"not use shell commands (none are available): the runner writes the verdict log from your block.")
             self.log(f"{key}/{mid}: consult start (session {rec['session_id'][:8]}, timeout {m.get('timeout_s')}s)")
             r = run_claude(self.cfg, m, prompt, sid=rec["session_id"], resume=False, log=self.log)

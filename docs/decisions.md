@@ -112,3 +112,26 @@ All user-approved decisions, newest first.
   and Save to apply it. Nothing is applied by the advisor.
 - **Fixed on the way:** plan trades were described to the reviewer as "the EA banks at +1R", although the EA's own rules are off on
   plan rows.
+
+## 2026-10-14 — Custom entry / stop / TP1 / TP2 on live plans, and armed "wait" plans (trader: "add an option to change the SL, entry, TP1/2. keep the signal's default in the box, but allow it to be changed")
+
+- **What:** the signal page's plan card has a Levels box prefilled with the signal's levels; any can be changed before approving. A
+  custom entry is a pending order at that price (limit or stop by the market; its own expiry, default 12 h). The EA sizes the trade at
+  the custom entry and stop, so the risk stays the ruled 1R (CLAUDE.md 1% rule); the plan's R counts from the fill to the custom stop.
+- **Wait:** a plan can wait "armed" for conditions (price touches, M15/H1/H4 closes beyond a price, a time, hours) met in order, with
+  cancel rules and a time limit (default 48 h, max 120 h). Nothing is sent until they are met; then the approve goes out by itself. The
+  runner keeps the signal open with delays meanwhile; a cancelled wait leaves the signal open for the trader.
+- **Engineer's calls (not asked):** the EA's 1.0 R:R floor on a market entry stays (the page warns before approving); custom levels are
+  not offered with Inverse (v1); levels and the wait are fixed once approved (edits stay lever-only).
+- **Needs the EA update** (`plan_levels` on the signal JSON); signals published by an older EA refuse custom levels with a plain message.
+
+## 2026-10-14 — The live advisor builds its own plan (trader: "the advisor on the live symbols should be able to create its own plan based on the market conditions. dont have it create it off the studies we've run")
+
+- **What:** every live verdict ends with the advisor's plan (levels, wait, levers) built from the chart and today's market, not from
+  study results or presets. Its "Changes my mind" points (where the stop or entry should really be, what to see first) are built into the
+  plan; a WAIT verdict's plan waits for exactly its criteria and enters by itself once the trader arms it.
+- **The trader stays the decider:** the plan shows under the verdict with "Load into the builder"; the trader reviews, changes and
+  approves or arms it. The advisor never sends anything.
+- **Role change:** the "doctrine - don't re-argue it / don't recommend moving a stop" section is now background (the EA's default
+  management when no plan is used). Backup: training/advisor/CLAUDE.live.md.bak-20261014.
+- **Also:** a 12 h average R pill on every pending signal and open position (home page and the signal / position pages).

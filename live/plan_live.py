@@ -519,6 +519,9 @@ def plan_brief(rec: dict) -> list[str]:
             line += f"; now the price is {d * (px - e) / R:+.2f}R in the plan's R"
         except Exception: pass
         out.append(line)
+    if rec.get("levels"):
+        out.append(f"- approved with the trader's own levels ({levels_text(rec['levels'])}); the signal card had entry {c.get('sig_entry')} / stop {c.get('sig_sl')}")
+    if rec.get("arm"): out.append(f"- it was armed first and {arm_text(rec['arm'])[:300]}")
     m = rec.get("model") or {}
     if m: out.append(f"- the plan's own replay: {C.r_fmt(m.get('R'))} on the whole ruled size so far")
     ids = lever_ids(rec["plan"], rec.get("lever_ids")); ls = rec.get("lever_state") or {}; ph = plan_clock_h(rec)
@@ -575,6 +578,189 @@ def live_validate(plan: dict) -> tuple[dict, list[str]]:
     return cfg, warn
 
 
+# ------------------------------------------------------------------------------------------------------------- levels + waiting (2026-10-14)
+# trader 2026-10-14: "add an option to change the SL, entry, TP1/2. keep the signal's default in the box, but allow it to be changed" and
+# (the live advisor's plan) "if the advisor's ruling is a 'wait', it should have a plan that executes on its wait criteria".
+#   plan["levels"] = {entry, sl, tp1, tp2} prices (absent / null = the signal's); a custom entry is a pending order at that price (the EA picks
+#     limit or stop against the market), entry_h = its expiry in hours. The EA sizes on the custom entry / stop (the 1% rule holds) and the
+#     plan's R counts from the fill to the custom stop.
+#   plan["arm"] = {"when": [conditions met in order], "cancel": [any one cancels]} - the plan waits ARMED (nothing sent) until every `when`
+#     condition has been met, one after the other, then sends the approve. Conditions (prices on the bid, the chart's price):
+#       {"type": "touch", "side": "above"|"below", "px": P}       the price trades at or above / at or below P
+#       {"type": "close", "tf": "m15"|"h1"|"h4", "side": .., "px": P}   a bar closes above / below P
+#       {"type": "after", "t": "<ISO UTC>"}                           not before that time (a release)
+#       {"type": "hours", "h": N}                                     N hours after the previous step (in cancel: after arming)
+#     A wait always has a time limit (none given: ARM_DEFAULT_H). While armed, the runner keeps the signal open with a delay before its
+#     deadline; the signal still dies if the price trades through ITS OWN stop at a bar close (the EA's rule) - the plan then ends.
+ARM_TF = {"m15": 900, "h1": 3600, "h4": 14400}
+ARM_MAX_H = 120.0
+ARM_DEFAULT_H = 48.0
+LEVEL_KEYS = ("entry", "sl", "tp1", "tp2")
+LEVEL_NAME = {"entry": "entry", "sl": "stop", "tp1": "TP1", "tp2": "TP2"}
+
+
+def split_plan(plan_in) -> tuple[dict, dict | None, dict | None]:
+    """the builder's config -> (the kernel plan, levels, arm): levels and the wait are not lever-engine fields."""
+    if not isinstance(plan_in, dict): raise ValueError("the plan must be an object")
+    p = dict(plan_in); return p, p.pop("levels", None), p.pop("arm", None)
+
+
+def sig_levels(sig: dict, inverse: bool = False) -> dict:
+    """the signal's own levels as the plan uses them: {d, entry, sl, tp1, tp2} (tp1 only on a two-target card, as before; mirrored round
+    the entry for an inverse)."""
+    lv = sig.get("levels") or {}
+    e, sl = float(lv["entry"]), float(lv["sl"])
+    d0 = 1 if sig.get("direction") == "BUY" else -1
+    def mir(p):
+        if p in (None, "", 0): return None
+        p = float(p); return 2.0 * e - p if inverse else p
+    two = bool(lv.get("two_target")) and lv.get("tp1") and lv.get("tp2")
+    return {"d": -d0 if inverse else d0, "entry": e, "sl": mir(sl), "tp1": mir(lv.get("tp1")) if two else None,
+            "tp2": mir(lv.get("tp2") if two else (lv.get("tp2") or lv.get("tp")))}
+
+
+def _px(v, what: str) -> float | None:
+    if v in (None, ""): return None
+    try: x = float(v)
+    except (TypeError, ValueError): raise ValueError(f"{what} must be a price") from None
+    if not (x > 0 and math.isfinite(x)): raise ValueError(f"{what} must be a positive price")
+    return x
+
+
+def _num_in(v, lo: float, hi: float, what: str) -> float:
+    try: x = float(v)
+    except (TypeError, ValueError): raise ValueError(f"{what} must be a number") from None
+    if not (lo <= x <= hi): raise ValueError(f"{what} must be {lo:g}-{hi:g}")
+    return x
+
+
+def validate_levels(lv_in, sig: dict, inverse: bool = False) -> tuple[dict | None, list[str]]:
+    """-> ({entry, sl, tp1, tp2, entry_h} with only the CHANGED levels set, else None; warnings). Sides are checked against the direction;
+    the EA re-checks against the market (a stop through the price, the stops level, the R:R floor on a market entry)."""
+    if lv_in in (None, {}): return None, []
+    if not isinstance(lv_in, dict): raise ValueError("levels must be an object like {\"sl\": 1.0812}")
+    b = sig_levels(sig); d = b["d"]; warn = []; out = {}
+    for k in LEVEL_KEYS:
+        x = _px(lv_in.get(k), "the " + LEVEL_NAME[k])
+        if x is None: continue
+        if b.get(k) is not None and abs(x - b[k]) <= 1e-9 * max(1.0, abs(b[k])): continue          # the signal's own level: unchanged
+        out[k] = x
+    if not out: return None, []
+    if inverse: raise ValueError("custom levels are not available with Inverse - untick Inverse or keep the signal's levels")
+    e = out.get("entry", b["entry"]); sl = out.get("sl", b["sl"]); tp1 = out.get("tp1", b["tp1"]); tp2 = out.get("tp2", b["tp2"])
+    if not d * (e - sl) > 0: raise ValueError(f"the stop must be {'below' if d > 0 else 'above'} the entry on a {'BUY' if d > 0 else 'SELL'}")
+    if tp2 is not None and not d * (tp2 - e) > 0: raise ValueError(f"TP2 must be {'above' if d > 0 else 'below'} the entry")
+    if tp1 is not None and not d * (tp1 - e) > 0: raise ValueError(f"TP1 must be {'above' if d > 0 else 'below'} the entry")
+    if tp1 is not None and tp2 is not None and d * (tp1 - tp2) > 0: warn.append("TP1 is beyond TP2")
+    R0 = abs(b["entry"] - b["sl"]); R1 = abs(e - sl)
+    if R1 < 0.25 * R0: warn.append(f"the stop is {R1 / R0:.0%} of the signal's distance - the EA refuses a stop under its minimum distance")
+    if R1 > 3.0 * R0: warn.append(f"the stop is {R1 / R0:.1f}x the signal's distance - the size shrinks to keep the risk at 1R")
+    if tp2 is not None and abs(tp2 - e) < R1: warn.append(f"TP2 is {abs(tp2 - e) / R1:.2f}R from the entry - the EA refuses a market entry under 1R (its R:R floor)")
+    if "entry" in out:
+        h = lv_in.get("entry_h")
+        out["entry_h"] = 12.0 if h in (None, "") else _num_in(h, 1, ARM_MAX_H, "the pending order's hours")
+    return out, warn
+
+
+def _cond(c, i: int, where: str) -> dict:
+    if not isinstance(c, dict): raise ValueError(f"{where} {i + 1}: must be an object")
+    t = c.get("type")
+    if t in ("touch", "close"):
+        side = c.get("side")
+        if side not in ("above", "below"): raise ValueError(f"{where} {i + 1}: side must be above or below")
+        px = _px(c.get("px"), f"{where} {i + 1}'s price")
+        if px is None: raise ValueError(f"{where} {i + 1}: needs a price")
+        d = {"type": t, "side": side, "px": px}
+        if t == "close":
+            tf = c.get("tf", "h1")
+            if tf not in ARM_TF: raise ValueError(f"{where} {i + 1}: tf must be m15, h1 or h4")
+            d["tf"] = tf
+        return d
+    if t == "after":
+        dt = C.parse_iso(str(c.get("t") or ""))
+        if not dt: raise ValueError(f"{where} {i + 1}: 'after' needs a time like 2026-10-14T12:30:00Z")
+        return {"type": "after", "t": dt.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if t == "hours":
+        return {"type": "hours", "h": _num_in(c.get("h"), 0.25, ARM_MAX_H, f"{where} {i + 1}'s hours")}
+    raise ValueError(f"{where} {i + 1}: unknown condition {str(t)[:30]!r} (touch / close / after / hours)")
+
+
+def validate_arm(arm_in) -> tuple[dict | None, list[str]]:
+    """-> ({when, cancel} or None, warnings). A wait always has a time limit: none given -> ARM_DEFAULT_H."""
+    if arm_in in (None, {}): return None, []
+    if not isinstance(arm_in, dict): raise ValueError("the wait must be an object like {\"when\": [...], \"cancel\": [...]}")
+    wh, ca = arm_in.get("when") or [], arm_in.get("cancel") or []
+    if not isinstance(wh, list) or not isinstance(ca, list): raise ValueError("when / cancel must be lists")
+    if not wh: return None, (["the wait has no conditions - ignored (the plan goes in at once)"] if ca else [])
+    if len(wh) > 6 or len(ca) > 6: raise ValueError("at most 6 conditions in each list")
+    when = [_cond(c, i, "wait step") for i, c in enumerate(wh)]; cancel = [_cond(c, i, "cancel rule") for i, c in enumerate(ca)]
+    warn = []
+    if not any(c["type"] == "hours" for c in cancel):
+        cancel.append({"type": "hours", "h": ARM_DEFAULT_H}); warn.append(f"no time limit on the wait - it is cancelled after {ARM_DEFAULT_H:g} h")
+    for c in when + cancel:
+        if c["type"] == "after" and C.parse_iso(c["t"]) < C.now_utc(): warn.append(f"'{cond_text(c)}' has already passed - it counts as met at once")
+    return {"when": when, "cancel": cancel}, warn
+
+
+def cond_text(c: dict, dig: int | None = None) -> str:
+    f = (lambda p: f"{p:.{dig}f}") if dig is not None else (lambda p: f"{p:g}")
+    t = c.get("type")
+    if t == "touch": return f"the price trades at or {c['side']} {f(c['px'])}"
+    if t == "close": return f"an {c['tf'].upper()} bar closes {c['side']} {f(c['px'])}"
+    if t == "after": return f"it is after {c['t'][:16].replace('T', ' ')} UTC"
+    if t == "hours": return f"{c['h']:g} h pass"
+    return str(c)
+
+
+def arm_text(arm: dict | None, dig: int | None = None) -> str:
+    if not arm: return ""
+    w = ", then ".join(cond_text(c, dig) for c in arm["when"])
+    k = "; or ".join(cond_text(c, dig) for c in arm.get("cancel") or [])
+    return f"waits until {w}" + (f" - cancelled if {k}" if k else "")
+
+
+def levels_text(lv: dict | None, dig: int | None = None) -> str:
+    if not lv: return ""
+    f = (lambda p: f"{p:.{dig}f}") if dig is not None else (lambda p: f"{p:g}")
+    parts = [f"{LEVEL_NAME[k]} {f(lv[k])}" for k in LEVEL_KEYS if lv.get(k) is not None]
+    if lv.get("entry") is not None: parts[0] += f" (a pending order, expires after {lv.get('entry_h', 12):g} h)"
+    return "custom levels: " + ", ".join(parts)
+
+
+ADVISOR_PLAN_SCHEMA = "live-advisor-plan/v1"
+
+
+def advisor_plan(text: str | None, sig: dict) -> dict | None:
+    """the live advisor's own plan (2026-10-14, CLAUDE.live.md "Your plan"): the fenced ```plan JSON from its reply -> {ok, cfg (the builder's
+    config: levers + levels + arm), about [plain lines], rationale, warnings, error}. Validated exactly as an approve would be (the live
+    lever limits, the levels' sides, the wait); None when the reply has no plan block."""
+    if not text: return None
+    out = {"ok": False, "cfg": None, "about": [], "rationale": "", "warnings": [], "error": ""}
+    try: j = json.loads(text)
+    except ValueError as e: out["error"] = f"the plan block is not valid JSON ({str(e)[:80]})"; return out
+    if not isinstance(j, dict): out["error"] = "the plan block is not an object"; return out
+    out["rationale"] = " ".join(str(j.get("rationale") or "").split())[:600]
+    kp = {"schema": BE.SCHEMA, "entry": j.get("entry") or {"pct": 100}, "tp2": j.get("tp2", True), "cap_pct": BE.CAP_DEFAULT,
+          "trim_to_cap": bool(j.get("trim_to_cap", False)), "levers": j.get("levers") or []}
+    try:
+        plan, w1 = live_validate(kp)
+        levels, w2 = validate_levels(j.get("levels"), sig)
+        arm, w3 = validate_arm(j.get("wait") if j.get("wait") is not None else j.get("arm"))
+    except ValueError as e: out["error"] = str(e); return out
+    cfg = dict(plan)
+    if levels: cfg["levels"] = levels
+    if arm: cfg["arm"] = arm
+    from live import backtest as BT
+    try: out["about"].append(BT.describe(plan))
+    except Exception: pass
+    dig = None
+    if levels: out["about"].append(levels_text(levels, dig))
+    if arm: out["about"].append("it " + arm_text(arm, dig))
+    out["warnings"] = w1 + w2 + w3
+    if levels and not sig.get("plan_levels"): out["warnings"].append("this chart's EA cannot take custom levels yet - reset them to the signal's before approving")
+    out.update(ok=True, cfg=cfg); return out
+
+
 # ------------------------------------------------------------------------------------------------------------- records
 def plans_dir(cfg: dict) -> str: return os.path.join(cfg["root"], "plans")
 def plan_path(cfg: dict, key: str) -> str: return os.path.join(plans_dir(cfg), f"{key}.json")
@@ -596,43 +782,71 @@ def logline(rec: dict, msg: str) -> None:
     rec.setdefault("log", []).append({"t": C.now_iso(), "msg": msg}); rec["log"] = rec["log"][-LOG_MAX:]
 
 
-def new_record(sig: dict, plan: dict, warn: list[str], inverse: bool, entry_mode: str) -> dict:
-    lv = sig.get("levels") or {}
-    e, sl = float(lv["entry"]), float(lv["sl"]); R = abs(e - sl)
-    d0 = 1 if sig.get("direction") == "BUY" else -1; d = -d0 if inverse else d0
-    def mir(p):
-        if p in (None, "", 0): return None
-        p = float(p); return 2.0 * e - p if inverse else p
-    two = bool(lv.get("two_target")) and lv.get("tp1") and lv.get("tp2")
-    tp2 = lv.get("tp2") if two else (lv.get("tp2") or lv.get("tp"))
+def new_record(sig: dict, plan: dict, warn: list[str], inverse: bool, entry_mode: str, levels: dict | None = None, arm: dict | None = None) -> dict:
+    """levels (2026-10-14): the custom entry / stop / TP1 / TP2 replace the signal's in the card, so the R frame (rbase), TP1 / TP2 levers
+    and the 1R cap all count from them; arm: the record starts ARMED (nothing sent until the wait is met)."""
+    b = sig_levels(sig, inverse); lv = levels or {}
+    e = float(lv.get("entry", b["entry"])); sl = float(lv.get("sl", b["sl"]))
+    tp1 = lv.get("tp1", b["tp1"]); tp2 = lv.get("tp2", b["tp2"])
     eb = _epoch(sig.get("decision_bar_server") or sig.get("decision_bar"))
     return {"schema": "live-plan/v1", "signal_key": sig["signal_key"], "symbol": sig["symbol"], "signal_id": int(sig["signal_id"]),
-            "strategy": sig.get("strategy", ""), "signal_direction": sig.get("direction"), "created_at": C.now_iso(), "status": "approving",
-            "inverse": bool(inverse), "entry_mode": entry_mode, "rbase": "fill", "plan": plan, "lever_ids": lever_ids(plan, None), "rev": 0, "warnings": warn,
-            "card": {"d": d, "e": e, "R": R, "sl": mir(sl), "tp1": mir(lv.get("tp1")) if two else None, "tp2": mir(tp2), "entry_bar_open": eb},
+            "strategy": sig.get("strategy", ""), "signal_direction": sig.get("direction"), "created_at": C.now_iso(), "status": "armed" if arm else "approving",
+            "inverse": bool(inverse), "entry_mode": "pending" if lv.get("entry") is not None else entry_mode, "rbase": "fill", "plan": plan,
+            "lever_ids": lever_ids(plan, None), "rev": 0, "warnings": warn, "levels": levels, "arm": arm, "arm_state": None,
+            "card": {"d": b["d"], "e": e, "R": abs(e - sl), "sl": sl, "tp1": None if tp1 is None else float(tp1), "tp2": None if tp2 is None else float(tp2),
+                     "entry_bar_open": eb, "sig_entry": b["entry"], "sig_sl": b["sl"]},
             "full_lots_est": float((sig.get("sizing") or {}).get("lots") or 0), "approve_task": None,
             "legs": [], "banks": [], "exit": None, "pending": {}, "sl_rej": {}, "log": []}
 
 
+def approve_params(rec: dict) -> dict:
+    """the EA's approve params for a record: plan=1 + entry_pct / tp2 / inverse, and (2026-10-14) the custom levels lv_entry / lv_sl /
+    lv_tp1 / lv_tp2 (a custom entry = a pending order there, pend_bars its expiry in H4 bars)."""
+    plan = rec["plan"]; lv = rec.get("levels") or {}
+    p = {"entry_mode": rec["entry_mode"], "size": "full", "plan": 1, "entry_pct": plan["entry"]["pct"], "tp2": 1 if plan["tp2"] else 0}
+    if rec.get("inverse"): p["inverse"] = 1
+    for k in LEVEL_KEYS:
+        if lv.get(k) is not None: p["lv_" + k] = repr(float(lv[k]))
+    if lv.get("entry") is not None:
+        p["entry_mode"] = "pending"; p["pend_bars"] = max(1, int(math.ceil(float(lv.get("entry_h", 12)) / 4.0 - 1e-9)))
+    return p
+
+
+def send_approve(cfg: dict, rec: dict, why: str) -> str:
+    tid = C.write_task(cfg, rec["symbol"], "approve", approve_params(rec), signal_id=rec["signal_id"], issued_by="plan" if why == "armed" else "web")
+    rec["approve_task"] = tid; rec["approve_at"] = time.time(); rec["status"] = "approving"
+    plan = rec["plan"]; lv = rec.get("levels")
+    logline(rec, ("the wait is over - " if why == "armed" else "") + f"approve sent with the plan ({len(plan['levers'])} levers, entry {plan['entry']['pct']:g}%, "
+                 f"TP2 {'on' if plan['tp2'] else 'off'}{', INVERSE' if rec.get('inverse') else ''}{'; ' + levels_text(lv) if lv else ''}); waiting for the EA")
+    return tid
+
+
 def approve(cfg: dict, sig: dict, plan_in: dict, inverse: bool, entry_mode: str) -> tuple[bool, str, dict | None]:
-    """web app: validate the plan, write the approve task (plan=1 + entry_pct / tp2 / inverse) and the plan record."""
-    try: plan, warn = live_validate(plan_in)
+    """web app: validate the plan (levers, custom levels, the wait), write the plan record and - unless the plan waits ARMED - the approve
+    task (plan=1 + entry_pct / tp2 / inverse / levels)."""
+    try:
+        kp, lv_in, arm_in = split_plan(plan_in)
+        plan, warn = live_validate(kp)
+        levels, w2 = validate_levels(lv_in, sig, inverse)
+        arm, w3 = validate_arm(arm_in)
     except ValueError as e: return False, f"plan not valid: {e}", None
+    if levels and not sig.get("plan_levels"):
+        return False, "the EA on this chart cannot take custom levels yet (it needs the 2026-10-14 EA update) - use the signal's levels", None
     old = load_plan(cfg, sig["signal_key"])
     if old and old.get("status") == "approving":                     # its approve already refused (a broker refusal leaves the signal
         a = C.ack(cfg, old.get("approve_task") or "")                # open, 2026-10-12) but the runner has not marked it yet
         if a and a.get("result") != "accepted": old["status"] = "refused"
-    if old and old.get("status") in ("approving", "running"): return False, "this signal already has a running plan", None
+    if old and old.get("status") == "armed": return False, "this signal already has an armed plan waiting - disarm it first", None
+    if old and old.get("status") in ("approving", "running", "waiting_fill"): return False, "this signal already has a running plan", None
     if old:                                                          # an earlier refused attempt: kept beside it
         os.makedirs(os.path.join(plans_dir(cfg), "archive"), exist_ok=True)
         C.atomic_write_json(os.path.join(plans_dir(cfg), "archive", f"{sig['signal_key']}.{int(time.time())}.json"), old)
-    rec = new_record(sig, plan, warn, inverse, entry_mode)
-    params = {"entry_mode": entry_mode, "size": "full", "plan": 1, "entry_pct": plan["entry"]["pct"], "tp2": 1 if plan["tp2"] else 0}
-    if inverse: params["inverse"] = 1
-    tid = C.write_task(cfg, sig["symbol"], "approve", params, signal_id=sig["signal_id"])
-    rec["approve_task"] = tid
-    logline(rec, f"approved with a custom plan ({len(plan['levers'])} levers, entry {plan['entry']['pct']:g}%, TP2 {'on' if plan['tp2'] else 'off'}"
-                 f"{', INVERSE' if inverse else ''}); waiting for the EA")
+    rec = new_record(sig, plan, warn + w2 + w3, inverse, entry_mode, levels, arm)
+    if arm:
+        logline(rec, f"ARMED: nothing is sent until the wait is over - it {arm_text(arm)}" + (f"; {levels_text(levels)}" if levels else ""))
+        save_plan(cfg, rec)
+        return True, "plan armed - it " + arm_text(arm), rec
+    send_approve(cfg, rec, "web")
     save_plan(cfg, rec)
     return True, "approve sent with your plan", rec
 
@@ -672,15 +886,44 @@ def frame(bars: list, rec: dict, t0: int, fill_px: float, h4_opens: list[int]) -
 
 
 # ------------------------------------------------------------------------------------------------------------- the runner
-FINAL = ("done", "refused", "stopped")
+FINAL = ("done", "refused", "stopped", "cancelled")
+
+
+def cond_met(c: dict, bars: list, since: int, now: int, tk: dict, off_s: int) -> int | None:
+    """the server-clock time a wait / cancel condition was met at or after `since` (None: not yet). bars = M1 [[t,o,h,l,c,...]] (bid, server
+    clock) from the arming minute, the forming minute last; a bar close (m15 / h1 / h4) counts once its bar has closed (bucketed from M1:
+    the last minute's close is the bar's close); `after` is UTC (+ the server offset off_s)."""
+    t = c["type"]
+    if t == "hours":
+        T = since + int(c["h"] * 3600); return T if now >= T else None
+    if t == "after":
+        d = C.parse_iso(c["t"]); T = int(d.timestamp()) + off_s
+        return max(T, since) if now >= T else None
+    m0 = since - since % 60
+    if t == "touch":
+        up = c["side"] == "above"; px = c["px"]
+        for b in bars:
+            if b[0] >= m0 and (b[2] >= px if up else b[3] <= px): return max(int(b[0]), since)
+        bid = float(tk.get("bid") or 0)
+        if bid and (bid >= px if up else bid <= px): return now
+        return None
+    if t == "close":
+        P = ARM_TF[c["tf"]]; up = c["side"] == "above"; px = c["px"]; last = {}
+        for b in bars: last[int(b[0]) - int(b[0]) % P] = b[4]
+        for b0 in sorted(last):
+            end = b0 + P
+            if end <= since or end > now: continue
+            if (last[b0] > px if up else last[b0] < px): return end
+        return None
+    return None
 
 
 class Runner:
     """every POLL_S: for each active plan record, read the EA's acks, find the legs on the account, replay the plan on the live M1 path
     and send what the replay shows (one-shot banks / adds / exits once; stops followed). Runs as a daemon thread in the monitor."""
 
-    def __init__(self, cfg: dict, log=print):
-        self.cfg = cfg; self.log = log; self.bars = {}; self.h4 = {}; self.specs = {}; self.errs = {}
+    def __init__(self, cfg: dict, log=print, notify=None):
+        self.cfg = cfg; self.log = log; self.notify = notify or (lambda m: None); self.bars = {}; self.h4 = {}; self.specs = {}; self.errs = {}
 
     def start(self) -> None:
         threading.Thread(target=self.loop, name="plan-runner", daemon=True).start()
@@ -795,10 +1038,11 @@ class Runner:
     def step(self, rec: dict) -> bool:
         from live import mt5feed
         cfg = self.cfg; ch = self.acks(rec); sym = rec["symbol"]
+        if rec.get("status") == "armed": return self.armed(rec) or ch
         if not rec.get("legs"):
             a = C.ack(cfg, rec.get("approve_task") or "")
             if not a:
-                if time.time() - (_epoch(rec["created_at"]) or 0) > 900:
+                if time.time() - (rec.get("approve_at") or _epoch(rec["created_at"]) or 0) > 900:
                     rec["status"] = "refused"; logline(rec, "the EA never answered the approve (15 min) - plan closed"); return True
                 return ch
             if a.get("result") != "accepted":
@@ -834,9 +1078,11 @@ class Runner:
             fl = float(pj.get("full_lots") or 0)
             rec["full_lots"] = fl if fl > 0 else (float(x["volume"]) * 100.0 / max(1.0, rec["plan"]["entry"]["pct"]) if x else rec["full_lots_est"])
             rec.setdefault("rbase", "fill"); ch = True
+            if (rec.get("levels") or {}).get("entry") is not None:         # 2026-10-14: a pending order at a custom entry fills later - the
+                ft = int(rec["fill"]["t"]); rec["card"]["entry_bar_open"] = ft - ft % 14400   # lever hours count from the bar it filled in
             if rec["rbase"] == "fill":
                 c = rec["card"]; d, e, R = rbase(rec); dig = int((self.spec(sym) or {}).get("digits") or 5)
-                logline(rec, f"R counts from your fill {e:.{dig}f} to the signal stop {float(c['sl']):.{dig}f}: 1R = {R:.{dig}f}"
+                logline(rec, f"R counts from your fill {e:.{dig}f} to {'your' if (rec.get('levels') or {}).get('sl') is not None else 'the signal'} stop {float(c['sl']):.{dig}f}: 1R = {R:.{dig}f}"
                              + (f" (the card's entry was {c['e']:.{dig}f} with 1R {c['R']:.{dig}f}: your fill was {d * (e - c['e']) / c['R']:+.2f}R from it)"
                                 if abs(e - c["e"]) > 0.05 * c["R"] else ""))
         for L in rec["legs"]:
@@ -857,6 +1103,52 @@ class Runner:
             rec.setdefault("pending", {})[tid] = {"verb": x["verb"], "posid": x["posid"], "what": x["what"], "at": time.time(), "q": x.get("q"), "sl": x["params"].get("sl")}
             logline(rec, "sent: " + x["what"])
         return True
+
+    # -------------------------------------------------------------------------------------------------- an armed plan (2026-10-14)
+    def armed(self, rec: dict) -> bool:
+        """an ARMED record: nothing is on the account yet. Each poll: the signal must still be open; a cancel rule ends the wait; the `when`
+        steps are met one after the other (each from the minute the previous one was met); when the last is met, the approve goes out. While
+        waiting, a delay before the signal's deadline keeps it open (one per H4 bar, only when the next bar close would expire it)."""
+        from live import mt5feed
+        cfg = self.cfg; sym = rec["symbol"]; key = rec["signal_key"]; arm = rec["arm"]
+        s = C.signal(cfg, key) or {}
+        if s.get("status") != "open":
+            rec["status"] = "cancelled"; logline(rec, f"the signal is no longer open ({s.get('status') or 'gone'}) - the armed plan ends; nothing was sent")
+            self.notify(f"{sym} #{rec['signal_id']}: armed plan ended - the signal is {s.get('status') or 'gone'} (nothing was sent)"); return True
+        tk = mt5feed.tick(sym)
+        if not tk: return False                                            # feed down: nothing is decided blind
+        now = int(tk["t"]); ch = False; dig = int((self.spec(sym) or {}).get("digits") or 5)
+        st = rec.get("arm_state")
+        if not st:
+            m0 = now - now % 60
+            st = rec["arm_state"] = {"t0": m0, "since": m0, "k": 0, "met": [], "delay_b": None}
+            logline(rec, f"watching: it {arm_text(arm, dig)}"); ch = True
+        bars = self.m1(key + "#arm", sym, st["t0"], now)
+        if bars is None: return ch
+        off = 3600 * C.server_offset_h(C.now_utc(), cfg)
+        for c in arm.get("cancel") or []:
+            t = cond_met(c, bars, st["t0"], now, tk, off)
+            if t is not None:
+                rec["status"] = "cancelled"; logline(rec, f"cancelled: {cond_text(c, dig)} before the wait was over - nothing was sent; the signal stays open for you")
+                self.notify(f"{sym} #{rec['signal_id']}: armed plan CANCELLED ({cond_text(c, dig)}) - nothing was sent; the signal is still open"); return True
+        while st["k"] < len(arm["when"]):
+            c = arm["when"][st["k"]]; t = cond_met(c, bars, st["since"], now, tk, off)
+            if t is None: break
+            st["met"].append({"k": st["k"], "t": int(t)}); st["k"] += 1; st["since"] = int(t); ch = True
+            logline(rec, f"wait step {st['k']}/{len(arm['when'])} met: {cond_text(c, dig)}")
+        if st["k"] >= len(arm["when"]):
+            cur = load_plan(cfg, key) or {}
+            if cur.get("status") != "armed": return False                 # disarmed from the page meanwhile: the trader's word stands
+            rec["card"]["entry_bar_open"] = now - now % 14400              # lever hours count from the H4 bar the trade enters in (as the role says)
+            send_approve(cfg, rec, "armed")
+            self.notify(f"{sym} #{rec['signal_id']}: the wait is over ({arm_text(arm, dig)[12:]}) - approve sent with the plan"); return True
+        streak, mx = int(s.get("implicit_streak") or 0), int(s.get("max_age_bars") or 3)
+        b = now - now % 14400
+        if streak >= mx - 1 and st.get("delay_b") != b and not any(p_.get("verb") == "delay" for p_ in (rec.get("pending") or {}).values()):
+            tid = C.write_task(cfg, sym, "delay", {}, signal_id=rec["signal_id"], issued_by="plan")
+            rec.setdefault("pending", {})[tid] = {"verb": "delay", "posid": None, "what": "a one-bar delay (keeps the signal open while the plan waits)", "at": time.time()}
+            st["delay_b"] = b; ch = True; logline(rec, "sent: a one-bar delay - the signal stays open while the plan waits")
+        return ch
 
     def frame_now(self, rec: dict) -> dict | None:
         """the live path since the fill in the plan's R: {tk, spec, now_srv, t0, F, ctx} (None: the feed is not ready - decide nothing)."""

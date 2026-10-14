@@ -304,6 +304,37 @@ def main():
             if not chk: warn(f"selftest: inverse plan #{sid} mirror check not reached (closed first?)")
             elif "|ok|" not in chk[-1]: fail(f"selftest: inverse plan mirror check: {chk[-1].strip()[:200]}")
             else: info.append(f"inverse plan #{sid}: mirror check ok ({row.get('direction')} vs signal {sig.get('direction')})")
+        # custom levels (2026-10-14): a wrong-side stop is refused; a custom stop + TP2 lands on the row and the broker, sized at the custom
+        # stop; a custom entry is a plan pending order with its own expiry (pend_bars 1) that fills or expires
+        aud=[l for l in open(ap_,encoding="ascii",errors="replace")]
+        lb=[x for t,x in acks.items() if re.fullmatch(r"st-\d+-approve-plan-lvbad",t)]
+        if not lb: warn("selftest: custom levels not exercised (no free signal after the inverse plan)")
+        for x in lb:
+            if x["result"]!="rejected" or not str(x["reason"]).startswith("bad_params:lv_sl_side"): fail(f"selftest: a stop on the wrong side -> {x['result']}/{x['reason']} (expected rejected/bad_params:lv_sl_side)")
+            else: info.append(f"custom levels #{x['signal_id']}: wrong-side stop refused ({x['reason']})")
+        for x in [x for t,x in acks.items() if re.fullmatch(r"st-\d+-approve-plan-lv",t)]:
+            sid=str(x["signal_id"])
+            if x["result"]!="accepted":
+                (fail if str(x["reason"]).startswith("bad_params") else warn)(f"selftest: custom-levels approve #{sid} -> {x['result']}/{x['reason']}"); continue
+            pl=[l for l in aud if "|plan_levels|" in l and f"|sig:{sid}|" in l]
+            if not pl: fail(f"selftest: custom-levels approve #{sid} accepted but no plan_levels audit line")
+            chk=[l for l in aud if "|plan_lv_check|" in l and f"sig:{sid} " in l]
+            if not chk: warn(f"selftest: custom-levels #{sid} check not reached (closed first?)")
+            elif "|ok|" not in chk[-1]: fail(f"selftest: custom-levels check: {chk[-1].strip()[:240]}")
+            else: info.append(f"custom levels #{sid}: row + broker stop/TP = the custom ones, sized at the custom stop")
+        lp_=[x for t,x in acks.items() if re.fullmatch(r"st-\d+-approve-plan-lvpend",t)]
+        if lb and not lp_: warn("selftest: custom entry (a plan pending order) not exercised (no free signal after the custom-levels plan)")
+        for x in lp_:
+            sid=str(x["signal_id"])
+            if x["result"]!="accepted":
+                (fail if str(x["reason"]).startswith("bad_params") else warn)(f"selftest: custom-entry approve #{sid} -> {x['result']}/{x['reason']}"); continue
+            row=next((r for r in all_rows if r.get("signal_id")==sid and (r.get("entry_mode") or "").startswith("plan_")),None)
+            if not row or row.get("entry_mode")!="plan_pending_frozen": fail(f"selftest: custom-entry #{sid}: journal row entry_mode {row and row.get('entry_mode')} (expected plan_pending_frozen)")
+            if not [l for l in aud if "|plan_levels|" in l and f"|sig:{sid}|" in l and "pend_bars=1" in l]: fail(f"selftest: custom-entry #{sid}: no plan_levels audit line with pend_bars=1")
+            chk=[l for l in aud if "|plan_lvpend_check|" in l and f"|sig:{sid}|" in l]
+            if not chk: warn(f"selftest: custom-entry #{sid}: neither a fill nor the 1-bar expiry was seen in the window")
+            elif "|ok|" not in chk[-1]: fail(f"selftest: custom-entry check: {chk[-1].strip()[:240]}")
+            else: info.append(f"custom entry #{sid}: {chk[-1].strip().split('|')[7] if len(chk[-1].split('|'))>7 else 'ok'}")
         # a plan row is never an Inverse parent (coordinator 2026-10-12): no `inverse ... published` line for a plan signal
         plan_sids={str(x["signal_id"]) for x in pa+ia if x["result"]=="accepted"}
         for l in open(ap_,encoding="ascii",errors="replace"):
