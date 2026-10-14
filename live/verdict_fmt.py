@@ -15,6 +15,7 @@ _CHECKS = re.compile(r"^Checks\s*[—–-]\s*(.+?)\s*:\s*(.*)$", re.I)
 _STEP = re.compile(r"(\d{1,2})\s*([✓✔✗✘×?xXvV-])")            # v/V: some transports mangle the tick glyph
 _CHIP = re.compile(r"(regime|news|correlation)\s*([✓✔✗✘×?xXvV-])", re.I)
 _PLAN = re.compile(r"```\s*plan\s*\n(.*?)```", re.S | re.I)            # 2026-10-14: the advisor's own plan, a fenced JSON block
+_FENCE = re.compile(r"```[\w-]*\s*\n(.*?)```", re.S)
 
 
 def _norm(g: str) -> str: return GLYPH.get(g, GLYPH.get(g.lower(), "maybe"))
@@ -41,7 +42,7 @@ def parse(text: str | None) -> dict:
                  "size": None, "size_cond": None, "size_conf": None,
                  "plan_text": None}
     if not text: out["missing"] = ["everything"]; return out
-    pm = _PLAN.search(text)
+    pm = _PLAN.search(text) or next((m for m in _FENCE.finditer(text) if "live-advisor-plan/v1" in m.group(1)), None)   # a ```json fence too
     if pm: out["plan_text"] = pm.group(1).strip(); text = text[:pm.start()] + text[pm.end():]
     cur, buf = None, []
 

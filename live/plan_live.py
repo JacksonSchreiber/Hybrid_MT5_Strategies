@@ -1055,6 +1055,10 @@ class Runner:
                 s = C.signal(cfg, rec["signal_key"]) or {}
                 if s.get("status") in ("cancelled", "rejected", "expired", "skipped"):
                     rec["status"] = "done"; logline(rec, f"the pending order never filled ({s.get('status')}) - plan closed"); return True
+                row = C.row_state(cfg, sym, rec["signal_id"]) or {}                # an expiry is marked on the EA's row only (the signal
+                if row.get("decision") == "expired":                               # JSON keeps approved_pending) - 2026-10-14 review
+                    nb = int(row.get("pend_bars") or 0) or C.PENDING_EXPIRY_BARS
+                    rec["status"] = "done"; logline(rec, f"the pending order expired unfilled after {nb} H4 bars - plan closed"); return True
                 if rec.get("status") != "waiting_fill": rec["status"] = "waiting_fill"; logline(rec, "pending order placed - the plan starts when it fills"); return True
                 return ch
             pj = C.position(cfg, f"{sym}-{pid}") or {}

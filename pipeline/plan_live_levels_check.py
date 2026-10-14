@@ -168,6 +168,21 @@ def main() -> int:
     txt = "SUMMARY: WAIT — x\nVERDICT: WAIT (confidence: medium)\nWhy: y\nChanges my mind: z\n```plan\n" + blk + "\n```\nNotes: more\n"
     pv = VF.parse(txt)
     check("L9 the parser lifts the plan block out of the reply", pv["plan_text"] == blk and pv["notes"] == "more" and pv["verdict"] == "WAIT")
+    pj = VF.parse(txt.replace("```plan", "```json"))
+    check("L9 a ```json fence carrying the schema is taken too", pj["plan_text"] == blk)
+    # L10 - a pending order (a custom entry) that expired: the EA marks only its row; the plan must end, not wait forever
+    os.remove(PL.plan_path(cfg, SIG["signal_key"])); C.atomic_write_json(os.path.join(root, "signals", f"{SIG['signal_key']}.json"), dict(sig2, status="approved_pending"))
+    for f in glob.glob(os.path.join(root, "tasks", "*.json")): os.remove(f)
+    ok, msg, rec = PL.approve(cfg, sig2, dict(PLAN, levels={"entry": 0.997, "entry_h": 4}), False, "market")
+    tid = rec["approve_task"]; os.makedirs(os.path.join(root, "acks"), exist_ok=True)
+    C.atomic_write_json(os.path.join(root, "acks", f"{tid}.json"), {"task_id": tid, "result": "accepted", "reason": "ok", "refs": {"posid": 0}, "verb": "approve"})
+    C.atomic_write_json(os.path.join(root, "state", "SIM.sim", "7.json"), {"decision": "approved_pending", "pend_bars": 1})
+    mt5feed.positions = lambda: []
+    r = step(); r = step()
+    check("L10 a resting custom-entry order: waiting for the fill", r["status"] == "waiting_fill", r["status"])
+    C.atomic_write_json(os.path.join(root, "state", "SIM.sim", "7.json"), {"decision": "expired", "pend_bars": 1})
+    r = step()
+    check("L10 it expired (marked on the EA's row) -> the plan ends", r["status"] == "done" and "expired unfilled after 1 H4 bars" in r["log"][-1]["msg"], r["status"])
     print("RESULT:", "PASS" if OK else "FAIL")
     return 0 if OK else 1
 
