@@ -36,7 +36,13 @@
           if (self.edit || !e.detail || !e.detail.plan) return;
           var cfg = clone(e.detail.plan); if (cfg.entry && cfg.entry.pct > 100) cfg.entry.pct = 100;
           if (self.inverse) { self.inverse = false; }
-          self.fromConfig(cfg); self.commit(); self.presetSel = ''; self.presetAbout = e.detail.label || "The advisor's plan";
+          var left = '';                                       // an EA without plan_levels: its levels are left out, said so (they'd only block the approve)
+          if (cfg.levels && !self.lvOk()) {
+            left = LVK.filter(function (k) { return cfg.levels[k] !== null && cfg.levels[k] !== undefined; }).map(function (k) { return LVN[k] + ' ' + self.fp(cfg.levels[k]); }).join(', ');
+            delete cfg.levels;
+          }
+          self.fromConfig(cfg); self.commit(); self.presetSel = '';
+          self.presetAbout = (e.detail.label || "The advisor's plan") + (left ? ' - its levels (' + left + ') were left out: the EA on this chart cannot take custom levels until the 2026-10-14 EA update.' : '');
           self.$nextTick(function () { self.bindSort(); self.redraw(); var el = document.getElementById('sp-app'); if (el) el.scrollIntoView({ behavior: 'smooth' }); });
         });
         if (this.edit) this.fromConfig(D.plan, D.ids);       // trader 2026-10-13: editing a running plan - its levers keep their ids

@@ -757,7 +757,7 @@ def advisor_plan(text: str | None, sig: dict) -> dict | None:
     if levels: out["about"].append(levels_text(levels, dig))
     if arm: out["about"].append("it " + arm_text(arm, dig))
     out["warnings"] = w1 + w2 + w3
-    if levels and not sig.get("plan_levels"): out["warnings"].append("this chart's EA cannot take custom levels yet - reset them to the signal's before approving")
+    if levels and not sig.get("plan_levels"): out["warnings"].append("this chart's EA cannot take custom levels yet (it needs the 2026-10-14 EA update) - Load leaves them out and uses the signal's")
     out.update(ok=True, cfg=cfg); return out
 
 
