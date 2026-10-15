@@ -83,6 +83,13 @@ never inline `-Command` strings (quoting silently broke a safety task).
    After every EA rebuild (gate chain PASSED): `provisioning/deploy_live.sh --ea` (config + `HybridForwardTest-live.ex5` +
    `HybridLiveLauncher.ex5`, then `Stop-Process terminal64`, `Start-ScheduledTask hybrid-mt5`). Re-save the
    template only when the EA's INPUTS change (the charts read the template, not `hft_live.set`).
+   The restart is a hard kill (no OnDeinit): first check `state/<SYM>/seq.json` against the signals' ids and the
+   `parked_*.json` files. The 2026-10-15 EA update swapped the binary with MT5 DOWN instead
+   (`provisioning/ea_update_20261014.ps1`, run on the box from `C:\ProgramData\hybrid\`: back up the old .ex5 to `ea_backup\`, stop `hybrid-monitor` - its
+   watchdog relaunches MT5 - disable `hybrid-mt5`, kill terminal64 and wait until it is gone, copy, then enable + start
+   `hybrid-mt5` and start the monitor in a `finally`). Expect 46-47 fresh heartbeats and one `LIVE: restored N row(s)`
+   expert-log line per chart within ~2 min. Plans survive the restart: since 2026-10-15 the plan runner treats a position the
+   terminal does not list yet (the account still loading) as open while the EA's own file says so (`docs/live_plans.md`).
 
 ## Step 4 — runtime + services
 ```powershell

@@ -135,3 +135,13 @@ All user-approved decisions, newest first.
 - **Role change:** the "doctrine - don't re-argue it / don't recommend moving a stop" section is now background (the EA's default
   management when no plan is used). Backup: training/advisor/CLAUDE.live.md.bak-20261014.
 - **Also:** a 12 h average R pill on every pending signal and open position (home page and the signal / position pages).
+
+## 2026-10-15 — The custom-levels EA is live; a plan survives an MT5 restart (trader: "ok go ahead and deploy part 2")
+
+- **What:** the 2026-10-14 EA build went live at 03:50 UTC (box MT5 restarted with MT5 down for the file swap; 46 of 47 charts back -
+  GBPJPY had been silent since 10 Oct). Signals it publishes carry `plan_levels: true`, so the Levels box works on them; until a
+  signal is re-published by it, "Load into the builder" leaves the advisor's levels out and says which.
+- **Found during the restart:** the plan runner read the terminal's empty position list (the account still loading) as "closed" and
+  ended the NZDUSD #7 and USDNOK #7 plans while both trades were open. The trader chose to restore both records to running (done
+  04:03 UTC, backups kept) and to deploy the fix: a missing leg is closed only when the EA's own file says closed, or after 30 min.
+- **Advisor role:** a short guide maps its usual Changes-my-mind phrasings to wait steps; conditions the wait cannot check stay in words.

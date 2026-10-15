@@ -81,6 +81,11 @@ and a human-readable log the position page shows.
   current level for each leg every few seconds (tighten only, or both ways with the trail's `lower`, never past the signal stop).
 - Live differences from Practice: fills at market after a poll (seconds), lot-step rounding (a 25% bank of 0.03 lots is 0.01),
   the 1R cap on adds, entry at most 100%.
+- A leg missing from the terminal's position list is closed only when the EA agrees - it moves a closed position's file to
+  `positions/closed/` - or after `FEED_MISS_S` (30 min, a chart whose EA died). Until then that poll decides nothing. Right after an
+  MT5 restart the terminal lists no positions until the account loads: on 2026-10-15 (the EA update) that empty list marked the running
+  NZDUSD #7 and USDNOK #7 plans finished while both trades were open; the two records were set back to `running` by hand (backups
+  `*.json.bak-restart-20261015` on the box) and the rule above was added.
 
 ## As built (2026-10-12)
 - EA reasons may carry a suffix: `bad_params:entry_pct`, `below_min_lot:<asked>`, `risk_over_1R:<x>R`, `spread_too_wide:...`,
@@ -154,9 +159,21 @@ based on the market conditions ... especially if the advisor's ruling is a 'wait
   criteria as `wait`. `verdict_fmt.parse` lifts the block out (`plan_text`); `plan_live.advisor_plan` validates it exactly as an approve
   (levers, level sides, the wait) and the advisor card shows it in words with "Load into the builder" (a window event the builder takes
   as an unsaved plan). The trader still approves or arms it; nothing is sent by the advisor. The role's old "don't recommend moving a
-  stop" doctrine is now background ("the EA's default management").
+  stop" doctrine is now background ("the EA's default management"). The role also maps the usual Changes-my-mind phrasings to steps
+  ("…that holds for a bar" = a second close; "a retest" = the close, then a touch back; "a rejection wick off X" = a touch, then a close
+  back on your side; "a close back inside kills it" = a cancel close); what the wait cannot check (spread, session, volume, a gap, news
+  content) stays in words. Checked 2026-10-14 against the last 42 live Changes-my-mind lines (most are "an H4 close beyond X before a
+  time") and one consult run off-box on the AUDUSD #5 bundle (a SKIP with an armed plan: after the AUD jobs release, an H1 close above
+  the lower high; the server accepted it as is).
+- **Old EA builds:** levels need the signal's `plan_levels: true` (written by the 2026-10-14 build at every publish / re-present); on a
+  signal without it the Levels box is greyed, an approve with levels is refused, and "Load into the builder" leaves the advisor's levels
+  out and names them (the wait and levers still load).
+- **Deployed:** Python, page and role 2026-10-14 21:17 UTC; the EA (`HybridForwardTest-live.ex5`, md5 db51f46d…) 2026-10-15 03:50 UTC,
+  installed with MT5 down (`C:/ProgramData/hybrid/ea_update_20261014.ps1`; the previous build is `C:/ProgramData/hybrid/ea_backup/
+  HybridForwardTest-live.ex5.20261012`). Box file backups: `*.bak-20261014-levels`, `advisor/live/advisor/CLAUDE.md.bak-20261014`.
 - **Checks:** `pipeline/plan_live_levels_check.py` (levels, conditions, approve params, armed runner on a fake feed: steps in order,
-  the keep-alive delay, the trigger, cancels; the advisor block). EA self-test (from signal 17 on, after the plan and inverse scenarios):
+  the keep-alive delay, the trigger, cancels; the advisor block; L10 a custom-entry order that expires ends its plan; L11 a leg the
+  position list misses while the EA still lists it open keeps its plan running). EA self-test (from signal 17 on, after the plan and inverse scenarios):
   a stop on the wrong side refused `bad_params:lv_sl_side`; a tighter custom stop + TP2 at 3R lands on the row and the broker and the
   full lots are sized at the custom stop (`plan_lv_check`); a custom entry halfway to the stop with `pend_bars` 1 rests as a
   `plan_pending_frozen` order and fills (cut) or expires after one bar (`plan_lvpend_check`). `live_queue_check.py` validates them.

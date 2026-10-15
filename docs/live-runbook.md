@@ -95,6 +95,11 @@ tuning candidate for M3 (pre-warmed session per symbol, or a trimmed reference).
 Advisor session model: session id = uuid5(signal_key); consult = `claude -p … --session-id`, reply = `--resume`; the
 runner scrubs inherited `CLAUDE_*` env vars (a nested child hangs otherwise). `verdicts.live.log` on the VPS is the
 canonical copy (M3 nightly pull syncs it to the training tree for the coach).
+Testing a role change: the web app's "Run again" (`advisor/retry`) reuses the record's session id and falls back to
+`--resume` when that id is taken, so a re-run on an already-consulted signal may answer from the old role's context. Try a
+new role off-box instead (2026-10-14): copy `advisor/` (role, library, the model's notes file) and a signal's
+`bundles/<key>/` from the box into a scratch folder and run the runner's prompt through `claude -p` there; then feed the
+reply to `verdict_fmt.parse` / `plan_live.advisor_plan` with the signal's JSON.
 
 ## Shadow period — started 2026-09-16 (trader ruling: trading stays enabled after the live tests)
 
