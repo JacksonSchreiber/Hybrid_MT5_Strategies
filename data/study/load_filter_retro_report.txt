@@ -2,14 +2,14 @@
 ranker = D1 extension descending; tiebreak (symbol x bar-of-day); hard drops not reconstructible - see the docstring
 
     keep  cards kept  removed |  his R kept  retained | taken kept | bars met
-     10%          18      90% |      +4.70       31% |    9/60    | 
-     15%          27      85% |      +7.86       52% |   14/60    | 
-     20%          36      80% |      +9.49       63% |   19/60    | 
-     25%          46      75% |      +7.52       50% |   26/60    | 
-     30%          55      70% |      +7.75       51% |   27/60    | 
-     40%          73      60% |      +6.79       45% |   31/60    | 
-     50%          91      50% |     +12.04       79% |   40/60    | 
+     10%          18      90% |      -1.12       -7% |   10/60    | 
+     15%          27      85% |      +1.49       10% |   16/60    | 
+     20%          36      80% |      +1.02        7% |   18/60    | 
+     25%          46      75% |      +3.38       22% |   22/60    | 
+     30%          55      70% |      +5.48       36% |   26/60    | 
+     40%          73      60% |      +9.70       64% |   34/60    | 
+     50%          91      50% |     +14.41       95% |   42/60    | 
 
 what the filter would have removed, by whether he took it:
-  keep 25%: drops 136 cards - 34 of them his takes, worth +7.63R (mean +0.224R); the 102 he skipped were worth -4.52R blind
-  keep 40%: drops 109 cards - 29 of them his takes, worth +8.36R (mean +0.288R); the 80 he skipped were worth -4.91R blind
+  keep 25%: drops 136 cards - 38 of them his takes, worth +11.77R (mean +0.310R); the 98 he skipped were worth +3.33R blind
+  keep 40%: drops 109 cards - 26 of them his takes, worth +5.45R (mean +0.210R); the 83 he skipped were worth +5.47R blind
