@@ -27,6 +27,7 @@ from live import backtest_engine as BE
 BIG = 1 << 40                       # a minute that never comes (mark(): beyond the data)
 POLL_S = 5.0
 ACK_WAIT_S = 90.0                   # a task with no ack after this is dropped (and retried if still wanted)
+FEED_MISS_S = 1800.0                # a leg the account list misses while the EA still lists it open: no decision for up to this long
 LOG_MAX = 400
 
 
@@ -1089,9 +1090,23 @@ class Runner:
                 logline(rec, f"R counts from your fill {e:.{dig}f} to {'your' if (rec.get('levels') or {}).get('sl') is not None else 'the signal'} stop {float(c['sl']):.{dig}f}: 1R = {R:.{dig}f}"
                              + (f" (the card's entry was {c['e']:.{dig}f} with 1R {c['R']:.{dig}f}: your fill was {d * (e - c['e']) / c['R']:+.2f}R from it)"
                                 if abs(e - c["e"]) > 0.05 * c["R"] else ""))
+        # a leg missing from the account list is closed only when the EA agrees (it moves a closed position's file to closed/):
+        # right after an MT5 restart the terminal lists no positions until the account loads, and that empty list once marked
+        # two running plans finished (2026-10-15). While the EA still lists a missing leg as open, nothing is decided this
+        # tick; after FEED_MISS_S the old rule applies (an EA that never moved the file - a dead chart).
+        unsure = False
         for L in rec["legs"]:
-            if L["status"] == "open" and L.get("posid") and int(L["posid"]) not in bp:
-                L["status"] = "closed"; ch = True; logline(rec, f"leg {L['q']} (pos {L['posid']}) is closed on the account")
+            if L["status"] != "open" or not L.get("posid"): continue
+            if int(L["posid"]) in bp:
+                if L.pop("miss_since", None) is not None: ch = True
+                continue
+            pj = C.position(cfg, f"{sym}-{L['posid']}")
+            if pj and not pj.get("_closed"):
+                if "miss_since" not in L: L["miss_since"] = time.time(); ch = True
+                if time.time() - L["miss_since"] < FEED_MISS_S: unsure = True; continue
+            L.pop("miss_since", None)
+            L["status"] = "closed"; ch = True; logline(rec, f"leg {L['q']} (pos {L['posid']}) is closed on the account")
+        if unsure: return ch
         if all(L["status"] in ("closed", "refused", "skipped") for L in rec["legs"]) and not rec.get("pending"):
             rec["status"] = "done"; logline(rec, "every leg is closed - the plan is finished"); return True
         fr = self.frame_now(rec)

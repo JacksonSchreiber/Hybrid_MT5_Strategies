@@ -11,6 +11,9 @@ stop 0.9900 (1R = 0.0100), TP2 1.0200, no spread.
      the signal, then the approve with the record's params, lever hours re-anchored to the trigger bar
   L8 the runner, cancel: a cancel level touched -> cancelled, nothing sent; the signal no longer open -> cancelled
   L9 the advisor's plan block: valid -> the builder's config with levels + wait; bad JSON / wrong-side stop -> refused; levels on an old EA warn
+  L10 a custom-entry pending order that expires (marked on the EA's row only) ends its plan
+  L11 a running plan whose position the account list misses while the EA still lists it open (an MT5 restart) keeps running;
+      closed only when the EA moves the file to closed/ or after FEED_MISS_S
   python3 pipeline/plan_live_levels_check.py   (exit 0 = PASS)"""
 from __future__ import annotations
 import glob, json, os, sys, tempfile
@@ -183,6 +186,28 @@ def main() -> int:
     C.atomic_write_json(os.path.join(root, "state", "SIM.sim", "7.json"), {"decision": "expired", "pend_bars": 1})
     r = step()
     check("L10 it expired (marked on the EA's row) -> the plan ends", r["status"] == "done" and "expired unfilled after 1 H4 bars" in r["log"][-1]["msg"], r["status"])
+    # L11 - right after an MT5 restart the account lists no positions until it loads (2026-10-15: two running plans were marked finished)
+    pdir = os.path.join(root, "positions"); os.makedirs(os.path.join(pdir, "closed"), exist_ok=True)
+    pfile = os.path.join(pdir, "SIM.sim-555.json")
+    def running():
+        if os.path.exists(PL.plan_path(cfg, SIG["signal_key"])): os.remove(PL.plan_path(cfg, SIG["signal_key"]))
+        rr = PL.new_record(sig2, plan, [], False, "market")
+        rr.update(status="running", legs=[{"q": 0, "posid": 555, "src": -1, "status": "open"}], fill={"t": T0, "px": 1.0}, full_lots=0.5, rbase="fill")
+        PL.save_plan(cfg, rr)
+        C.atomic_write_json(pfile, {"posid": 555, "symbol": "SIM.sim", "signal_id": 7, "entry": 1.0, "entry_mode": "plan_market"})
+    running(); mt5feed.positions = lambda: []
+    r = step()
+    check("L11 the account lists nothing but the EA still lists the position open -> the plan keeps running",
+          r["status"] == "running" and r["legs"][0]["status"] == "open" and r["legs"][0].get("miss_since"), f"{r['status']} {r['legs']}")
+    mt5feed.positions = lambda: [{"ticket": 555, "symbol": "SIM.sim", "time": T0, "price_open": 1.0, "volume": 0.5, "sl": 0.99}]
+    r = step()
+    check("L11 the account lists it again -> the miss is forgotten", r["status"] == "running" and "miss_since" not in r["legs"][0], str(r["legs"]))
+    os.replace(pfile, os.path.join(pdir, "closed", "SIM.sim-555.json")); mt5feed.positions = lambda: []
+    r = step()
+    check("L11 the EA moved it to closed/ -> the leg is closed and the plan ends", r["status"] == "done" and r["legs"][0]["status"] == "closed", r["status"])
+    os.remove(os.path.join(pdir, "closed", "SIM.sim-555.json")); running()
+    r = step(); r["legs"][0]["miss_since"] -= PL.FEED_MISS_S + 1; PL.save_plan(cfg, r); r = step()
+    check("L11 still missing after FEED_MISS_S with the EA's file never moved (a dead chart) -> closed", r["status"] == "done", r["status"])
     print("RESULT:", "PASS" if OK else "FAIL")
     return 0 if OK else 1
 
