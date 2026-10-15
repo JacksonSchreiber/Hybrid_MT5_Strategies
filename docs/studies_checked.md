@@ -172,7 +172,7 @@ nothing is re-run by accident and the coach can see what was tried.
   - **Setup:** 5,954 signals, all four detectors, the open symbols only (locked never loaded; 2025-26 bloc only). Average = since the
     signal (M1 bid closes vs the card entry). Same stop and TP2, R re-based to the stop distance from the late fill (the 1% rule), the
     EA's R:R floor (TP2 >= 1R from the fill), model spread. Raw replay matches the engine exactly.
-  - **Result vs raw: -0.038 -> -0.020R/signal (t 1.3), 62% of signals taken; +1 pip t 2.4.** The 4 h check alone (skip if not positive)
+  - **Result vs raw: -0.038 -> -0.020R/signal (t 1.3), 62% of signals taken; +1 pip t 2.4, mostly spread not paid on 38% fewer trades.** The 4 h check alone (skip if not positive)
     +0.027 (t 1.5); the later entries (946) lose -0.057 each. Commodity bloc +0.050 (t 2.8); indices -0.048, gold -0.091, oil -0.043.
   - **Read: it is about the same as skipping 38% of signals at random** (+0.004R/signal over that benchmark; bloc +0.010; indices,
     gold and oil below it). The average does sort the signals (positive at 4 h: raw +0.25R; not: -0.28R), but the late fill gives it
