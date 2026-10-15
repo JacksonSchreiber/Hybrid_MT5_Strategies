@@ -164,3 +164,18 @@ nothing is re-run by accident and the coach can see what was tried.
 - **Locked-symbol look, XAGUSD + USDCHF** (trader 2026-10-04; pre-registered in docs/locked_look_2026-10-04.md; both now spent).
   - Live stack vs raw -0.017R/trade (t -0.4): FITTED to its design symbols (the original seven).
   - Live + bloc rules vs raw +0.023 (noise). The raw signal is negative on both (-0.044).
+
+## 2026-10-15
+
+- **Wait 4 h, enter on a positive average, else wait for one up to 24 h** (trader 2026-10-15: "if the average is positive, enter,
+  negative, skip until it turns positive waiting up to 24 hours").
+  - **Setup:** 5,954 signals, all four detectors, the open symbols only (locked never loaded; 2025-26 bloc only). Average = since the
+    signal (M1 bid closes vs the card entry). Same stop and TP2, R re-based to the stop distance from the late fill (the 1% rule), the
+    EA's R:R floor (TP2 >= 1R from the fill), model spread. Raw replay matches the engine exactly.
+  - **Result vs raw: -0.038 -> -0.020R/signal (t 1.3), 62% of signals taken; +1 pip t 2.4.** The 4 h check alone (skip if not positive)
+    +0.027 (t 1.5); the later entries (946) lose -0.057 each. Commodity bloc +0.050 (t 2.8); indices -0.048, gold -0.091, oil -0.043.
+  - **Read: it is about the same as skipping 38% of signals at random** (+0.004R/signal over that benchmark; bloc +0.010; indices,
+    gold and oil below it). The average does sort the signals (positive at 4 h: raw +0.25R; not: -0.28R), but the late fill gives it
+    back: the median fill is +0.25R past the signal price, so the stop is 1.25x as far, TP2 pays fewer R and every loser is still -1R.
+    The exits are the same trades' raw exits (same levels, same path); only the fill differs.
+  - `avg_wait_entry_study.py`, `data/study/avg_wait_entry/report.md` (+ trades.csv)
