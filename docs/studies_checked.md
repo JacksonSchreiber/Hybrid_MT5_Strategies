@@ -179,3 +179,15 @@ nothing is re-run by accident and the coach can see what was tried.
     back: the median fill is +0.25R past the signal price, so the stop is 1.25x as far, TP2 pays fewer R and every loser is still -1R.
     The exits are the same trades' raw exits (same levels, same path); only the fill differs.
   - `avg_wait_entry_study.py`, `data/study/avg_wait_entry/report.md` (+ trades.csv)
+- **Average cuts every 4 h for the first day + a 15-min 1R trailing stop** (trader 2026-10-15: close at 4 h if the average < -0.2,
+  8 h < -0.1, 12 h < 0, 16 h < +0.1, 20 h < +0.2, 24 h < +0.2, from 12 h on the average over the last 12 h; plus every 15 min the stop
+  to 1R below the highest price so far, raise only).
+  - **Setup:** the same 5,954 open signals, entry 100% at the signal, TP2 on, built as builder levers and run on the rule engine (the
+    Practice tab's / live plan runner's kernel). Card R, model spread.
+  - **Result vs raw: -0.038 -> -0.029R/trade (t 0.4), DD 314 -> 187R.** The cuts alone do better: -0.018 (t 1.3, DD 179). The trail
+    alone: -0.038, the same as raw (win rate 21% -> 35%, but its exits average about 0R). Without TP2: -0.032.
+  - **The trail takes the TP2s:** raw reaches TP2 on 1,246 trades, the plan on 136; 765 of the rest are stopped by the trail first
+    (a 1R pullback from the high on the way to a ~3R target).
+  - **Same pattern as every exit rule here:** commodity bloc better (+0.063, t 2.2; the trail alone +0.20 in 2025-26, one slice);
+    indices +84 -> -14R, gold +32 -> +1R, USD majors +8 -> -35R. It helps where raw loses and costs where raw makes money.
+  - `avg_cut_trail_study.py`, `data/study/avg_cut_trail/report.md` (+ trades.csv)
