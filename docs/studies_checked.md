@@ -191,3 +191,19 @@ nothing is re-run by accident and the coach can see what was tried.
   - **Same pattern as every exit rule here:** commodity bloc better (+0.063, t 2.2; the trail alone +0.20 in 2025-26, one slice);
     indices +84 -> -14R, gold +32 -> +1R, USD majors +8 -> -35R. It helps where raw loses and costs where raw makes money.
   - `avg_cut_trail_study.py`, `data/study/avg_cut_trail/report.md` (+ trades.csv)
+- **NZDCAD pattern competition** (trader 2026-10-15: Opus researchers compete to find tradeable directional NZDCAD patterns, a Fable
+  lead runs three rounds and compiles the results).
+  - **Setup:** 15 Opus researchers (5 per round, fresh each round, told to skip everything already reported), about 3,420 rule variants
+    on 2012-2023 M1 bid/ask bars from the QDM tick store. One shared harness scored every candidate, with a look-ahead check, the real
+    spread + 1 pip round trip, and swap not modelled. 2024-01 to 2026-10 was sealed; only a Sonnet verifier ran it. The bar was set
+    before any run: dev t >= 2 and 8/12 years positive, sealed t >= 2 on >= 30 trades. Only 2 candidates reached the sealed data.
+  - **Nothing WORKS.** Every family died on cost: intraday session hand-offs, momentum/trend, news-jump drift, order-flow proxies, calendar
+    effects, volatility state, level false-breaks, bar shapes, H1 breakouts, weekend gaps, 5-min spikes, long-horizon z-scores, VWAP
+    reversion, run counts. Gross effects were 0-3 pips against a round-trip cost of 3.5-4.5 pips. London-morning fade: sealed -3.7 pips
+    (t -1.3).
+  - **z2rev (two-session reversal) = PROMISING.** At each 17:00 NY close, fade the last two closes' move; the position flips only at
+    08:00 London; always in the market; median hold 3-4 days. Dev n 1085, +5.3 pips (t 2.3), 9/12 years, but carried by 2015 and 2023
+    (2016-19 flat). Sealed n 257, +5.5 pips (t 1.7), all 3 years positive. Re-run independently with the same numbers. Swap over a
+    3-day hold is unmeasured and could erase it. Not forwarded: it is a standalone NZDCAD rule, not a signal rule; the trader decides.
+  - `/home/jack/nzdcad_comp/` (the full tree), `data/study/nzdcad_comp/` (FINAL_REPORT.md, the three round ledgers, s_z2rev.py,
+    z2rev_recheck/)
