@@ -93,3 +93,15 @@ main{max-width:1400px}
 .sp-tf{width:80px}.sp-side{width:120px}.sp-dt{background:#0d1117;color:var(--fg,#c9d1d9);border:1px solid var(--line);border-radius:4px;padding:4px 6px;font:inherit}
 .sp-advplan{margin-top:8px;border-left:3px solid #58a6ff;padding:4px 8px}.sp-advplan .bt-small{display:block}
 @media (max-width:1050px){.sp-grid{display:flex;flex-direction:column}.sp-grid .bt-left,.sp-grid .bt-right{display:contents}}
+
+/* the step-through (trader 2026-10-16) */
+.bt-replay{padding:10px 12px}.bt-rpbar{gap:6px}.bt-rpgap{flex:1}
+.bt-rpb{background:#21262d;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:13px}
+.bt-rpb.on{background:#1f6feb;border-color:#1f6feb;color:#fff}.bt-rpb:disabled{opacity:.45;cursor:default}
+.bt-rpsel{width:auto;min-width:0;flex:0 0 auto;background:#21262d;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:3px 4px;margin:0;font-size:13px}
+.bt-rng{width:100%;margin:10px 0 6px;accent-color:#1f6feb}
+.bt-rpwhen{font-weight:600;font-variant-numeric:tabular-nums;margin-bottom:4px}.bt-rpline{font-size:13.5px;margin:2px 0;font-variant-numeric:tabular-nums}
+.bt-rplog{max-height:180px;overflow-y:auto;margin:8px 0 6px;border-top:1px solid var(--line);padding-top:6px}
+.bt-rpev{font-size:12.5px;padding:2px 0;color:var(--dim)}.bt-rpev.now{color:var(--txt)}.bt-rpev.now b{color:#ff8c00}
+.bt-rpat{display:inline-block;min-width:52px;font-variant-numeric:tabular-nums}
+@media (max-width:640px){.bt-rpgap{display:none}.bt-rpb{padding:6px 9px}}

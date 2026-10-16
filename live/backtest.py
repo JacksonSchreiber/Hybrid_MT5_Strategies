@@ -583,6 +583,101 @@ def path_view(S, hid, plan_n, inverse: bool = False) -> dict:
     return out
 
 
+def _rtxt(v) -> str: return ("+" if v > 0.0005 else "−" if v < -0.0005 else "") + f"{abs(v):.2f}R"
+
+
+def timeline(S, hid, cfg_plan, inverse: bool = False, post_bars: list | None = None) -> dict:
+    """trader 2026-10-16 ("when i execute a trade i can step through it bar by bar or hour by hour to see how it plays out"): the
+    Practice reveal as steps - one per trading hour on the frame (the same M1 frame the reveal's R comes from), then one per H4 bar
+    for the revealed bars past the frame's end (the frame stops at the first -1R touch). Each hour tick carries its H4 bar so far
+    (price R in the chart's orientation: the bid, a SELL negated - path_view's bars) and, per line (the plan, the raw signal), the
+    state at the hour's close: open size, R if closed now (the exit-side close), banked R, the stops (chart levels + R if hit) and
+    what happened in the hour. The state is plan_live.run_state (backtest_engine.kern line for line and resumable by segment -
+    pipeline/plan_live_parity.py) run hour by hour on the one unchanged plan; its end must equal kern's result exactly, else no timeline."""
+    from live import plan_live as PL
+    with _LOCK: F, ctx = (S["frames_inv"] if inverse else S["frames"]).get(hid)
+    n = int(F["n"]); tm = np.asarray(ctx["tm"][:n]); kb = tm // 240; hb = tm // 60; up = bool(ctx["up"])
+    s4 = np.flatnonzero(np.r_[True, kb[1:] != kb[:-1]]); rank = np.repeat(np.arange(len(s4)), np.diff(np.r_[s4, n]))
+    hs = np.flatnonzero(np.r_[True, hb[1:] != hb[:-1]]); he = np.r_[hs[1:], n]
+    nbars = len(post_bars) if post_bars else int(rank[-1]) + 1
+    blow = F["xl"] + (F["bh"] - F["xh"])                       # the bid low (path_view)
+    chart = (lambda v: round(float(v), 3)) if up else (lambda v: round(-float(v), 3))
+    ticks = []; capped = False
+    for a, b in zip(hs, he):
+        k = int(rank[a])
+        if k >= nbars: capped = True; break
+        a4 = int(s4[k]); o, h, l, c = float(F["bo"][a4]), float(F["bh"][a4:b].max()), float(blow[a4:b].min()), float(F["bc"][b - 1])
+        ticks.append({"k": k, "bar": [round(o, 3), round(h, 3), round(l, 3), round(c, 3)] if up else [round(-o, 3), round(-l, 3), round(-h, 3), round(-c, 3)],
+                      "th": int(k * 4 + (int(hb[b - 1]) - int(kb[b - 1]) * 4) + 1), "px": round(float(F["xc"][b - 1]), 3), "a": int(a), "b": int(b)})
+    nh = len(ticks); last_k = ticks[-1]["k"] if ticks else -1
+    if not capped and post_bars:                               # the frame ended first: its last bar completed, then whole bars
+        for k in range(max(last_k, 0), nbars):
+            if k > last_k or post_bars[k] != ticks[-1]["bar"]: ticks.append({"k": k, "bar": post_bars[k], "th": None, "px": None})
+
+    def run(cfg_n, lbl):
+        P = E.compile_cfg(cfg_n, ctx, True); init = None; res = None; steps = []; events = []
+        adds = [c for c in cfg_n["levers"] if c["type"].startswith("add")]; cuts = [c for c in cfg_n["levers"] if c["type"].startswith("cut")]
+        prev = {"nl": 1, "alive": [True], "lst": [-1.0], "ls": [P["F0"]], "bk": [False] * P["nbk"], "mv": [False] * P["nmv"],
+                "ad": [False] * P["nad"], "held": [False] * P["nad"]}
+        for t in range(nh):
+            a, b = ticks[t]["a"], ticks[t]["b"]
+            res, st = PL.run_state(F, ctx, P, a, b, init)
+            nl = int(st["nl"]); alive = [bool(st["alive"][q]) for q in range(nl)]; lst = [float(st["lst"][q]) for q in range(nl)]
+            ls = [float(st["ls"][q]) for q in range(nl)]; le = [float(st["le"][q]) for q in range(nl)]; locked = float(st["locked"])
+            ev = []; moved = False; added = False
+            for q in range(P["nbk"]):
+                if st["bk_done"][q] and not prev["bk"][q] and P["bk_pct"][q] > 0:
+                    ev.append(f"banked {P['bk_pct'][q] * 100:.0f}% of the open position at {_rtxt(P['bk_lvl'][q])}")
+            for q in range(P["nmv"]):
+                if st["mv_done"][q] and not prev["mv"][q]:
+                    moved = True; ev.append(f"{_rtxt(P['mv_when'][q])} reached: stop moved to {_rtxt(ctx['be'] + P['mv_to'][q] - le[0])}")
+            for q in range(prev["nl"], nl):
+                a_ = int(st["src"][q]); added = True
+                what = {"add_bar": "bar add", "add_reach": "add at a level", "add_tp1": "TP1 add"}.get(adds[a_]["type"], "add") if 0 <= a_ < len(adds) else "add"
+                ev.append(f"{what}: {float(st['sz0'][q]) * 100:.0f}% more at {_rtxt(float(st['lp'][q]))}, its stop at {_rtxt(lst[q] - le[0])}")
+            for q in range(P["nad"]):
+                if st["ad_done"][q] and not prev["ad"][q] and not any(int(st["src"][x]) == q for x in range(nl)):
+                    ev.append("an add was skipped (no room left under the size cap or the risk cap)")
+                if st["ad_held"][q] and not prev["held"][q]: ev.append("an add is waiting: the average R is below its level")
+            for q in range(min(prev["nl"], nl)):
+                if prev["alive"][q] and not alive[q] and res is None:
+                    ev.append(("the first entry" if q == 0 else f"an add ({ls[q] * 100:.0f}%)") + " was stopped out")
+            pq = next((q for q in range(min(prev["nl"], nl)) if alive[q] and prev["alive"][q]), None)
+            if pq is not None and abs(lst[pq] - prev["lst"][pq]) > 1e-9 and not moved:
+                why = "trail" if (P["tr_on"] and bool(np.asarray(P["tr_chk"][a:b]).any())) else ("risk cap" if added else "stop")
+                ev.append(f"{why}: stop {'raised' if lst[pq] > prev['lst'][pq] else 'lowered'} to {_rtxt(lst[pq] - le[0])}")
+            on = [q for q in range(nl) if alive[q] and ls[q] > 1e-12]
+            if res is None:
+                xc = float(F["xc"][b - 1])
+                steps.append({"open": round(sum(ls[q] for q in on), 4), "now": round(locked + sum(ls[q] * (xc - le[q]) for q in on), 4),
+                              "banked": round(locked, 4), "worst": round(locked + sum(ls[q] * (lst[q] - le[q]) for q in on), 4),
+                              "stops": sorted({chart(lst[q]) for q in on}), "stop_R": round(lst[on[0]] - le[0], 4) if on else None})
+            else:
+                R, kind, cut = float(res[0]), int(res[1]), int(res[6])
+                if kind == 2 and 0 <= cut < len(cuts):
+                    cc = cuts[cut]
+                    why = (f"cut at {cc['at_h']:g} h: the average R{' over the last ' + format(cc['window_h'], 'g') + ' h' if cc.get('window_h') else ''} "
+                           f"was below {_rtxt(cc['below'])}") if cc["type"] == "cut_avg" else f"cut at {cc['at_h']:g} h: {_rtxt(cc['reach'])} was never reached"
+                else: why = KIND.get(kind, "ended")
+                ev.append(f"closed - {why}: {_rtxt(R)}")
+                steps.append({"open": 0.0, "now": round(R, 4), "banked": round(R, 4), "worst": round(R, 4), "stops": [], "stop_R": None})
+            if ev: events.append({"t": t, "text": ev})
+            if res is not None: break
+            prev = {"nl": nl, "alive": alive, "lst": lst, "ls": ls, "bk": [bool(x) for x in st["bk_done"][:P["nbk"]]],
+                    "mv": [bool(x) for x in st["mv_done"][:P["nmv"]]], "ad": [bool(x) for x in st["ad_done"][:P["nad"]]],
+                    "held": [bool(x) for x in st["ad_held"][:P["nad"]]]}
+            init = st
+        ref = E.run(E.kern, F, ctx, P)
+        if res is None or abs(float(res[0]) - float(ref[0])) > 1e-9 or int(res[1]) != int(ref[1]) or int(res[2]) != int(ref[2]):
+            raise RuntimeError(f"{lbl}: the hourly replay ended at {res and tuple(res[:3])} but kern says {tuple(ref[:3])}")
+        return {"steps": steps, "events": events, "exit_t": len(steps) - 1, "R": round(float(res[0]), 4), "kind": KIND.get(int(res[1]), "")}
+
+    out = {"ticks": [{k: v for k, v in t.items() if k not in ("a", "b")} for t in ticks], "hourly": nh,
+           "raw": run(E.validate({"schema": E.SCHEMA, "entry": {"pct": 100}, "tp2": True, "levers": []})[0], "raw")}
+    if cfg_plan: out["plan"] = run(cfg_plan, "plan")
+    return out
+
+
 def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded_preset: str = "", inverse: bool = False) -> dict:
     """record the decision server-side, THEN evaluate and reveal. loaded_preset = the preset the plan was loaded from when editing
     began (coach 2026-10-04: the "nearest preset" for grading a custom plan)."""
@@ -628,13 +723,18 @@ def decide(cfg: dict, sid: str, i: int, decision: str, plan: dict | None, loaded
         _top_up_advisor(cfg, s, S)
         return {"ok": True, "decision": decision, "recorded": True, "warnings": warn, "decided": len(s["decisions"]), "next": s["pos"] < s["n"]}
     labels = {p["key"]: p["label"] for p in mv["presets"]}
+    pv = path_view(S, hid, plan_n, bool(inverse))
+    try: tl = timeline(S, hid, plan_n, bool(inverse), pv["post_bars"])
+    except Exception as e:                            # the step-through is extra: the reveal goes out without it
+        tl = None
+        with open(os.path.join(web_dir(cfg), "timeline_errors.log"), "a") as f: f.write(f"{_now()}|{sid}|{i}|{e!r}\n")
     return {"ok": True, "decision": decision, "warnings": warn, "R_choice": rec["R_choice"], "R_plan": rec["R_plan"], "R_raw": rec["R_raw"],
             "R_default": rec["R_default"], "default_key": dflt,
             "presets": [{"key": k, "label": labels[k], "R": round(_evaluate(S, hid, next(p["cfg"] for p in mv["presets"] if p["key"] == k), True)["R"], 4) if inverse else R["R"][k]}
                         for k in PRESET_KEYS],
             "inverse": bool(inverse), "R_raw_inverse": rec["R_raw_inverse"],
             "banked_1R": rec["banked_1R"], "hit_tp2": rec["hit_tp2"], "kind": KIND.get(rec["kind"], "") if ev else "", "exit_h": rec["exit_h"],
-            "adds_fired": ev["adds"] if ev else 0, "advisor": adv_cols or None, "tally": tally(s), "next": s["pos"] < s["n"], **path_view(S, hid, plan_n, bool(inverse))}
+            "adds_fired": ev["adds"] if ev else 0, "advisor": adv_cols or None, "tally": tally(s), "next": s["pos"] < s["n"], **pv, "timeline": tl}
 
 
 def commit_first(cfg: dict, sid: str, i: int, decision: str, plan: dict | None) -> dict:

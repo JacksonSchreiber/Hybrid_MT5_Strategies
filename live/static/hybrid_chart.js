@@ -30,9 +30,11 @@
     mount: function (id, d) {
       var el = typeof id === 'string' ? document.getElementById(id) : id;
       if (!el) { console.log('HybridChart: container not found', id); return; }
-      var tf = 'h4', chart, box = el.querySelector('.hc-box'), bar = el.querySelector('.hc-bar'), status = el.querySelector('.hc-status'), timer = null, gen = 0;
-      if (el._hcStop) { try { el._hcStop(); } catch (e) {} }   // a remount (live plan card: Inverse) stops the previous mount's refresh timer
-      el._hcStop = function () { gen++; if (timer) { clearInterval(timer); timer = null; } };
+      var tf = 'h4', chart, box = el.querySelector('.hc-box'), bar = el.querySelector('.hc-bar'), status = el.querySelector('.hc-status'), timer = null, gen = 0, ro = null;
+      if (el._hcStop) { try { el._hcStop(); } catch (e) {} }   // a remount (live plan card: Inverse; the backtest step-through) stops the previous mount
+      el._hcStop = function () { gen++; if (timer) { clearInterval(timer); timer = null; } if (ro) { ro.disconnect(); ro = null; }
+        if (chart) { try { chart.remove(); } catch (e) {} chart = null; } };
+      if (!d.keep_range) { el._hcLR = null; el._hcN = null; }   // keep_range (backtest step-through): the next mount keeps this view
       if (!box || !(box instanceof Element)) { if (status) { status.textContent = 'chart error: box element missing (' + (el.tagName || typeof el) + ')'; status.style.color = '#f85149'; } return; }
       function api(tf, n) { return fetch('/api/bars/' + encodeURIComponent(d.symbol) + '?tf=' + tf + '&n=' + n, { cache: 'no-store' }).then(function (r) { return r.json(); }); }
       function start() {
@@ -127,7 +129,7 @@
           var lg = chart.addLineSeries({ color: '#ee82ee', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
           var t0 = tv(ov.leg.t0), t1 = tv(ov.leg.t1); if (t0 < t1) lg.setData([{ time: t0, value: ov.leg.p0 }, { time: t1, value: ov.leg.p1 }]);
         }
-        (ov.aux || []).forEach(function (a) { if (has(a.price) && tf === 'h4') cs.createPriceLine({ price: a.price, color: '#c0c0c0', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, axisLabelColor: '#3a3f47', axisLabelTextColor: '#e6edf3', title: a.label || '' }); });
+        (ov.aux || []).forEach(function (a) { if (has(a.price) && tf === 'h4') cs.createPriceLine({ price: a.price, color: a.color || '#c0c0c0', lineWidth: a.width || 1, lineStyle: a.style !== undefined ? a.style : 1, axisLabelVisible: true, axisLabelColor: a.color || '#3a3f47', axisLabelTextColor: '#e6edf3', title: a.label || '' }); });
         var marks = [];
         if (tf === 'h4') {
           swings(bars).forEach(function (s) { marks.push({ time: s.t, position: s.kind === 'hi' ? 'aboveBar' : 'belowBar', color: '#8b949e', shape: s.kind === 'hi' ? 'arrowDown' : 'arrowUp', size: 0.5 }); });
@@ -143,7 +145,11 @@
         if (d.blind) {   // open with ~140px of empty space right of the last bar so the price-line labels clear it (capped at half the bars shown)
           var vis = n - from, w = Math.max(100, box.clientWidth - 75); pad = Math.min(Math.ceil(vis / 2), Math.max(5, Math.ceil(140 * vis / Math.max(60, w - 140)))); }
         chart.timeScale().setVisibleLogicalRange({ from: from, to: n + pad });
-        new ResizeObserver(function () { chart.applyOptions({ width: box.clientWidth }); }).observe(box);
+        if (d.keep_range && tf === 'h4' && el._hcLR && el._hcN) {   // step-through: the same view; when the newest bar was in it, follow it
+          var lr = el._hcLR, sh = lr.to >= el._hcN - 1 ? n - el._hcN : 0; chart.timeScale().setVisibleLogicalRange({ from: lr.from + sh, to: lr.to + sh }); }
+        if (tf === 'h4') { el._hcN = n; chart.timeScale().subscribeVisibleLogicalRangeChange(function (r) { if (r) el._hcLR = { from: r.from, to: r.to }; }); }
+        if (ro) ro.disconnect();
+        var ch = chart; ro = new ResizeObserver(function () { ch.applyOptions({ width: box.clientWidth }); }); ro.observe(box);
         guard('rtag', function () { rTag(lv); });
       }
       // trader 2026-10-13: the cursor's price also as R, in a tag beside the crosshair's price label. R = profit R from the entry to the

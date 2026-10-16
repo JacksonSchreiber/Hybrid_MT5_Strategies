@@ -111,6 +111,31 @@
           <div id="bt-chart"><div class="hc-bar"><button data-tf="h4" class="on">H4</button><button data-tf="d1">D1</button><span class="hc-status k"></span></div>
             <div class="hc-box"></div></div>
         </div>
+        <template x-if="rev && rp">
+          <div class="card bt-replay">
+            <div class="bt-row bt-rpbar">
+              <button class="bt-rpb" @click="rpPause(); rpGo(-1)" :disabled="st.i < 0" title="back to the entry (Home)">« Entry</button>
+              <button class="bt-rpb" @click="rpPause(); rpStep(-1)" :disabled="st.i < 0" title="one step back (←)">‹ Back</button>
+              <button class="bt-rpb on" @click="rpPause(); rpStep(1)" :disabled="st.i >= rp.N - 1" title="one step forward (→)">Next ›</button>
+              <button class="bt-rpb" @click="rpToggle()" x-text="st.play ? 'Pause' : 'Play'" title="play / pause (space)"></button>
+              <button class="bt-rpb" @click="rpEnd()" :disabled="st.i >= rp.N - 1" title="jump to the end (End)">End »</button>
+              <span class="bt-rpgap"></span>
+              <span class="k">step</span>
+              <button class="bt-rpb" :class="st.unit === 'hour' ? 'on' : ''" @click="rpUnit('hour')">1 hour</button>
+              <button class="bt-rpb" :class="st.unit === 'bar' ? 'on' : ''" @click="rpUnit('bar')">1 bar (4 h)</button>
+              <select class="bt-rpsel" :value="String(st.speed)" @change="rpSpeed($event.target.value)" title="play speed"><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
+            </div>
+            <input type="range" class="bt-rng" min="-1" :max="rp.N - 1" step="1" :value="st.i" @input="rpPause(); rpGo(+$event.target.value)">
+            <div class="bt-rpwhen" x-text="rpWhen()"></div>
+            <div class="bt-rpline" x-show="rp.plan"><b x-text="rev?.decision === 'take' ? 'Your plan' : 'Your plan (not taken)'"></b> <span x-text="rpLine('plan')"></span></div>
+            <div class="bt-rpline"><b x-text="rev?.inverse ? 'Raw inverted' : 'Raw signal'"></b> <span x-text="rpLine('raw')"></span></div>
+            <div class="bt-rplog">
+              <div class="k bt-small" x-show="!rpEvents().length" x-text="st.i < 0 ? 'Step forward to watch the trade play out. Arrow keys step, space plays, End jumps to the result.' : 'Nothing has happened yet.'"></div>
+              <template x-for="e in rpEvents()" :key="e.id"><div class="bt-rpev" :class="e.now ? 'now' : ''"><span class="bt-rpat" x-text="e.at"></span> <b x-text="e.who"></b> <span x-text="e.text"></span></div></template>
+            </div>
+            <div class="bt-row" x-show="!st.done"><span class="k bt-small">The result card appears at the end.</span><sl-button size="small" variant="primary" outline @click="rpEnd()">Show the result</sl-button></div>
+          </div>
+        </template>
         <div class="card bt-facts" x-show="C.card">
           <div class="bt-row bt-pills">
             <span class="bt-tag" :class="dirShown().indexOf('BUY') === 0 ? 'up' : 'dn'" x-text="dirShown()"></span>
@@ -293,7 +318,7 @@
         </div>
 
         <!-- reveal -->
-        <template x-if="rev">
+        <template x-if="rev && (!rp || st.done)">
           <div class="card bt-reveal">
             <div class="bt-big" :class="rev?.decision === 'take' ? cls(rev?.R_choice) : ''">
               <span x-text="rev?.decision === 'take' ? ('Taken · ' + fmt(rev?.R_choice)) : 'Skipped'"></span>

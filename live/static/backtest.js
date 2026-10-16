@@ -35,6 +35,7 @@
       groups: [], menu: { presets: [] }, sessions: [], startGroup: 'com', startMode: 'practice', devN: '', menuFrozen: null, testLeft: {},
       advTimer: null, aoTimer: null, exps: [], inverse: false, askText: '', proceedNoAdv: false, flash: '', summary: null, dev: false, devText: '', devBlind: true,
       sess: null, done: false, brk: null, C: { tally: {}, info: null, card: null, i: 0, n: 0 }, rev: null, busy: false, err: '',
+      rp: null, st: { i: -1, unit: 'hour', speed: 1, play: false, done: false }, rpTimer: null, rpTally: null,
       plan: { entry: 100, tp2: true, trim: false, levers: [] }, hist: [], hpos: -1, presetSel: '', presetAbout: '', basePreset: '',
       palette: PALETTE, stopOpts: STOP_OPTS, sortable: null, wide: window.innerWidth > 640,
       init: function () {
@@ -45,9 +46,17 @@
           self.devText = '```levers\n{"schema": "advisor-levers/v1", "nearest_preset": "ruthless", "rationale": "Weak follow-through on this group: cut fast, bank early.",\n "plan": {"entry": {"pct": 100}, "tp2": true, "levers": [{"type": "bank", "pct": 50, "at": 1.0, "tp1": true}, {"type": "move", "to": 0.25, "when": 1.0, "tp1": true, "legs": "all"}, {"type": "cut_avg", "at_h": 1, "below": 0}]}}\n```';
           var m = location.hash.match(/sid=([0-9a-f]{12})/); if (m) self.resume(m[1]); });
         document.addEventListener('keydown', function (e) {     // ONE listener (Alpine calls init() itself - no x-init; review #4)
-          if (!self.sess || self.done || self.rev || self.brk) return;
+          if (!self.sess || self.done || self.brk) return;
           var path = e.composedPath ? e.composedPath() : [e.target];   // typing in a field: the browser's own undo, not the plan's
-          for (var q = 0; q < path.length; q++) { var tg = path[q] && path[q].tagName; if (tg && /^(INPUT|TEXTAREA|SELECT|SL-INPUT|SL-TEXTAREA)$/.test(tg)) return; }
+          for (var q = 0; q < path.length; q++) { var tg = path[q] && path[q].tagName; if (tg && /^(TEXTAREA|SELECT|SL-INPUT|SL-TEXTAREA)$/.test(tg)) return;
+            if (tg === 'INPUT' && path[q].type !== 'range') return; }
+          if (self.rev && self.rp) {                                   // the step-through (trader 2026-10-16): arrows, space, Home / End
+            var k = e.key, hit = true;
+            if (k === 'ArrowRight') { self.rpPause(); self.rpStep(1); } else if (k === 'ArrowLeft') { self.rpPause(); self.rpStep(-1); }
+            else if (k === ' ') self.rpToggle(); else if (k === 'Home') { self.rpPause(); self.rpGo(-1); } else if (k === 'End') self.rpEnd(); else hit = false;
+            if (hit) e.preventDefault(); return;
+          }
+          if (self.rev) return;
           var z = (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z'), y = (e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y');
           if (z && !e.shiftKey) { e.preventDefault(); self.undo(); } else if ((z && e.shiftKey) || y) { e.preventDefault(); self.redo(); }
         });
@@ -209,7 +218,7 @@
         get('/api/bt/sessions').then(function (j) { self.sessions = j; }); this.$nextTick(function () { self.syncGroupSelect(0); }); },
       load: function () {
         var self = this; self.busy = true;
-        self.stopPoll(); self.askText = ''; self.proceedNoAdv = false;
+        self.stopPoll(); self.askText = ''; self.proceedNoAdv = false; self.rpPause(); self.rp = null; self.rpTally = null;
         get('/api/bt/card?sid=' + self.sess.sid).then(function (j) { self.busy = false;
           if (j.ok === false) { self.err = j.error; return; }
           if (j.done) { self.done = true; self.brk = null; self.C = { tally: j.tally, n: j.n, mode: j.mode }; self.summary = j.summary || null; self.exps = j.experiments || [];
@@ -235,8 +244,24 @@
           C = Object.assign({}, C0, { direction: C0.direction === 'BUY' ? 'SELL' : 'BUY', levels: { entry: L.entry, sl: neg(L.sl), tp1: neg(L.tp1), tp2: neg(L.tp2) } }); rs = -rs;
         }
         var box = el.querySelector('.hc-box'); box.innerHTML = '';
-        var h4 = C.h4.bars.slice(), ema = clone(C.h4.ema), marks = [];
-        if (reveal && this.rev && this.rev.post_bars.length) {
+        var h4 = C.h4.bars.slice(), ema = clone(C.h4.ema), marks = [], ov = C.overlay || null, keep = false;
+        if (reveal && this.rev && this.rp) {      // the step-through: the bars up to the current hour (the last one still forming)
+          var t0 = h4[h4.length - 1][0], P = this.rp, T = P.ticks, i = this.st.i, self = this, lab = {};
+          if (i >= 0) {
+            for (var k = 0; k < T[i].k; k++) { var fb = P.barFinal[k]; h4.push([t0 + 14400 * (k + 1), fb[0], fb[1], fb[2], fb[3], 0]); }
+            var cb = T[i].bar; h4.push([t0 + 14400 * (T[i].k + 1), cb[0], cb[1], cb[2], cb[3], 0]);
+          }
+          ['20', '50', '200'].forEach(function (n) { var e = ema[n], kk = 2 / (+n + 1), p = e[e.length - 1];
+            for (var q = C.h4.bars.length; q < h4.length; q++) { p = p + kk * (h4[q][4] - p); e.push(p); } });
+          var put = function (q, txt) { var tt = t0 + 14400 * (T[q].k + 1); lab[tt] = lab[tt] ? lab[tt] + ' · ' + txt : txt; };
+          if (P.plan) P.plan.events.forEach(function (e) { if (e.t <= i) e.text.forEach(function (x) { var s = self.rpShort(x); if (s) put(e.t, s); }); });
+          if (P.plan && i >= P.plan.exit_t) put(P.plan.exit_t, 'exit ' + this.fmt(P.plan.R));
+          if (i >= P.raw.exit_t && (!P.plan || P.raw.exit_t !== P.plan.exit_t || Math.abs(P.raw.R - P.plan.R) > 0.005)) put(P.raw.exit_t, 'raw ' + this.fmt(P.raw.R));
+          Object.keys(lab).forEach(function (tt) { marks.push({ t: +tt, label: lab[tt] }); });
+          var sp = P.plan && i >= 0 && i < P.plan.exit_t ? P.plan.steps[i].stops : [];
+          if (sp.length) { ov = Object.assign({}, ov || {}); ov.aux = (ov.aux || []).concat(sp.map(function (v) { return { price: v, label: 'stop now', color: '#ff8c00', width: 2, style: 0 }; })); }
+          keep = true;
+        } else if (reveal && this.rev && this.rev.post_bars.length) {
           var t = h4[h4.length - 1][0];
           this.rev.post_bars.forEach(function (b, k) { h4.push([t + 14400 * (k + 1), b[0], b[1], b[2], b[3], 0]); });
           ['20', '50', '200'].forEach(function (n) { var e = ema[n], kk = 2 / (+n + 1), p = e[e.length - 1];   // continue the EMA through the revealed bars
@@ -246,7 +271,7 @@
             marks.push({ t: t + 14400 * (this.rev.raw_exit.bar + 1), label: 'raw ' + (this.rev.raw_exit.kind === 'TP2 hit' ? 'TP2 ' : (this.rev.raw_exit.kind === 'stopped out' ? 'stop ' : 'end ')) + this.fmt(this.rev.R_raw) });
         }
         HybridChart.mount(el, { blind: true, live: false, bars_h4: h4, bars_d1: C.d1.bars, ema_h4: ema, ema_d1: C.d1.ema, sig_h4: C.h4.sig, sig_d1: C.d1.sig,
-                                levels: C.levels, strategy: C.detector, overlay: C.overlay || null, marks: marks, rsign: rs });
+                                levels: C.levels, strategy: C.detector, overlay: ov, marks: marks, rsign: rs, keep_range: keep });
       },
       decide: function (d) {
         var self = this; if (d === 'take' && !self.v.ok) return; self.busy = true;
@@ -255,10 +280,64 @@
           if (self.isTest()) {                              // Test: nothing revealed - record and move on
             self.stopPoll(); self.flash = 'Card ' + (self.C.i + 1) + ' recorded (' + d + ').'; setTimeout(function () { self.flash = ''; }, 2500);
             self.load(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-          self.rev = j; self.C.tally = j.tally; self.$nextTick(function () { self.chart(true); });
+          self.rev = j; self.rpPause();
+          if (j.timeline && j.timeline.ticks && j.timeline.ticks.length) {    // trader 2026-10-16: step through it - the result card waits for the end
+            self.rp = self.rpPrep(j.timeline); self.rpTally = j.tally; self.st = Object.assign({}, self.st, { i: -1, play: false, done: false });
+          } else { self.rp = null; self.C.tally = j.tally; }
+          self.$nextTick(function () { self.chart(true); });
         }).catch(function (e) { self.busy = false; self.err = String(e); });
       },
       next: function () { this.load(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+      // ---------------------------------------------------------------- the step-through (trader 2026-10-16: "step through it bar by bar or hour by hour")
+      // one tick per trading hour on the frame the R comes from, then whole H4 bars past it; the plan's and the raw signal's state per tick
+      // come from the server (live/backtest.py timeline: the rule engine run hour by hour). The result card and the header tally wait for the end.
+      rpPrep: function (tl) { tl.barFinal = []; tl.ticks.forEach(function (t) { tl.barFinal[t.k] = t.bar; }); tl.N = tl.ticks.length; return tl; },
+      rpGo: function (i) { if (!this.rp) return; i = Math.max(-1, Math.min(this.rp.N - 1, i)); this.st.i = i;
+        if (i === this.rp.N - 1 && !this.st.done) { this.st.done = true; this.C.tally = this.rpTally; this.rpPause(); }
+        var self = this; this.$nextTick(function () { self.chart(true); }); },
+      rpStep: function (d) {
+        var T = this.rp.ticks, i = this.st.i, N = this.rp.N, j;
+        if (this.st.unit === 'hour') return this.rpGo(i + d);
+        if (d > 0) { j = i + 1; while (j < N - 1 && T[j + 1].k === T[j].k) j++; return this.rpGo(j); }   // to the close of this bar (or the next)
+        var k = i >= 0 ? T[i].k : -1; j = i; while (j >= 0 && T[j].k > k - 1) j--; this.rpGo(j);   // to the close of the bar before
+      },
+      rpEnd: function () { this.rpPause(); this.rpGo(this.rp.N - 1); },
+      rpToggle: function () { if (this.st.play) return this.rpPause(); var self = this;
+        if (this.st.i >= this.rp.N - 1) this.rpGo(-1);
+        this.st.play = true; this.rpTimer = setInterval(function () { if (!self.rp || self.st.i >= self.rp.N - 1) return self.rpPause(); self.rpStep(1); },
+                                                         (this.st.unit === 'hour' ? 450 : 900) / this.st.speed); },
+      rpPause: function () { if (this.rpTimer) { clearInterval(this.rpTimer); this.rpTimer = null; } this.st.play = false; },
+      rpUnit: function (u) { this.st.unit = u; if (this.st.play) { this.rpPause(); this.rpToggle(); } },
+      rpSpeed: function (v) { this.st.speed = +v || 1; if (this.st.play) { this.rpPause(); this.rpToggle(); } },
+      rpAt: function (t) { var T = this.rp.ticks[t]; return T ? (T.th !== null ? T.th + ' h' : 'bar ' + (T.k + 1)) : ''; },
+      rpWhen: function () {
+        var i = this.st.i; if (!this.rp) return ''; if (i < 0) return 'At the entry - the open of the first bar after the signal';
+        var T = this.rp.ticks[i];
+        return T.th !== null ? 'Bar ' + (T.k + 1) + ' · ' + T.th + ' trading hour' + (T.th === 1 ? '' : 's') + ' in · price ' + this.fmt(T.px)
+                             : 'Bar ' + (T.k + 1) + ' · after the trade' + (this.rp.plan ? 's' : '') + ' ended';
+      },
+      rpLine: function (key) {
+        var L = this.rp && this.rp[key], i = this.st.i; if (!L) return '';
+        if (i < 0) return 'in at the signal';
+        if (i >= L.exit_t) return 'closed · ' + L.kind + ' · ' + this.fmt(L.R) + ' (at ' + this.rpAt(L.exit_t) + ')';
+        var s = L.steps[i];
+        if (key === 'raw') return this.fmt(s.now) + ' if closed now · stop at ' + this.fmt(s.stop_R);
+        return Math.round(s.open * 100) + '% open · ' + this.fmt(s.now) + ' if closed now' + (Math.abs(s.banked) > 0.0005 ? ' · banked ' + this.fmt(s.banked) : '') +
+               ' · stop' + (s.stops.length > 1 ? 's from ' : ' at ') + this.fmt(s.stop_R) + ' (' + this.fmt(s.worst) + ' in all if hit)';
+      },
+      rpEvents: function () {
+        var rp = this.rp, i = this.st.i, out = [], self = this; if (!rp) return out;
+        [['plan', this.rev && this.rev.decision === 'take' ? 'Your plan' : 'Your plan (not taken)'], ['raw', this.rev && this.rev.inverse ? 'Raw inverted' : 'Raw']].forEach(function (p) {
+          var L = rp[p[0]]; if (!L) return;
+          L.events.forEach(function (e) { if (e.t <= i) e.text.forEach(function (x, n) { out.push({ id: p[0] + e.t + '_' + n, t: e.t, at: self.rpAt(e.t), who: p[1], text: x, now: e.t === i }); }); });
+        });
+        return out.sort(function (a, b) { return b.t - a.t || (a.who < b.who ? 1 : -1); });
+      },
+      rpShort: function (x) {          // the chart's marker label for an event
+        if (x.indexOf('banked') === 0) return 'bank'; if (x.indexOf('reached: stop moved') > 0) return 'stop';   // no trail label: the stop line shows it
+        if (x.indexOf('% more at') > 0) return 'add'; if (x.indexOf('risk cap') === 0) return 'risk cap';
+        if (x.indexOf('skipped') > 0) return 'add skipped'; if (x.indexOf('stopped out') > 0) return 'stopped'; return '';
+      },
       // ---------------------------------------------------------------- Test mode: commit -> advisor -> final
       isTest: function () { return this.C && this.C.mode === 'test'; },
       advState: function () { return (this.C && this.C.adv && this.C.adv.state) || 'none'; },

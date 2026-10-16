@@ -88,6 +88,28 @@ Built on branch `backtest-tab`, not deployed. The comparison is always the raw s
   every exit except TP2, and a stopped-out plan shows "it got to +1.87R before the stop" beside the result. It is the exit-side high
   (the price you could close at, what banks trigger on) from the entry to the exit; a stop's own minute is left out (the kernel
   checks stops first, so that minute's high may have come after the stop). Practice only - the Test response is unchanged.
+- Step-through (trader 2026-10-16: "when i execute a trade i can step through it bar by bar or hour by hour to see how it plays
+  out"):
+  - **When it starts:** after a Practice decision, the chart starts at the entry, and a panel under it steps forward 1 hour or 1 bar
+    (4 h). It has Entry / Back / Next / Play (0.5-4x) / End buttons, a slider and keys (arrows, space, Home, End).
+  - **What each step shows:**
+    - the bars up to that hour, with the current bar still forming;
+    - an orange "stop now" line;
+    - markers for banks, adds, stop moves and exits.
+  - **The status lines:** the plan's and the raw signal's open size, R if closed now, banked R and stop (R from the first fill),
+    plus a log of what happened in each hour.
+  - **What waits for the end:** the result card and the header tally, so the outcome is not spoiled. End or "Show the result"
+    skips to it.
+  - **On an inverted trade:** the raw line is the raw inverted trade.
+  - **Where the data comes from:** `backtest.timeline`, sent with the decide response.
+    - It runs `plan_live.run_state` (kern line for line, resumable by segment) one trading hour at a time on the same M1 frame. Its
+      end must equal `kern` exactly or no timeline is sent (`web/backtest/timeline_errors.log`).
+    - Past the frame's end (the first -1R touch), the revealed bars come one whole bar per step.
+  - **Check:** `pipeline/backtest_timeline_check.py`, run on 2026-10-16. Two checks, both with 0 problems:
+    - the replay's end equals kern, and its bank / add counts match, on 6,300 frame x plan pairs plus 2,100 inverse pairs;
+    - each hour's "R if closed now" equals kern run on the frame cut at that hour (26,247 spot checks).
+  - **Chart changes (`hybrid_chart.js`):** aux lines take a colour / width / style; `keep_range` keeps the zoom between steps; a
+    remount now removes the old chart and its resize observer.
 
 ## Minimal removed (trader 2026-10-08)
 - "Get rid of the minimal preset, since it is shaped off the data and invalid." The tab and the advisor no longer see it: the preset
