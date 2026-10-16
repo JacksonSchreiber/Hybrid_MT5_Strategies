@@ -207,3 +207,11 @@ nothing is re-run by accident and the coach can see what was tried.
     3-day hold is unmeasured and could erase it. Not forwarded: it is a standalone NZDCAD rule, not a signal rule; the trader decides.
   - `/home/jack/nzdcad_comp/` (the full tree), `data/study/nzdcad_comp/` (FINAL_REPORT.md, the three round ledgers, s_z2rev.py,
     z2rev_recheck/)
+  - **z2rev on the sibling pairs** (trader 2026-10-16: "yes run the same rule on the others"). The rule was unchanged and the read-out
+    pre-registered before the data was built. Built from the same QDM ticks; the converter matches the NZDCAD bars exactly.
+    - Judging cost, 2012-2026: AUDCAD +1.9 pips/trade (t 1.0), NZDUSD +1.4 (t 0.7), AUDNZD -0.9 (t -0.5). Before the extra pip:
+      +2.9 / +2.4 / +0.1.
+    - Three-pair portfolio: +17.7 pips/month, monthly t 0.7. **Pre-registered verdict: INCONCLUSIVE** (same sign on 2 of 3 pairs, far
+      too weak).
+    - Read: the two-day reversal is about 1-3 pips gross on the siblings, below cost. NZDCAD's +5.3 is probably partly luck, and nothing
+      here makes it more tradeable. `data/study/nzdcad_comp/siblings/` (PREREG.md, report.md)
